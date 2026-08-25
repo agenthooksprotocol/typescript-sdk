@@ -1,0 +1,9 @@
+{
+  "name": "@agenthooksprotocol/sdk",
+  "version": "0.0.0-private",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "exports": { ".": { "types": "./dist/src/index.d.ts", "default": "./dist/src/index.js" } },
+  "scripts": { "build": "tsc -p tsconfig.json" }
+}

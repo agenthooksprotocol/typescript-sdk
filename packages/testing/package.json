@@ -1,0 +1,11 @@
+{
+  "name": "@agenthooksprotocol/testing",
+  "version": "0.0.0-private",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "exports": { ".": { "types": "./dist/src/index.d.ts", "default": "./dist/src/index.js" } },
+  "bin": { "ahp-fake-backend": "./dist/src/fake-backend.js" },
+  "scripts": { "build": "tsc -p tsconfig.json" },
+  "dependencies": { "@agenthooksprotocol/sdk": "workspace:*" }
+}

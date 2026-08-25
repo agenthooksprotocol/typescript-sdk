@@ -1,0 +1,13 @@
+{
+  "name": "agenthooksprotocol-typescript-reference",
+  "version": "0.0.0-private",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.18.3",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "pnpm --filter @agenthooksprotocol/sdk build && pnpm --filter @agenthooksprotocol/testing build && pnpm --filter @agenthooksprotocol/conformance build",
+    "check": "pnpm build && pnpm test",
+    "test": "node --test packages/*/dist/test/*.test.js"
+  }
+}

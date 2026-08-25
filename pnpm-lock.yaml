@@ -1,0 +1,27 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .: {}
+
+  packages/conformance:
+    dependencies:
+      '@agenthooksprotocol/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      '@agenthooksprotocol/testing':
+        specifier: workspace:*
+        version: link:../testing
+
+  packages/sdk: {}
+
+  packages/testing:
+    dependencies:
+      '@agenthooksprotocol/sdk':
+        specifier: workspace:*
+        version: link:../sdk
