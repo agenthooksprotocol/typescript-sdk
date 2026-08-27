@@ -22,6 +22,12 @@ There is intentionally **no HTTP transport**.
 - `@agenthooksprotocol/testing`: controllable `ahp-fake-backend` CLI. Its modes include `no-effect`, `deny`, `timeout`, `malformed-json`, `json-rpc-error`, `incompatible-version`, `unsupported-effect`, `multiple-effects`, `id-mismatch`, `malformed-deny`, and `unknown-fields`. Options can delay or byte-chunk output and record requests.
 - `@agenthooksprotocol/conformance`: black-box runner and `ahp-conformance` CLI for a target command. A target is always represented as a command plus argument array; no shell command string is evaluated.
 
+## Generated schema API
+
+Schema-derived models and structural codecs are exposed separately through `@agenthooksprotocol/sdk/generated` to avoid collisions with the reference implementation API. `packages/sdk/src/generated.ts` and `ahp-codegen.lock.json` are maintained by schema-sync automation.
+
+A successful structural parse is not canonical schema validation and must not be used alone for authorization or response classification. Validate security-sensitive messages against the canonical Draft 2020-12 schemas.
+
 ## Development
 
 Node 20 or newer and pnpm are required. This dependency-free slice uses the installed TypeScript compiler.

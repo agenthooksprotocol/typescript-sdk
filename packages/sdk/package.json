@@ -4,6 +4,12 @@
   "private": true,
   "type": "module",
   "engines": { "node": ">=20" },
-  "exports": { ".": { "types": "./dist/src/index.d.ts", "default": "./dist/src/index.js" } },
+  "exports": {
+    ".": { "types": "./dist/src/index.d.ts", "default": "./dist/src/index.js" },
+    "./generated": {
+      "types": "./dist/src/generated.d.ts",
+      "default": "./dist/src/generated.js"
+    }
+  },
   "scripts": { "build": "tsc -p tsconfig.json" }
 }
