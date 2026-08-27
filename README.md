@@ -80,12 +80,6 @@ Backends use UTF-8 NDJSON over stdin and stdout. Commands and argument arrays ar
 - `@agenthooksprotocol/testing` — configurable fake backend for integration tests
 - `@agenthooksprotocol/conformance` — black-box conformance runner and CLI
 
-## Parsing and validation
-
-Generated parsers preserve unknown object fields, enum values, and discriminator variants. They do not coerce values, apply defaults, or implement every JSON Schema constraint.
-
-Before classifying a response or making an authorization decision, validate the payload against the canonical AHP Draft 2020-12 schema and applicable protocol requirements. `parseInterceptDenyResponse(...).ok` alone does not prove that a response is an authorized denial.
-
 ## Development
 
 ```sh
