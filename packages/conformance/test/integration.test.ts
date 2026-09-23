@@ -150,7 +150,8 @@ test("bounded retries preserve byte-identical requests and all IDs", async () =>
   const record = join(temp(), "retries.ndjson");
   let serial = 0;
   const runner = new ToolBeforeRunner({ idGenerator: (kind) => `${kind}-${++serial}` });
-  runner.register(fake("malformed-json", ["--record-file", record], { retries: 2, failurePolicy: "fail-open" }));
+  // This checks retry identity, not startup speed; allow three launches on loaded CI.
+  runner.register(fake("malformed-json", ["--record-file", record], { retries: 2, timeoutMs: 2_000, failurePolicy: "fail-open" }));
   const result = await runner.intercept({ source: "urn:agenthooksprotocol:tests:runner", time: "2026-01-02T03:04:05Z", session: {}, tool: { name: "stable", kind: "other", input: {} } });
   runner.close();
   const requests = readFileSync(record, "utf8").trim().split("\n").map((line) => line.slice(line.indexOf("\t") + 1));
