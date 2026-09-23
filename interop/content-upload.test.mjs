@@ -1,8 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
-import {uploadBytes,UploadStore,uploadURL,digest} from './content-upload.mjs';
+import {uploadBytes,UploadStore,uploadURL,digest,authorizeUpload} from './content-upload.mjs';
 import {reply,listen} from './common.mjs';
+test('upload policies distinguish invalid credentials from denied authorization',()=>{
+ assert.equal(authorizeUpload({uploadSubscriptions:{}},undefined),401);
+ assert.equal(authorizeUpload({uploadSubscriptions:{}},'Bearer TEST-ONLY-unknown'),401);
+ assert.equal(authorizeUpload({uploadSubscriptions:{denied:{anonymous:true,authorized:false}}},undefined),403);
+ assert.equal(authorizeUpload({uploadSubscriptions:{allowed:{anonymous:true,scope:'body'}}},undefined),'body');
+});
 test('raw upload authenticates independently, preserves octets, allocates immutable scoped references',async()=>{
  const store=new UploadStore(a=>a==='Bearer upload-secret'?'sub':a==='Bearer forbidden'?403:401,10);
  const captures=[];

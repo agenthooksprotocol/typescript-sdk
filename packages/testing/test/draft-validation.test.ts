@@ -14,6 +14,26 @@ test('canonical and generated draft validation reject unknown effects', () => {
   assert.equal(validateInterceptResponse({ ...response([]), extra: 'forward-compatible draft field' }).ok, true);
   assert.equal(parseInterceptResponse('{').ok, false);
 });
+test('canonical validation rejects extra fields on every strict effect branch', () => {
+  const effects = [
+    { type: 'allow' },
+    { type: 'ask' },
+    { type: 'deny', reason: 'blocked' },
+    { type: 'modify', target: 'input', operation: 'replace', value: { arbitrary: true } },
+    { type: 'message', text: 'notice' },
+    { type: 'return', value: { arbitrary: true } },
+    { type: 'flow', operation: 'stop', reason: 'done' },
+    { type: 'flow', operation: 'continue', instruction: 'again' },
+    { type: 'inject', target: 'context', operation: 'append', deliverAt: 'next_turn', value: { arbitrary: true } },
+  ];
+  for (const effect of effects) {
+    assert.equal(validateInterceptResponse(response([effect])).ok, true, JSON.stringify(effect));
+    const invalid = response([{ type: 'message', text: 'must not escape' }, { ...effect, unexpected: true }]);
+    assert.equal(validateInterceptResponse(invalid).ok, false, JSON.stringify(effect));
+    assert.equal(parseInterceptResponse(JSON.stringify(invalid)).ok, false, JSON.stringify(effect));
+  }
+});
+
 test('generated codec and canonical validation preserve arbitrary JSON without substitution', () => {
   const value = JSON.parse('{"__proto__":{"polluted":true},"constructor":null,"nested":[null,false,0,"",{"x":1}]}');
   const wire = response([{ type: 'return', value }]);

@@ -61,7 +61,8 @@ export function authorizeUpload(config, authorization){
   if(policy.auth){const token=process.env[policy.auth.tokenEnv];return policy.auth.type==='bearer' && token && authorization===`Bearer ${token}`;}
   return policy.anonymous===true && authorization===undefined;
  });
- if(matches.length!==1)return authorization===undefined?401:403;
+ if(matches.length===0)return 401;
+ if(matches.length!==1)return 403;
  const [name,policy]=matches[0];return policy.authorized===false?403:policy.scope ?? name;
 }
 /** Fixture labels select local policy, never wire encoding or authorization grants. */

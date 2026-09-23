@@ -8,13 +8,10 @@ import test from 'node:test';
 import {validateInterceptResponse} from '../packages/sdk/dist/src/draft/index.js';
 const uploadSubscriptions={body:{scope:'default',auth:{type:'bearer',tokenEnv:'AHP_TEST_BODY'}},metadata:{authorized:false,auth:{type:'bearer',tokenEnv:'AHP_TEST_METADATA'}}};
 const uploadPolicies=Object.fromEntries(Object.entries(uploadSubscriptions).map(([name,policy])=>[name,{auth:policy.auth}]));
-const env={...process.env,AHP_TEST_BODY:'TEST-ONLY-body',AHP_TEST_METADATA:'TEST-ONLY-metadata'};
+const env={...process.env,AHP_TEST_BODY:'TEST-ONLY-body',AHP_TEST_METADATA:'TEST-ONLY-metadata',AHP_INTEROP_UNAUTHORIZED_UPLOAD_TOKEN:'TEST-ONLY-unauthorized'};
 const cwd=fileURLToPath(new URL('..',import.meta.url));
 const central=JSON.parse(await readFile(cwd+'/../agent-hooks-protocol/interop/lifecycle-scenarios.json','utf8')).scenarios;
-// This positive lifecycle case exercises ask settlement, not malformed effects.
-// Own the canonical response locally; never repair responses in either adapter.
 const askBoundary=central.find(row=>row.id==='ask-boundary-observed');
-askBoundary.responses.a.result.effects=[{type:'ask'}];
 test('ask lifecycle fixture uses strict canonical fields and rejects added reason',()=>{
  const response=askBoundary.responses.a;
  assert.equal(validateInterceptResponse(response).ok,true);
