@@ -11,8 +11,19 @@ jobs:
   test:
     name: Build and test
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: typescript-sdk
     steps:
       - uses: actions/checkout@v5
+        with:
+          path: typescript-sdk
+      - name: Check out shared protocol fixtures
+        uses: actions/checkout@v5
+        with:
+          repository: agenthooksprotocol/agent-hooks-protocol
+          ref: 548f1e857ba3f4d803fc40b04f848236b7316704
+          path: agent-hooks-protocol
       - uses: actions/setup-node@v5
         with:
           node-version: 20

@@ -102,7 +102,7 @@ export function parseInterceptRequest(line: string): InterceptRequest {
   }
   const requestId = nonEmptyString(root.id, "request.id");
   const params = record(root.params, "request.params");
-  if (params.protocolVersion !== PROTOCOL_VERSION) throw new HookOperationalError("INCOMPATIBLE_VERSION", "Expected protocolVersion 0.1");
+  if (params.protocolVersion !== PROTOCOL_VERSION) throw new HookOperationalError("INCOMPATIBLE_VERSION", "Expected protocolVersion draft");
   const capabilities = record(params.capabilities, "request.params.capabilities");
   if (!Array.isArray(capabilities.effects) || capabilities.effects.length !== 1 || capabilities.effects[0] !== "deny") {
     throw new HookOperationalError("UNSUPPORTED_EFFECT", "capabilities.effects must be exactly [\"deny\"]");
@@ -158,12 +158,15 @@ export function parseInterceptResponse(line: string, expectedId: string): Interc
   }
   if (!("result" in root)) throw new HookOperationalError("MALFORMED_JSON_RPC", "Response must contain result or error");
   const result = record(root.result, "response.result");
-  if (result.protocolVersion !== PROTOCOL_VERSION) throw new HookOperationalError("INCOMPATIBLE_VERSION", "Backend protocolVersion is not 0.1");
+  if (result.protocolVersion !== PROTOCOL_VERSION) throw new HookOperationalError("INCOMPATIBLE_VERSION", "Backend protocolVersion is not draft");
   if (!Array.isArray(result.effects)) throw new HookOperationalError("MALFORMED_JSON_RPC", "response.result.effects must be an array");
   if (result.effects.length > 1) throw new HookOperationalError("MULTIPLE_EFFECTS", "tool.before permits at most one effect");
   if (result.effects.length === 0) return { protocolVersion: PROTOCOL_VERSION, effects: [] };
   const effect = record(result.effects[0], "response.result.effects[0]");
   if (effect.type !== "deny") throw new HookOperationalError("UNSUPPORTED_EFFECT", `Unsupported tool.before effect: ${String(effect.type)}`);
+  if (Object.keys(effect).some(key => !["type", "reason", "code", "extensions"].includes(key))) {
+    throw new HookOperationalError("UNSUPPORTED_EFFECT", "Unknown deny effect field");
+  }
   const reason = nonEmptyString(effect.reason, "response.result.effects[0].reason");
   if ("code" in effect && (typeof effect.code !== "string" || !isReverseDns(effect.code))) {
     throw new HookOperationalError("MALFORMED_JSON_RPC", "Deny effect code must use reverse-DNS notation");

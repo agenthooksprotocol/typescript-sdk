@@ -3,13 +3,28 @@
   "version": "0.0.0-private",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "exports": {
-    ".": { "types": "./dist/src/index.d.ts", "default": "./dist/src/index.js" },
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./draft": {
+      "types": "./dist/src/draft/index.d.ts",
+      "default": "./dist/src/draft/index.js"
+    },
     "./generated": {
       "types": "./dist/src/generated.d.ts",
       "default": "./dist/src/generated.js"
     }
   },
-  "scripts": { "build": "tsc -p tsconfig.json" }
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1"
+  }
 }

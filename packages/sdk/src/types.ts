@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = "0.1" as const;
+export const PROTOCOL_VERSION = "draft" as const;
 export const INTERCEPT_METHOD = "hooks/intercept" as const;
 export const TOOL_KINDS = [
   "shell",
@@ -55,7 +55,7 @@ export interface InterceptRequest {
   id: string;
   method: "hooks/intercept";
   params: {
-    protocolVersion: "0.1";
+    protocolVersion: "draft";
     event: ToolBeforeEvent;
     capabilities: { effects: ["deny"] };
   };
@@ -63,8 +63,8 @@ export interface InterceptRequest {
 
 export type DenyEffect = { type: "deny"; reason: string; code?: string; extensions?: JsonObject };
 export type InterceptResult =
-  | { protocolVersion: "0.1"; effects: [] }
-  | { protocolVersion: "0.1"; effects: [DenyEffect] };
+  | { protocolVersion: "draft"; effects: [] }
+  | { protocolVersion: "draft"; effects: [DenyEffect] };
 
 export interface InterceptResponse {
   jsonrpc: "2.0";
