@@ -75,7 +75,7 @@ async function main(): Promise<void> {
     }
     const id = config.mode === "id-mismatch" ? `${request.id}-wrong` : request.id;
     const protocolVersion = config.mode === "incompatible-version" ? "9.9" : PROTOCOL_VERSION;
-    let effects: unknown[] = config.mode === "unknown-fields" ? [{ type: "deny", reason: "Unknown fields tolerated", code: "com.example.denied", extensions: { "com.example.detail": true }, ignoredEffect: true }] : [];
+    let effects: unknown[] = config.mode === "unknown-fields" ? [{ type: "deny", reason: "Unknown fields tolerated", code: "com.example.denied", extensions: { "com.example.detail": true } }] : [];
     if (config.mode === "deny") effects = [{ type: "deny", reason: config.reason }];
     else if (config.mode === "malformed-deny") effects = [{ type: "deny", reason: "   " }];
     else if (config.mode === "unsupported-effect") effects = [{ type: "rewrite", arguments: {} }];
