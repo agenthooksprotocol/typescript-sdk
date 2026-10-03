@@ -82,13 +82,7 @@ export function evaluateRegistration(
       if (auth.type === "bearer" && (!auth.tokenEnv || !resolve(auth.tokenEnv)))
         return reject();
       // Opaque credential references need a trusted host resolver; this host has none.
-      if (
-        auth.type === "mtls" ||
-        auth.type === "workload" ||
-        auth.clientSecretRef ||
-        auth.tokenRef
-      )
-        return reject();
+      if (auth.clientSecretRef || auth.tokenRef) return reject();
       if (
         auth.type === "oauth" &&
         (auth.flow !== "authorization_code_pkce" ||

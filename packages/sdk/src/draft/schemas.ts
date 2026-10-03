@@ -533,7 +533,7 @@ export const schemas = [
                     type: "array",
                     uniqueItems: true,
                     items: {
-                      enum: ["bearer", "oauth", "mtls", "workload"],
+                      enum: ["bearer", "oauth"],
                     },
                   },
                   limits: {
@@ -2955,17 +2955,9 @@ export const schemas = [
           "HTTPS is required except for explicitly configured loopback tests. The sender must validate the receiver and the loopback-test authorization at runtime.",
       },
       auth: {
-        type: "object",
-        required: ["type", "tokenEnv"],
-        properties: {
-          type: {
-            const: "bearer",
-          },
-          tokenEnv: {
-            type: "string",
-            pattern: "^[A-Za-z_][A-Za-z0-9_]*$",
-          },
-        },
+        $ref: "registration.schema.json#/$defs/authentication",
+        description:
+          "Independent endpoint binding. Omission uses standard OAuth protected-resource discovery; never inherit event credentials.",
       },
       timeoutMs: {
         type: "integer",
@@ -7730,7 +7722,9 @@ export const schemas = [
         },
       },
       authentication: {
-        oneOf: [
+        description:
+          "Explicit endpoint-bound client identity preset. Omission on HTTP enables standard OAuth protected-resource discovery, not anonymous-only delivery. Runtime trust policy and discovery are defined in spec/draft/capability-auth.md.",
+        anyOf: [
           {
             type: "object",
             required: ["type"],
@@ -7799,54 +7793,9 @@ export const schemas = [
               },
             },
           },
-          {
-            type: "object",
-            required: [
-              "type",
-              "certificateRef",
-              "privateKeyRef",
-              "trustRootsRef",
-            ],
-            properties: {
-              type: {
-                const: "mtls",
-              },
-              certificateRef: {
-                type: "string",
-                minLength: 1,
-              },
-              privateKeyRef: {
-                type: "string",
-                minLength: 1,
-              },
-              trustRootsRef: {
-                type: "string",
-                minLength: 1,
-              },
-            },
-          },
-          {
-            type: "object",
-            required: ["type", "credentialRef", "issuer", "audience"],
-            properties: {
-              type: {
-                const: "workload",
-              },
-              credentialRef: {
-                type: "string",
-                minLength: 1,
-              },
-              issuer: {
-                type: "string",
-                minLength: 1,
-              },
-              audience: {
-                type: "string",
-                minLength: 1,
-              },
-            },
-          },
         ],
+        $comment:
+          "Branches are disjoint by required type. Unknown mechanism values are invalid, not forward-compatible identity selectors.",
       },
       interceptSubscription: {
         type: "object",
