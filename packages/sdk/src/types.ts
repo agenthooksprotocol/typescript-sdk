@@ -61,7 +61,12 @@ export interface InterceptRequest {
   };
 }
 
-export type DenyEffect = { type: "deny"; reason: string; code?: string; extensions?: JsonObject };
+export type DenyEffect = {
+  type: "deny";
+  reason: string;
+  code?: string;
+  extensions?: JsonObject;
+};
 export type InterceptResult =
   | { protocolVersion: "draft"; effects: [] }
   | { protocolVersion: "draft"; effects: [DenyEffect] };
@@ -106,7 +111,13 @@ export interface ToolBeforeOutcome {
   decision: "continue" | "deny";
   event: ToolBeforeEvent;
   failures: HookFailure[];
-  denial?: { backend: string; reason: string; code?: string; extensions?: JsonObject; operational: boolean };
+  denial?: {
+    backend: string;
+    reason: string;
+    code?: string;
+    extensions?: JsonObject;
+    operational: boolean;
+  };
 }
 
 export type IdKind = "event" | "session" | "call";
