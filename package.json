@@ -4,10 +4,17 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.18.3",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "build": "pnpm --filter @agenthooksprotocol/sdk build && pnpm --filter @agenthooksprotocol/testing build && pnpm --filter @agenthooksprotocol/conformance build",
+    "build": "pnpm clean && pnpm --filter @agenthooksprotocol/sdk build && pnpm --filter @agenthooksprotocol/testing build && pnpm --filter @agenthooksprotocol/conformance build",
     "check": "pnpm build && pnpm test",
-    "test": "node --test packages/*/dist/test/*.test.js"
+    "test": "node --test packages/*/dist/test/*.test.js && node --test interop/*.test.mjs",
+    "interop": "pnpm build && node packages/testing/dist/src/interop/cli.js",
+    "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; for (const p of ['sdk', 'testing', 'conformance']) rmSync('packages/' + p + '/dist', { recursive: true, force: true });\""
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
   }
 }

@@ -8,13 +8,23 @@ export interface LineTransport {
   close(): void;
 }
 
-function start(command: string, args: readonly string[]): ChildProcessWithoutNullStreams {
+function start(
+  command: string,
+  args: readonly string[],
+): ChildProcessWithoutNullStreams {
   try {
-    const child = spawn(command, [...args], { shell: false, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(command, [...args], {
+      shell: false,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     child.stderr.resume();
     return child;
   } catch (error) {
-    throw new HookOperationalError("SPAWN_ERROR", `Could not spawn ${command}`, { cause: error });
+    throw new HookOperationalError(
+      "SPAWN_ERROR",
+      `Could not spawn ${command}`,
+      { cause: error },
+    );
   }
 }
 
@@ -41,15 +51,38 @@ class PerEventTransport implements LineTransport {
         if (error !== undefined) reject(asOperationalError(error));
         else resolve(response as string);
       };
-      const timer = setTimeout(() => finish(new HookOperationalError("TIMEOUT", `Hook exchange exceeded ${timeoutMs} ms`)), timeoutMs);
+      const timer = setTimeout(
+        () =>
+          finish(
+            new HookOperationalError(
+              "TIMEOUT",
+              `Hook exchange exceeded ${timeoutMs} ms`,
+            ),
+          ),
+        timeoutMs,
+      );
       try {
         child = start(this.#command, this.#args);
-        child.once("error", (error: Error) => finish(new HookOperationalError("SPAWN_ERROR", `Could not run ${this.#command}`, { cause: error })));
+        child.once("error", (error: Error) =>
+          finish(
+            new HookOperationalError(
+              "SPAWN_ERROR",
+              `Could not run ${this.#command}`,
+              { cause: error },
+            ),
+          ),
+        );
         child.stdout.on("data", (chunk: Buffer) => {
           try {
             const frames = decoder.push(chunk);
-            if (frames.length > 1 || (frames.length === 1 && response !== undefined)) {
-              throw new HookOperationalError("MALFORMED_JSON_RPC", "Backend emitted multiple responses for one request");
+            if (
+              frames.length > 1 ||
+              (frames.length === 1 && response !== undefined)
+            ) {
+              throw new HookOperationalError(
+                "MALFORMED_JSON_RPC",
+                "Backend emitted multiple responses for one request",
+              );
             }
             if (frames.length === 1) response = frames[0];
           } catch (error) {
@@ -58,16 +91,39 @@ class PerEventTransport implements LineTransport {
         });
         child.once("close", (code: number | null) => {
           if (settled) return;
-          try { decoder.end(); } catch (error) { finish(error); return; }
+          try {
+            decoder.end();
+          } catch (error) {
+            finish(error);
+            return;
+          }
           if (code !== 0) {
-            finish(new HookOperationalError("IO_ERROR", `Backend exited with status ${String(code)}`));
+            finish(
+              new HookOperationalError(
+                "IO_ERROR",
+                `Backend exited with status ${String(code)}`,
+              ),
+            );
           } else if (response === undefined) {
-            finish(new HookOperationalError("IO_ERROR", "Backend exited before returning a response"));
+            finish(
+              new HookOperationalError(
+                "IO_ERROR",
+                "Backend exited before returning a response",
+              ),
+            );
           } else {
             finish();
           }
         });
-        child.stdin.once("error", (error: Error) => finish(new HookOperationalError("IO_ERROR", "Could not write hook request", { cause: error })));
+        child.stdin.once("error", (error: Error) =>
+          finish(
+            new HookOperationalError(
+              "IO_ERROR",
+              "Could not write hook request",
+              { cause: error },
+            ),
+          ),
+        );
         child.stdin.end(`${line}\n`);
       } catch (error) {
         finish(error);
@@ -92,7 +148,10 @@ class PersistentTransport implements LineTransport {
 
   exchange(line: string, timeoutMs: number): Promise<string> {
     const result = this.#tail.then(() => this.#exchangeNow(line, timeoutMs));
-    this.#tail = result.then(() => undefined, () => undefined);
+    this.#tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   }
 
@@ -114,7 +173,16 @@ class PersistentTransport implements LineTransport {
           resolve(response as string);
         }
       };
-      const timer = setTimeout(() => finish(new HookOperationalError("TIMEOUT", `Hook exchange exceeded ${timeoutMs} ms`)), timeoutMs);
+      const timer = setTimeout(
+        () =>
+          finish(
+            new HookOperationalError(
+              "TIMEOUT",
+              `Hook exchange exceeded ${timeoutMs} ms`,
+            ),
+          ),
+        timeoutMs,
+      );
       let child: ChildProcessWithoutNullStreams;
       try {
         if (this.#child === undefined || this.#child.exitCode !== null) {
@@ -131,24 +199,54 @@ class PersistentTransport implements LineTransport {
         try {
           const frames = this.#decoder.push(chunk);
           if (frames.length !== 1) {
-            if (frames.length > 1) throw new HookOperationalError("MALFORMED_JSON_RPC", "Backend emitted multiple responses for one request");
+            if (frames.length > 1)
+              throw new HookOperationalError(
+                "MALFORMED_JSON_RPC",
+                "Backend emitted multiple responses for one request",
+              );
             return;
           }
           finish(undefined, frames[0]);
-        } catch (error) { finish(error); }
+        } catch (error) {
+          finish(error);
+        }
       };
-      const onError = (error: Error): void => finish(new HookOperationalError("SPAWN_ERROR", `Could not run ${this.#command}`, { cause: error }));
+      const onError = (error: Error): void =>
+        finish(
+          new HookOperationalError(
+            "SPAWN_ERROR",
+            `Could not run ${this.#command}`,
+            { cause: error },
+          ),
+        );
       const onClose = (): void => {
         if (settled) return;
-        try { this.#decoder.end(); } catch (error) { finish(error); return; }
-        finish(new HookOperationalError("IO_ERROR", "Persistent backend exited before returning a response"));
+        try {
+          this.#decoder.end();
+        } catch (error) {
+          finish(error);
+          return;
+        }
+        finish(
+          new HookOperationalError(
+            "IO_ERROR",
+            "Persistent backend exited before returning a response",
+          ),
+        );
       };
-      const onStdinError = (error: Error): void => finish(new HookOperationalError("IO_ERROR", "Could not write hook request", { cause: error }));
+      const onStdinError = (error: Error): void =>
+        finish(
+          new HookOperationalError("IO_ERROR", "Could not write hook request", {
+            cause: error,
+          }),
+        );
       child.stdout.on("data", onData);
       child.once("error", onError);
       child.once("close", onClose);
       child.stdin.once("error", onStdinError);
-      child.stdin.write(`${line}\n`, (error?: Error | null) => { if (error) onStdinError(error); });
+      child.stdin.write(`${line}\n`, (error?: Error | null) => {
+        if (error) onStdinError(error);
+      });
     });
   }
 
@@ -159,9 +257,17 @@ class PersistentTransport implements LineTransport {
     if (child !== undefined && child.exitCode === null) child.kill();
   }
 
-  close(): void { this.#discard(); }
+  close(): void {
+    this.#discard();
+  }
 }
 
-export function createTransport(command: string, args: readonly string[], lifecycle: Lifecycle): LineTransport {
-  return lifecycle === "persistent" ? new PersistentTransport(command, args) : new PerEventTransport(command, args);
+export function createTransport(
+  command: string,
+  args: readonly string[],
+  lifecycle: Lifecycle,
+): LineTransport {
+  return lifecycle === "persistent"
+    ? new PersistentTransport(command, args)
+    : new PerEventTransport(command, args);
 }

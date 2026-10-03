@@ -1,0 +1,1 @@
+{"language":"typescript","server":["node","interop/server.mjs"],"client":["node","interop/client.mjs"],"lifecycleClient":["node","interop/lifecycle-client.mjs"],"lifecycleServer":["node","interop/lifecycle-server.mjs"]}

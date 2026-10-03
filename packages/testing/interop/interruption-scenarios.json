@@ -1,0 +1,167 @@
+{
+  "contract": "Deterministic IPC barriers; no cancellation wire fields. flow/continuation not implemented or advertised.",
+  "scenarios": [
+    {
+      "id": "late-allow-fail-open",
+      "phase": "pending",
+      "failurePolicy": "fail-open",
+      "effects": [
+        {
+          "type": "allow"
+        }
+      ]
+    },
+    {
+      "id": "late-allow-fail-closed",
+      "phase": "pending",
+      "failurePolicy": "fail-closed",
+      "effects": [
+        {
+          "type": "allow"
+        }
+      ]
+    },
+    {
+      "id": "accepted-allow",
+      "phase": "accepted",
+      "failurePolicy": "fail-open",
+      "effects": [
+        {
+          "type": "allow"
+        }
+      ]
+    },
+    {
+      "id": "late-return-fail-open",
+      "phase": "pending",
+      "failurePolicy": "fail-open",
+      "effects": [
+        {
+          "type": "return",
+          "value": {
+            "answer": 42
+          }
+        }
+      ]
+    },
+    {
+      "id": "late-return-fail-closed",
+      "phase": "pending",
+      "failurePolicy": "fail-closed",
+      "effects": [
+        {
+          "type": "return",
+          "value": {
+            "answer": 42
+          }
+        }
+      ]
+    },
+    {
+      "id": "accepted-return",
+      "phase": "accepted",
+      "failurePolicy": "fail-open",
+      "effects": [
+        {
+          "type": "return",
+          "value": {
+            "answer": 42
+          }
+        }
+      ]
+    },
+    {
+      "id": "late-compound-fail-open",
+      "phase": "pending",
+      "failurePolicy": "fail-open",
+      "effects": [
+        {
+          "type": "modify",
+          "target": "input",
+          "operation": "merge",
+          "value": {
+            "task": 2
+          }
+        },
+        {
+          "type": "message",
+          "text": "accepted only"
+        },
+        {
+          "type": "return",
+          "value": "replacement"
+        }
+      ]
+    },
+    {
+      "id": "late-compound-fail-closed",
+      "phase": "pending",
+      "failurePolicy": "fail-closed",
+      "effects": [
+        {
+          "type": "modify",
+          "target": "input",
+          "operation": "merge",
+          "value": {
+            "task": 2
+          }
+        },
+        {
+          "type": "message",
+          "text": "accepted only"
+        },
+        {
+          "type": "return",
+          "value": "replacement"
+        }
+      ]
+    },
+    {
+      "id": "accepted-compound",
+      "phase": "accepted",
+      "failurePolicy": "fail-open",
+      "effects": [
+        {
+          "type": "modify",
+          "target": "input",
+          "operation": "merge",
+          "value": {
+            "task": 2
+          }
+        },
+        {
+          "type": "message",
+          "text": "accepted only"
+        },
+        {
+          "type": "return",
+          "value": "replacement"
+        }
+      ]
+    },
+    {
+      "id": "timeout-fail-open",
+      "phase": "timeout",
+      "failurePolicy": "fail-open",
+      "effects": []
+    },
+    {
+      "id": "timeout-fail-closed",
+      "phase": "timeout",
+      "failurePolicy": "fail-closed",
+      "effects": []
+    },
+    {
+      "id": "failure-fail-open",
+      "phase": "failure",
+      "failurePolicy": "fail-open",
+      "effects": []
+    },
+    {
+      "id": "failure-fail-closed",
+      "phase": "failure",
+      "failurePolicy": "fail-closed",
+      "effects": []
+    }
+  ]
+}

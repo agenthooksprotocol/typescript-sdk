@@ -2,7 +2,7 @@
 
 TypeScript models, JSON codecs, and runtime utilities for the [Agent Hooks Protocol (AHP)](https://github.com/agenthooksprotocol/agent-hooks-protocol).
 
-The generated schema API follows the current AHP `draft` snapshot. The runtime currently provides the `tool.before` interception flow over stdio. Node.js 20 or newer is required.
+The generated schema API follows the current AHP `draft` snapshot. The root runtime provides the deny/no-effect `tool.before` interception flow over stdio; the draft entrypoint adds canonical validation and reference boundary helpers. Node.js 20 or newer is required.
 
 ## Installation
 
@@ -77,10 +77,15 @@ Backends use UTF-8 NDJSON over stdin and stdout. Commands and argument arrays ar
 
 - `@agenthooksprotocol/sdk` — hook runner, stdio transport, runtime types, and operational errors
 - `@agenthooksprotocol/sdk/generated` — schema-derived models and structural codecs
+- `@agenthooksprotocol/sdk/draft` — canonical draft validators, generated models, and reference boundary helpers
 - `@agenthooksprotocol/testing` — configurable fake backend for integration tests
 - `@agenthooksprotocol/conformance` — black-box conformance runner and CLI
 
 ## Development
+
+The interop tests require a sibling `../agent-hooks-protocol` checkout. CI pins its
+shared fixtures to `548f1e857ba3f4d803fc40b04f848236b7316704`. The workspace
+installs its TypeScript compiler and canonical validator dependencies.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -95,6 +100,29 @@ node packages/conformance/dist/src/cli.js -- \
 ```
 
 Generated code lives in `packages/sdk/src/generated.ts`. Its provenance is recorded in `ahp-codegen.lock.json`; schema changes are made in the [protocol repository](https://github.com/agenthooksprotocol/agent-hooks-protocol), not by editing the generated file.
+
+## Draft API
+
+`@agenthooksprotocol/sdk/draft` exposes generated models and codecs for the full
+canonical draft catalogue, schema-backed validators, content-upload helpers, and
+synthetic boundary evaluators. This does **not** expand `ToolBeforeRunner` beyond
+its deny/no-effect `tool.before` slice or provide a complete production adapter.
+See the [draft API guide](packages/sdk/DRAFT-API.md) for entrypoints and limits.
+
+The protocol authority is the sibling repository's
+[`spec/draft`](../agent-hooks-protocol/spec/draft/index.md) and
+[`schema/draft`](../agent-hooks-protocol/schema/draft/manifest.json), not this SDK
+or its test fixtures. Subscriptions and their IDs are local dispatch configuration;
+they are not wire identity, including in candidate provenance or upload headers.
+
+## Synthetic interoperability harness (test-only)
+
+`pnpm interop` builds and runs the synthetic interoperability CLI. `pnpm check`
+builds the workspace and runs package tests plus `interop/*.test.mjs`. These tests
+exercise fixture-defined transport, authentication, and boundary behavior; they
+are not certification of the complete protocol or production authentication.
+Fixture credentials and keys are public test material, never deployment secrets.
+Local dispatch IDs and harness state must not be copied into protocol payloads.
 
 ## License
 

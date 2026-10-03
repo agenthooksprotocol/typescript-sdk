@@ -1,0 +1,283 @@
+{
+  "format": "ahp-synthetic-interop/1",
+  "binding": "test-only, not a canonical AHP schema",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": "synthetic-request",
+    "method": "hooks/intercept",
+    "params": {
+      "protocolVersion": "draft",
+      "capabilities": {
+        "effects": [
+          "deny"
+        ]
+      },
+      "event": {
+        "id": "synthetic-request",
+        "source": "urn:ahp:synthetic",
+        "type": "tool.before",
+        "time": "2026-01-02T03:04:05Z",
+        "session": {
+          "id": "synthetic-session"
+        },
+        "tool": {
+          "name": "unicode_\u5de5\u5177",
+          "kind": "other",
+          "input": {
+            "text": "Za\u017c\u00f3\u0142\u0107 \ud83d\ude80",
+            "values": [
+              null,
+              true,
+              2.5
+            ]
+          },
+          "origin": "native"
+        },
+        "call": {
+          "id": "synthetic-call"
+        },
+        "path": "native"
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "id": "stdio-no-effect",
+      "transport": "stdio",
+      "auth": "process-trust",
+      "credential": "none",
+      "expected": "no-effect"
+    },
+    {
+      "id": "stdio-repeat",
+      "transport": "stdio",
+      "auth": "process-trust",
+      "credential": "none",
+      "expected": "no-effect"
+    },
+    {
+      "id": "stdio-bearer",
+      "transport": "stdio",
+      "auth": "bearer",
+      "credential": "none",
+      "expected": "inapplicable"
+    },
+    {
+      "id": "stdio-oauth",
+      "transport": "stdio",
+      "auth": "oauth",
+      "credential": "none",
+      "expected": "inapplicable"
+    },
+    {
+      "id": "stdio-mtls",
+      "transport": "stdio",
+      "auth": "mtls",
+      "credential": "none",
+      "expected": "inapplicable"
+    },
+    {
+      "id": "stdio-workload",
+      "transport": "stdio",
+      "auth": "workload",
+      "credential": "none",
+      "expected": "inapplicable"
+    },
+    {
+      "id": "http-no-effect",
+      "transport": "http",
+      "auth": "none",
+      "credential": "none",
+      "expected": "no-effect"
+    },
+    {
+      "id": "bearer-valid",
+      "transport": "http",
+      "auth": "bearer",
+      "credential": "valid",
+      "expected": "no-effect"
+    },
+    {
+      "id": "bearer-missing",
+      "transport": "http",
+      "auth": "bearer",
+      "credential": "missing",
+      "expected": "unauthorized"
+    },
+    {
+      "id": "bearer-invalid",
+      "transport": "http",
+      "auth": "bearer",
+      "credential": "invalid",
+      "expected": "unauthorized"
+    },
+    {
+      "id": "oauth-valid",
+      "transport": "http",
+      "auth": "oauth",
+      "credential": "valid",
+      "expected": "no-effect"
+    },
+    {
+      "id": "oauth-missing",
+      "transport": "http",
+      "auth": "oauth",
+      "credential": "missing",
+      "expected": "unauthorized"
+    },
+    {
+      "id": "oauth-invalid",
+      "transport": "http",
+      "auth": "oauth",
+      "credential": "invalid",
+      "expected": "unauthorized"
+    },
+    {
+      "id": "workload-valid",
+      "transport": "http",
+      "auth": "workload",
+      "credential": "valid",
+      "expected": "no-effect"
+    },
+    {
+      "id": "workload-missing",
+      "transport": "http",
+      "auth": "workload",
+      "credential": "missing",
+      "expected": "unauthorized"
+    },
+    {
+      "id": "workload-invalid",
+      "transport": "http",
+      "auth": "workload",
+      "credential": "invalid",
+      "expected": "unauthorized"
+    },
+    {
+      "id": "bearer-env",
+      "transport": "http",
+      "auth": "bearer",
+      "credential": "env",
+      "expected": "no-effect"
+    },
+    {
+      "id": "oauth-bad-client",
+      "transport": "http",
+      "auth": "oauth",
+      "credential": "bad-client",
+      "expected": "token-rejected"
+    },
+    {
+      "id": "oauth-missing-client",
+      "transport": "http",
+      "auth": "oauth",
+      "credential": "missing-client",
+      "expected": "token-rejected"
+    },
+    {
+      "id": "oauth-bad-grant",
+      "transport": "http",
+      "auth": "oauth",
+      "credential": "bad-grant",
+      "expected": "token-rejected"
+    },
+    {
+      "id": "workload-untrusted",
+      "transport": "http",
+      "auth": "workload",
+      "credential": "untrusted",
+      "expected": "unauthorized"
+    },
+    {
+      "id": "workload-issuer",
+      "transport": "http",
+      "auth": "workload",
+      "credential": "issuer",
+      "expected": "unauthorized"
+    },
+    {
+      "id": "workload-audience",
+      "transport": "http",
+      "auth": "workload",
+      "credential": "audience",
+      "expected": "unauthorized"
+    },
+    {
+      "id": "workload-expired",
+      "transport": "http",
+      "auth": "workload",
+      "credential": "expired",
+      "expected": "unauthorized"
+    },
+    {
+      "id": "bearer-not-oauth",
+      "transport": "http",
+      "auth": "oauth",
+      "credential": "bearer",
+      "expected": "unauthorized"
+    },
+    {
+      "id": "oauth-not-bearer",
+      "transport": "http",
+      "auth": "bearer",
+      "credential": "oauth",
+      "expected": "unauthorized"
+    },
+    {
+      "id": "no-anonymous-downgrade",
+      "transport": "http",
+      "auth": "none",
+      "credential": "bearer",
+      "expected": "unauthorized"
+    },
+    {
+      "id": "mtls-valid",
+      "transport": "https",
+      "auth": "mtls",
+      "credential": "valid",
+      "expected": "no-effect"
+    },
+    {
+      "id": "mtls-missing",
+      "transport": "https",
+      "auth": "mtls",
+      "credential": "missing",
+      "expected": "tls-rejected"
+    },
+    {
+      "id": "mtls-invalid",
+      "transport": "https",
+      "auth": "mtls",
+      "credential": "invalid",
+      "expected": "tls-rejected"
+    },
+    {
+      "id": "mtls-no-cleartext-downgrade",
+      "transport": "http",
+      "auth": "mtls",
+      "credential": "valid",
+      "expected": "unauthorized"
+    },
+    {
+      "id": "server-ca-untrusted",
+      "transport": "https",
+      "auth": "mtls",
+      "credential": "bad-server-ca",
+      "expected": "tls-rejected"
+    },
+    {
+      "id": "invalid-protocol-http",
+      "transport": "http",
+      "auth": "none",
+      "credential": "malformed",
+      "expected": "invalid-request"
+    },
+    {
+      "id": "invalid-protocol-stdio",
+      "transport": "stdio",
+      "auth": "process-trust",
+      "credential": "malformed",
+      "expected": "invalid-request"
+    }
+  ]
+}

@@ -1,0 +1,5630 @@
+{
+  "format": "ahp-draft-atomic-scenarios-1",
+  "scenarios": [
+    {
+      "id": "modify-return",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "not-required",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 2
+                  }
+                },
+                {
+                  "type": "return",
+                  "value": "cached"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 2,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": {
+            "value": "cached",
+            "supplier": "first",
+            "input": {
+              "task": 2,
+              "options": {
+                "recursive": true,
+                "limit": 20
+              },
+              "keep": "yes"
+            }
+          },
+          "permission": "native",
+          "approval": "not-required",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "candidate:first"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "policy",
+          "candidate:first"
+        ],
+        "failures": 0,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "return-before-modify",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "not-required",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "return",
+                  "value": "cached"
+                },
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 2
+                  }
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 2,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": {
+            "value": "cached",
+            "supplier": "first",
+            "input": {
+              "task": 2,
+              "options": {
+                "recursive": true,
+                "limit": 20
+              },
+              "keep": "yes"
+            }
+          },
+          "permission": "native",
+          "approval": "not-required",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "candidate:first"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "policy",
+          "candidate:first"
+        ],
+        "failures": 0,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "modify-message",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "not-required",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 2
+                  }
+                },
+                {
+                  "type": "message",
+                  "text": "hello"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 2,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "not-required",
+          "denied": false,
+          "messages": [
+            "hello"
+          ]
+        },
+        "actions": [
+          "policy",
+          "execute"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "message:hello",
+          "policy",
+          "execute"
+        ],
+        "failures": 0,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 1,
+        "emittedMessages": [
+          "hello"
+        ]
+      }
+    },
+    {
+      "id": "valid-then-unknown",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "pending",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 2
+                  }
+                },
+                {
+                  "type": "unknown"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "pending",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "approval-required"
+        ],
+        "trace": [
+          "dispatch:first",
+          "reject:first",
+          "failure:fail-open",
+          "policy",
+          "approval-required"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "deny-then-invalid",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "pending",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "deny",
+                  "reason": "no"
+                },
+                {
+                  "type": "unknown"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "pending",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "approval-required"
+        ],
+        "trace": [
+          "dispatch:first",
+          "reject:first",
+          "failure:fail-open",
+          "policy",
+          "approval-required"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "message-then-invalid",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "pending",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "message",
+                  "text": "hello"
+                },
+                {
+                  "type": "unknown"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "pending",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "approval-required"
+        ],
+        "trace": [
+          "dispatch:first",
+          "reject:first",
+          "failure:fail-open",
+          "policy",
+          "approval-required"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "return-then-invalid",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "pending",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "return",
+                  "value": "cached"
+                },
+                {
+                  "type": "unknown"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "pending",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "approval-required"
+        ],
+        "trace": [
+          "dispatch:first",
+          "reject:first",
+          "failure:fail-open",
+          "policy",
+          "approval-required"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "message-then-staging-failure",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "pending",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "message",
+                  "text": "hello"
+                },
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 0
+                  }
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "pending",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "approval-required"
+        ],
+        "trace": [
+          "dispatch:first",
+          "reject:first",
+          "failure:fail-open",
+          "policy",
+          "approval-required"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "missing-operation",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "pending",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "value": {
+                    "task": 2
+                  }
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "pending",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "approval-required"
+        ],
+        "trace": [
+          "dispatch:first",
+          "reject:first",
+          "failure:fail-open",
+          "policy",
+          "approval-required"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "unsupported-target",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "pending",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "output",
+                  "operation": "merge",
+                  "value": {
+                    "task": 2
+                  }
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "pending",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "approval-required"
+        ],
+        "trace": [
+          "dispatch:first",
+          "reject:first",
+          "failure:fail-open",
+          "policy",
+          "approval-required"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "unsupported-operation",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "pending",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "patch",
+                  "value": {
+                    "task": 2
+                  }
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "pending",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "approval-required"
+        ],
+        "trace": [
+          "dispatch:first",
+          "reject:first",
+          "failure:fail-open",
+          "policy",
+          "approval-required"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "extensible-envelope",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "pending",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "message",
+                  "text": "extension accepted"
+                }
+              ],
+              "protocolVersion": "draft",
+              "extra": true
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "pending",
+          "denied": false,
+          "messages": [
+            "extension accepted"
+          ]
+        },
+        "actions": [
+          "policy",
+          "approval-required"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "message:extension accepted",
+          "policy",
+          "approval-required"
+        ],
+        "failures": 0,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": [
+          "extension accepted"
+        ]
+      }
+    },
+    {
+      "id": "malformed-json",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "pending",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [],
+              "protocolVersion": "draft"
+            }
+          },
+          "rawResponse": "{\"jsonrpc\":"
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "pending",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "approval-required"
+        ],
+        "trace": [
+          "dispatch:first",
+          "reject:first",
+          "failure:fail-open",
+          "policy",
+          "approval-required"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "wrong-response-id",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "pending",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "other",
+            "result": {
+              "effects": [
+                {
+                  "type": "message",
+                  "text": "hello"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "pending",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "approval-required"
+        ],
+        "trace": [
+          "dispatch:first",
+          "reject:first",
+          "failure:fail-open",
+          "policy",
+          "approval-required"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "unadvertised-effect",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "pending",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 2
+                  }
+                },
+                {
+                  "type": "message",
+                  "text": "hello"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "pending",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "approval-required"
+        ],
+        "trace": [
+          "dispatch:first",
+          "reject:first",
+          "failure:fail-open",
+          "policy",
+          "approval-required"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "unadvertised-merge",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "pending",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "merge": false,
+                "replace": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "message",
+                  "text": "hello"
+                },
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 2
+                  }
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "pending",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "approval-required"
+        ],
+        "trace": [
+          "dispatch:first",
+          "reject:first",
+          "failure:fail-open",
+          "policy",
+          "approval-required"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "merge": false,
+                    "replace": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "unadvertised-input",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "pending",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "message",
+              "return"
+            ]
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 2
+                  }
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "pending",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "approval-required"
+        ],
+        "trace": [
+          "dispatch:first",
+          "reject:first",
+          "failure:fail-open",
+          "policy",
+          "approval-required"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "message",
+                  "return"
+                ]
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "fail-closed-once",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "not-required",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-closed",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "message",
+                  "text": "hello"
+                },
+                {
+                  "type": "bad"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "not-required",
+          "denied": true,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "blocked"
+        ],
+        "trace": [
+          "dispatch:first",
+          "reject:first",
+          "failure:fail-closed",
+          "policy",
+          "blocked"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "failed-rewrite-preserves-candidate-approval",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": {
+          "value": "cached",
+          "supplier": "prior",
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          }
+        },
+        "permission": "allow",
+        "approval": "approved",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 2
+                  }
+                },
+                {
+                  "type": "message",
+                  "text": "hello"
+                },
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 0
+                  }
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": {
+            "value": "cached",
+            "supplier": "prior",
+            "input": {
+              "task": 1,
+              "options": {
+                "recursive": true,
+                "limit": 20
+              },
+              "keep": "yes"
+            }
+          },
+          "permission": "allow",
+          "approval": "approved",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "candidate:prior"
+        ],
+        "trace": [
+          "dispatch:first",
+          "reject:first",
+          "failure:fail-open",
+          "policy",
+          "candidate:prior"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "allow",
+                "candidate": {
+                  "value": "cached"
+                }
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "successful-rewrite-invalidates-candidate-approval",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": {
+          "value": "cached",
+          "supplier": "prior",
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          }
+        },
+        "permission": "allow",
+        "approval": "approved",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 2
+                  }
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 2,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "pending",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "approval-required"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "policy",
+          "approval-required"
+        ],
+        "failures": 0,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "allow",
+                "candidate": {
+                  "value": "cached"
+                }
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "unchanged-rewrite-preserves-candidate-approval",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": {
+          "value": "cached",
+          "supplier": "prior",
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          }
+        },
+        "permission": "allow",
+        "approval": "approved",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 1
+                  }
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": {
+            "value": "cached",
+            "supplier": "prior",
+            "input": {
+              "task": 1,
+              "options": {
+                "recursive": true,
+                "limit": 20
+              },
+              "keep": "yes"
+            }
+          },
+          "permission": "allow",
+          "approval": "approved",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "candidate:prior"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "policy",
+          "candidate:prior"
+        ],
+        "failures": 0,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "allow",
+                "candidate": {
+                  "value": "cached"
+                }
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "earlier-subscriber-survives-fail-open",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "allow",
+        "approval": "approved",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 2
+                  }
+                },
+                {
+                  "type": "return",
+                  "value": "cached"
+                },
+                {
+                  "type": "allow"
+                },
+                {
+                  "type": "message",
+                  "text": "first accepted"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        },
+        {
+          "id": "second",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "second",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 3
+                  }
+                },
+                {
+                  "type": "message",
+                  "text": "hidden"
+                },
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 0
+                  }
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 2,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": {
+            "value": "cached",
+            "supplier": "first",
+            "input": {
+              "task": 2,
+              "options": {
+                "recursive": true,
+                "limit": 20
+              },
+              "keep": "yes"
+            }
+          },
+          "permission": "allow",
+          "approval": "pending",
+          "denied": false,
+          "messages": [
+            "first accepted"
+          ]
+        },
+        "actions": [
+          "policy",
+          "candidate:first"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "message:first accepted",
+          "dispatch:second",
+          "reject:second",
+          "failure:fail-open",
+          "policy",
+          "candidate:first"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "allow",
+                "candidate": null
+              }
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "id": "second",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "second",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 2,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "allow",
+                "candidate": {
+                  "value": "cached"
+                }
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": [
+          "first accepted"
+        ]
+      }
+    },
+    {
+      "id": "earlier-subscriber-survives-fail-closed",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "allow",
+        "approval": "approved",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 2
+                  }
+                },
+                {
+                  "type": "return",
+                  "value": "cached"
+                },
+                {
+                  "type": "allow"
+                },
+                {
+                  "type": "message",
+                  "text": "first accepted"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        },
+        {
+          "id": "second",
+          "failurePolicy": "fail-closed",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "second",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 3
+                  }
+                },
+                {
+                  "type": "message",
+                  "text": "hidden"
+                },
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 0
+                  }
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 2,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": {
+            "value": "cached",
+            "supplier": "first",
+            "input": {
+              "task": 2,
+              "options": {
+                "recursive": true,
+                "limit": 20
+              },
+              "keep": "yes"
+            }
+          },
+          "permission": "allow",
+          "approval": "pending",
+          "denied": true,
+          "messages": [
+            "first accepted"
+          ]
+        },
+        "actions": [
+          "policy",
+          "blocked"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "message:first accepted",
+          "dispatch:second",
+          "reject:second",
+          "failure:fail-closed",
+          "policy",
+          "blocked"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "allow",
+                "candidate": null
+              }
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "id": "second",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "second",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 2,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "allow",
+                "candidate": {
+                  "value": "cached"
+                }
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": [
+          "first accepted"
+        ]
+      }
+    },
+    {
+      "id": "remaining-subscriber-denies-return",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "not-required",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "return",
+                  "value": "cached"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        },
+        {
+          "id": "second",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "second",
+            "result": {
+              "effects": [
+                {
+                  "type": "deny",
+                  "reason": "policy"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "not-required",
+          "denied": true,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "blocked"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "dispatch:second",
+          "accept:second",
+          "policy",
+          "blocked"
+        ],
+        "failures": 0,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "id": "second",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "second",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": {
+                  "value": "cached"
+                }
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "managed-policy-checks-return",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "not-required",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "deny",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "return",
+                  "value": "cached"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": {
+            "value": "cached",
+            "supplier": "first",
+            "input": {
+              "task": 1,
+              "options": {
+                "recursive": true,
+                "limit": 20
+              },
+              "keep": "yes"
+            }
+          },
+          "permission": "native",
+          "approval": "not-required",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "blocked"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "policy",
+          "blocked"
+        ],
+        "failures": 0,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "return-does-not-authorize",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "pending",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "return",
+                  "value": "cached"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": {
+            "value": "cached",
+            "supplier": "first",
+            "input": {
+              "task": 1,
+              "options": {
+                "recursive": true,
+                "limit": 20
+              },
+              "keep": "yes"
+            }
+          },
+          "permission": "native",
+          "approval": "pending",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "approval-required"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "policy",
+          "approval-required"
+        ],
+        "failures": 0,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "shallow-merge-null-literal",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "not-required",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "options": {
+                      "limit": 100
+                    },
+                    "keep": null
+                  }
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "limit": 100
+            },
+            "keep": null
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "not-required",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "execute"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "policy",
+          "execute"
+        ],
+        "failures": 0,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 1,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "replace-removes-omitted-keys",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "not-required",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "replace",
+                  "value": {
+                    "task": 2
+                  }
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 2
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "not-required",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "execute"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "policy",
+          "execute"
+        ],
+        "failures": 0,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 1,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "ask-wins-over-allow",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "pending",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "ask"
+                },
+                {
+                  "type": "allow"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "ask",
+          "approval": "pending",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "approval-required"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "policy",
+          "approval-required"
+        ],
+        "failures": 0,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "deny-wins-over-return",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "not-required",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "deny",
+                  "reason": "no"
+                },
+                {
+                  "type": "return",
+                  "value": "cached"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": null,
+          "permission": "native",
+          "approval": "not-required",
+          "denied": true,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "blocked"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "policy",
+          "blocked"
+        ],
+        "failures": 0,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "null-return-preserved",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "native",
+        "approval": "not-required",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "return",
+                  "value": null
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": {
+            "value": null,
+            "supplier": "first",
+            "input": {
+              "task": 1,
+              "options": {
+                "recursive": true,
+                "limit": 20
+              },
+              "keep": "yes"
+            }
+          },
+          "permission": "native",
+          "approval": "not-required",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "candidate:first"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "policy",
+          "candidate:first"
+        ],
+        "failures": 0,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "none",
+                "candidate": null
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "empty-response-preserves-state",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": {
+          "value": "cached",
+          "supplier": "prior",
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          }
+        },
+        "permission": "allow",
+        "approval": "approved",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [],
+              "protocolVersion": "draft"
+            }
+          }
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 1,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": {
+            "value": "cached",
+            "supplier": "prior",
+            "input": {
+              "task": 1,
+              "options": {
+                "recursive": true,
+                "limit": 20
+              },
+              "keep": "yes"
+            }
+          },
+          "permission": "allow",
+          "approval": "approved",
+          "denied": false,
+          "messages": []
+        },
+        "actions": [
+          "policy",
+          "candidate:prior"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "policy",
+          "candidate:prior"
+        ],
+        "failures": 0,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "allow",
+                "candidate": {
+                  "value": "cached"
+                }
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": []
+      }
+    },
+    {
+      "id": "transport-error-fail-open",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "allow",
+        "approval": "approved",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 2
+                  }
+                },
+                {
+                  "type": "return",
+                  "value": "cached"
+                },
+                {
+                  "type": "allow"
+                },
+                {
+                  "type": "message",
+                  "text": "first accepted"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        },
+        {
+          "id": "second",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "second",
+            "error": {
+              "code": -32000,
+              "message": "Scripted backend failure"
+            }
+          },
+          "httpStatus": 503
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 2,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": {
+            "value": "cached",
+            "supplier": "first",
+            "input": {
+              "task": 2,
+              "options": {
+                "recursive": true,
+                "limit": 20
+              },
+              "keep": "yes"
+            }
+          },
+          "permission": "allow",
+          "approval": "pending",
+          "denied": false,
+          "messages": [
+            "first accepted"
+          ]
+        },
+        "actions": [
+          "policy",
+          "candidate:first"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "message:first accepted",
+          "dispatch:second",
+          "reject:second",
+          "failure:fail-open",
+          "policy",
+          "candidate:first"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "allow",
+                "candidate": null
+              }
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "id": "second",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "second",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 2,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "allow",
+                "candidate": {
+                  "value": "cached"
+                }
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": [
+          "first accepted"
+        ]
+      }
+    },
+    {
+      "id": "transport-error-fail-closed",
+      "initial": {
+        "input": {
+          "task": 1,
+          "options": {
+            "recursive": true,
+            "limit": 20
+          },
+          "keep": "yes"
+        },
+        "candidate": null,
+        "permission": "allow",
+        "approval": "approved",
+        "denied": false,
+        "messages": []
+      },
+      "managedPolicy": "allow",
+      "subscribers": [
+        {
+          "id": "first",
+          "failurePolicy": "fail-open",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "result": {
+              "effects": [
+                {
+                  "type": "modify",
+                  "target": "input",
+                  "operation": "merge",
+                  "value": {
+                    "task": 2
+                  }
+                },
+                {
+                  "type": "return",
+                  "value": "cached"
+                },
+                {
+                  "type": "allow"
+                },
+                {
+                  "type": "message",
+                  "text": "first accepted"
+                }
+              ],
+              "protocolVersion": "draft"
+            }
+          }
+        },
+        {
+          "id": "second",
+          "failurePolicy": "fail-closed",
+          "capabilities": {
+            "effects": [
+              "deny",
+              "allow",
+              "ask",
+              "modify",
+              "message",
+              "return"
+            ],
+            "modify": {
+              "input": {
+                "replace": true,
+                "merge": true
+              }
+            }
+          },
+          "response": {
+            "jsonrpc": "2.0",
+            "id": "second",
+            "error": {
+              "code": -32000,
+              "message": "Scripted backend failure"
+            }
+          },
+          "httpStatus": 503
+        }
+      ],
+      "expected": {
+        "state": {
+          "input": {
+            "task": 2,
+            "options": {
+              "recursive": true,
+              "limit": 20
+            },
+            "keep": "yes"
+          },
+          "candidate": {
+            "value": "cached",
+            "supplier": "first",
+            "input": {
+              "task": 2,
+              "options": {
+                "recursive": true,
+                "limit": 20
+              },
+              "keep": "yes"
+            }
+          },
+          "permission": "allow",
+          "approval": "pending",
+          "denied": true,
+          "messages": [
+            "first accepted"
+          ]
+        },
+        "actions": [
+          "policy",
+          "blocked"
+        ],
+        "trace": [
+          "dispatch:first",
+          "accept:first",
+          "message:first accepted",
+          "dispatch:second",
+          "reject:second",
+          "failure:fail-closed",
+          "policy",
+          "blocked"
+        ],
+        "failures": 1,
+        "requests": [
+          {
+            "jsonrpc": "2.0",
+            "id": "first",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "first",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 1,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "allow",
+                "candidate": null
+              }
+            }
+          },
+          {
+            "jsonrpc": "2.0",
+            "id": "second",
+            "method": "hooks/intercept",
+            "params": {
+              "protocolVersion": "draft",
+              "event": {
+                "id": "second",
+                "source": "urn:ahp:interop",
+                "type": "tool.before",
+                "time": "2026-01-01T00:00:00Z",
+                "session": {
+                  "id": "interop"
+                },
+                "tool": {
+                  "name": "task",
+                  "kind": "task",
+                  "input": {
+                    "task": 2,
+                    "options": {
+                      "recursive": true,
+                      "limit": 20
+                    },
+                    "keep": "yes"
+                  },
+                  "origin": "native"
+                },
+                "call": {
+                  "id": "call-1"
+                },
+                "path": "native"
+              },
+              "capabilities": {
+                "effects": [
+                  "deny",
+                  "allow",
+                  "ask",
+                  "modify",
+                  "message",
+                  "return"
+                ],
+                "modify": {
+                  "input": {
+                    "replace": true,
+                    "merge": true
+                  }
+                }
+              },
+              "state": {
+                "permission": "allow",
+                "candidate": {
+                  "value": "cached"
+                }
+              }
+            }
+          }
+        ],
+        "executions": 0,
+        "emittedMessages": [
+          "first accepted"
+        ]
+      }
+    }
+  ]
+}
