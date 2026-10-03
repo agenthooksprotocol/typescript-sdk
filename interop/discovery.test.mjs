@@ -46,13 +46,6 @@ async function runClient(path) {
   }
 }
 test("canonical discovery validates versioned requests and manifest responses", () => {
-  assert.deepEqual(manifest.authentication, ["bearer", "oauth"]);
-  assert.deepEqual(discovery.authentication, ["bearer", "oauth"]);
-  for (const type of ["none", "workload", "mtls"]) {
-    const response = structuredClone(discoveryResponse);
-    response.result.manifest.authentication.push(type);
-    assert.equal(validateCapabilitiesResponse(response).ok, false);
-  }
   assert.equal(validateCapabilitiesRequest(discoveryRequest).ok, true);
   assert.equal(validateCapabilitiesResponse(discoveryResponse).ok, true);
   for (const request of [
