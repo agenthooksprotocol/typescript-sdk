@@ -58,6 +58,22 @@ test("registration uses discovered capabilities and trusted credential resolutio
   ) =>
     evaluateRegistration(r, catalogueManifest, requirements, context).accepted;
   assert.equal(evaluate(registration()), true);
+  for (const authentication of [
+    {
+      type: "workload",
+      issuer: "https://issuer.example.test",
+      audience: "https://policy.invalid/hooks",
+      credentialRef: "workload-credential",
+    },
+    {
+      type: "mtls",
+      certificateRef: "client-certificate",
+      privateKeyRef: "client-key",
+      trustRootsRef: "trusted-roots",
+    },
+  ]) {
+    assert.equal(evaluate(registration({ authentication })), false);
+  }
   const requirement = {
     event: "tool.before",
     mode: "intercept",

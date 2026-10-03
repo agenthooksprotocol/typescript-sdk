@@ -97,20 +97,7 @@ export type Authentication =
       resource: string;
       scopes?: Array<string>;
       type: "oauth";
-    } & AdditionalProperties)
-  | ({
-      certificateRef: string;
-      privateKeyRef: string;
-      trustRootsRef: string;
-      type: "mtls";
-    } & AdditionalProperties)
-  | ({
-      audience: string;
-      credentialRef: string;
-      issuer: string;
-      type: "workload";
-    } & AdditionalProperties)
-  | UnknownVariant<"type">;
+    } & AdditionalProperties);
 
 /** Source: schema/draft/registration.schema.json#/$defs/backend */
 export type Backend = {
@@ -259,9 +246,7 @@ export type CapabilitiesRequest = JsonRpcRequest & {
 export type CapabilitiesResponse = JsonRpcSuccessResponse & {
   result: {
     manifest: {
-      authentication: Array<
-        OpenString<"bearer" | "oauth" | "mtls" | "workload">
-      >;
+      authentication: Array<OpenString<"bearer" | "oauth">>;
       contentCategories: Array<string>;
       correlationIdentityFields: Array<string>;
       events: Array<
@@ -489,10 +474,7 @@ export type ContentSelection = {
 
 /** Source: schema/draft/content-upload.schema.json# */
 export type ContentUpload = {
-  auth?: {
-    tokenEnv: string;
-    type: "bearer";
-  } & AdditionalProperties;
+  auth?: Authentication;
   endpoint: string;
   maxBytes: number;
   timeoutMs: number;
@@ -1968,7 +1950,7 @@ export type SessionStartEvent = {
 
 /** Source: schema/draft/capabilities-response.schema.json#/allOf/1/properties/result/properties/manifest */
 export type StaticCapabilityManifest = {
-  authentication: Array<OpenString<"bearer" | "oauth" | "mtls" | "workload">>;
+  authentication: Array<OpenString<"bearer" | "oauth">>;
   contentCategories: Array<string>;
   correlationIdentityFields: Array<string>;
   events: Array<
@@ -2558,9 +2540,8 @@ export type WorkspaceChangeBeforeEvent =
 
 const SCHEMAS: Record<string, SchemaNode> = {
   Authentication: {
-    discriminator: "type",
     kind: "union",
-    mode: "oneOf",
+    mode: "anyOf",
     variants: [
       {
         kind: "intersection",
@@ -2695,82 +2676,6 @@ const SCHEMAS: Record<string, SchemaNode> = {
             shape: {
               kind: "literal",
               value: "oauth",
-            },
-            wire_name: "type",
-          },
-        ],
-      },
-      {
-        additional: {
-          kind: "allowed",
-        },
-        forbidden_property_sets: [],
-        kind: "object",
-        properties: [
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "certificateRef",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "privateKeyRef",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "trustRootsRef",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "literal",
-              value: "mtls",
-            },
-            wire_name: "type",
-          },
-        ],
-      },
-      {
-        additional: {
-          kind: "allowed",
-        },
-        forbidden_property_sets: [],
-        kind: "object",
-        properties: [
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "audience",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "credentialRef",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "issuer",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "literal",
-              value: "workload",
             },
             wire_name: "type",
           },
@@ -3758,7 +3663,7 @@ const SCHEMAS: Record<string, SchemaNode> = {
                           items: {
                             kind: "enum",
                             open_strings: true,
-                            values: ["bearer", "oauth", "mtls", "workload"],
+                            values: ["bearer", "oauth"],
                           },
                           kind: "array",
                         },
@@ -4934,28 +4839,8 @@ const SCHEMAS: Record<string, SchemaNode> = {
       {
         required: false,
         shape: {
-          additional: {
-            kind: "allowed",
-          },
-          forbidden_property_sets: [],
-          kind: "object",
-          properties: [
-            {
-              required: true,
-              shape: {
-                kind: "string",
-              },
-              wire_name: "tokenEnv",
-            },
-            {
-              required: true,
-              shape: {
-                kind: "literal",
-                value: "bearer",
-              },
-              wire_name: "type",
-            },
-          ],
+          kind: "ref",
+          name: "Authentication",
         },
         wire_name: "auth",
       },
@@ -13144,7 +13029,7 @@ const SCHEMAS: Record<string, SchemaNode> = {
           items: {
             kind: "enum",
             open_strings: true,
-            values: ["bearer", "oauth", "mtls", "workload"],
+            values: ["bearer", "oauth"],
           },
           kind: "array",
         },

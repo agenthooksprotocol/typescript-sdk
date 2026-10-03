@@ -38,9 +38,12 @@ See [LIFECYCLE.md](LIFECYCLE.md) for lifecycle and catalogue operation.
 
 ## Authentication and content
 
-HTTP supports no authentication, bearer tokens, test OAuth acquisition, signed
-workload assertions, and mutual TLS. Stdio trusts the launched process; HTTP auth
-modes are inapplicable there. OAuth/workload verification uses **test-only** HS256
+Portable authentication advertisements contain only bearer and OAuth. The HTTP
+test harness also supports unauthenticated transport, deployment-specific signed
+workload assertions, and mutual TLS; these are not portable registration variants.
+OAuth protected-resource metadata and authorization-server discovery are not
+implemented; the harness uses explicitly configured test OAuth acquisition.
+Stdio trusts the launched process; HTTP auth modes are inapplicable there. OAuth/workload verification uses **test-only** HS256
 trust, including issuer, audience, purpose, and expiry checks. OAuth redirects
 are rejected rather than forwarding client secrets. Duplicate Authorization
 fields are rejected. TLS health counters distinguish sanitized certificate

@@ -48,7 +48,7 @@ export const discovery = {
   ],
   modify: { input: { replace: true, merge: true } },
   transports: ["http", "stdio"],
-  authentication: ["none", "bearer", "oauth", "workload", "mtls"],
+  authentication: ["bearer", "oauth"],
   flow: {
     operations: ["stop", "continue"],
     remainingContinuations: 2,
@@ -67,7 +67,7 @@ export const discovery = {
 
 export const manifest = {
   transports: ["http", "stdio"],
-  authentication: ["bearer", "oauth", "workload", "mtls"],
+  authentication: ["bearer", "oauth"],
   toolPaths: ["native"],
   contentCategories: [
     "text",
