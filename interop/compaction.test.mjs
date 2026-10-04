@@ -2,10 +2,7 @@ import { spawnSync } from "node:child_process";
 import { MessageChannel } from "node:worker_threads";
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  runCompaction,
-  compactionCapabilities,
-} from "../packages/sdk/dist/src/compaction.js";
+import { runCompaction, compactionCapabilities } from "./compaction.mjs";
 const modify = (target, value) => ({
   type: "modify",
   target,
@@ -17,9 +14,9 @@ const hook = (supplier, run, failurePolicy = "fail-closed") => ({
   run,
   failurePolicy,
 });
-test("compaction callbacks and generator see accepted inputs and results", () => {
+test("compaction callbacks and generator see accepted inputs and results", async () => {
   const generated = [];
-  const r = runCompaction(
+  const r = await runCompaction(
     "old",
     [
       hook("edit", (snapshot) => {
@@ -53,8 +50,8 @@ test("compaction callbacks and generator see accepted inputs and results", () =>
   assert.notEqual(r.seen[1].summary.ref, r.summary.ref);
   assert.equal(Object.keys(r.bodies).length, 2);
 });
-test("failed compound preserves candidate, messages and input; supplied summary still redacted", () => {
-  const r = runCompaction(
+test("failed compound preserves candidate, messages and input; supplied summary still redacted", async () => {
+  const r = await runCompaction(
     "old",
     [
       hook("cache", () => [{ type: "return", value: "cached" }]),
@@ -81,8 +78,8 @@ test("failed compound preserves candidate, messages and input; supplied summary 
   assert.deepEqual(r.provenance, { kind: "supplied", supplier: "cache" });
   assert.equal(r.applied, true);
 });
-test("after failure prevents delivery; observation does not advertise control", () => {
-  const r = runCompaction(
+test("after failure prevents delivery; observation does not advertise control", async () => {
+  const r = await runCompaction(
     "old",
     [],
     [
@@ -122,7 +119,7 @@ test(
     });
     let snapshot;
     try {
-      const r = runCompaction("base", [], [], {
+      const r = await runCompaction("base", [], [], {
         observeOnly: true,
         observers: [
           {
@@ -178,7 +175,7 @@ test(
       notify = resolve;
     });
     try {
-      const r = runCompaction(
+      const r = await runCompaction(
         "base",
         [],
         [
@@ -375,4 +372,28 @@ test("wire sender refuses plans missing independent upload credentials", () => {
   );
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Missing independent compaction credentials/);
+});
+
+test("empty hook plans still use a valid public Hooks registration", async () => {
+  const result = await runCompaction("base");
+  assert.equal(result.applied, true);
+  assert.equal(result.bodies[result.summary.ref], "summary:base");
+  assert.deepEqual(result.seen, []);
+  assert.deepEqual(result.failures, []);
+});
+
+test("explicit malformed-response bypass exercises SDK rejection", async () => {
+  const result = await runCompaction("base", [
+    {
+      supplier: "malformed",
+      failurePolicy: "fail-open",
+      bypass: true,
+      run: () => ({ type: "deny" }),
+    },
+  ]);
+  assert.deepEqual(result.failures, [
+    { boundary: "before", supplier: "malformed" },
+  ]);
+  assert.equal(result.applied, true);
+  assert.equal(result.bodies[result.summary.ref], "summary:base");
 });

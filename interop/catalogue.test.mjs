@@ -6,11 +6,8 @@ import {
   evaluateRegistration,
   catalogueEvents,
 } from "./catalogue.mjs";
-import {
-  validateCapabilitiesResponse,
-  draftCodecs,
-} from "../packages/sdk/dist/src/draft/index.js";
-import { validateObserve } from "./lifecycle-common.mjs";
+import { sdkDraft, sdkServer, fixtureCapabilities } from "./common.mjs";
+const { validateCapabilitiesResponse } = sdkDraft;
 import { TaskLineage } from "./task-lineage.mjs";
 const registration = (overrides = {}) => ({
   protocolVersion: "draft",
@@ -50,29 +47,30 @@ test("catalogue manifest advertises typed observations without invented managed 
     disableable: true,
   });
 });
-test("registration uses discovered capabilities and trusted credential resolution", () => {
-  const evaluate = (
+test("registration uses discovered capabilities and trusted credential resolution", async () => {
+  const evaluate = async (
     r,
     requirements = [],
     context = { interactive: true, environment: {} },
   ) =>
-    evaluateRegistration(r, catalogueManifest, requirements, context).accepted;
-  assert.equal(evaluate(registration()), true);
+    (await evaluateRegistration(r, catalogueManifest, requirements, context))
+      .accepted;
+  assert.equal(await evaluate(registration()), true);
   const requirement = {
     event: "tool.before",
     mode: "intercept",
     effects: ["modify"],
     modify: { input: { merge: true } },
   };
-  assert.equal(evaluate(registration(), [requirement]), true);
+  assert.equal(await evaluate(registration(), [requirement]), true);
   assert.equal(
-    evaluate(registration(), [
+    await evaluate(registration(), [
       { ...requirement, modify: { workspace: { replace: true } } },
     ]),
     false,
   );
   assert.equal(
-    evaluate(
+    await evaluate(
       registration(),
       [{ event: "tool.before", mode: "intercept", effects: ["ask"] }],
       { interactive: false, environment: {} },
@@ -80,13 +78,13 @@ test("registration uses discovered capabilities and trusted credential resolutio
     false,
   );
   assert.equal(
-    evaluate(
+    await evaluate(
       registration({ authentication: { type: "bearer", tokenEnv: "TOKEN" } }),
     ),
     false,
   );
   assert.equal(
-    evaluate(
+    await evaluate(
       registration({ authentication: { type: "bearer", tokenEnv: "TOKEN" } }),
       [],
       { interactive: true, environment: { TOKEN: "TEST-ONLY" } },
@@ -95,16 +93,16 @@ test("registration uses discovered capabilities and trusted credential resolutio
   );
   const duplicate = registration();
   duplicate.hooks.push(structuredClone(duplicate.hooks[0]));
-  assert.equal(evaluate(duplicate), false);
+  assert.equal(await evaluate(duplicate), false);
   const managed = registration();
   managed.hooks[0].subscriptions[0].scope = "managed";
   managed.hooks[0].subscriptions[0].disableable = false;
-  assert.equal(evaluate(managed), false);
+  assert.equal(await evaluate(managed), false);
   const observed = registration();
   observed.hooks[0].subscriptions[0].mode = "observe";
-  assert.equal(evaluate(observed), false);
+  assert.equal(await evaluate(observed), false);
 });
-test("catalogue native payloads and lineage negatives run through language validation", async () => {
+test("catalogue native payloads and lineage negatives run through public server hooks", async () => {
   const { scenarios } = JSON.parse(
     await readFile(
       "../agent-hooks-protocol/interop/catalogue-scenarios.json",
@@ -114,24 +112,23 @@ test("catalogue native payloads and lineage negatives run through language valid
   const lineage = new TaskLineage();
   for (const row of scenarios)
     for (const step of row.steps) {
-      if (step.op === "notify") {
-        assert.equal(
-          draftCodecs.parseObserveNotification(step.message).ok,
-          true,
-          row.id,
-        );
-        validateObserve(step.message);
-        lineage.accept(step.message);
-      } else if (step.op === "rawNotify") {
-        assert.throws(() => {
-          validateObserve(step.message);
-          lineage.accept(step.message);
-        }, row.id);
-      }
+      if (step.op !== "notify" && step.op !== "rawNotify") continue;
+      const response = await sdkServer.hooks.handle(
+        new Request("http://localhost/observe", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(step.message),
+        }),
+        (message) => {
+          lineage.accept(message);
+        },
+      );
+      if (step.op === "notify") assert.equal(response.status, 204, row.id);
+      else assert.notEqual(response.status, 204, row.id);
     }
 });
 
-test("unknown configuration/auth/upload fields are tolerated, recognized fields still validate", () => {
+test("unknown configuration/auth/upload fields are tolerated, recognized fields still validate", async () => {
   const r = registration({
     futureBackend: { enabled: true },
     authentication: {
@@ -155,7 +152,7 @@ test("unknown configuration/auth/upload fields are tolerated, recognized fields 
     environment: { EVENT_TOKEN: "event", UPLOAD_TOKEN: "upload" },
   };
   assert.equal(
-    evaluateRegistration(r, catalogueManifest, [], context).accepted,
+    (await evaluateRegistration(r, catalogueManifest, [], context)).accepted,
     true,
   );
   for (const mutate of [
@@ -175,8 +172,24 @@ test("unknown configuration/auth/upload fields are tolerated, recognized fields 
     const bad = structuredClone(r);
     mutate(bad);
     assert.equal(
-      evaluateRegistration(bad, catalogueManifest, [], context).accepted,
+      (await evaluateRegistration(bad, catalogueManifest, [], context))
+        .accepted,
       false,
     );
   }
+});
+
+test("core fixture capability union retains every occurrence advertisement", async () => {
+  const { scenarios } = JSON.parse(
+    await readFile("../agent-hooks-protocol/interop/scenarios.json", "utf8"),
+  );
+  const caps = fixtureCapabilities(scenarios);
+  for (const { request } of scenarios) {
+    const actual = caps[request.params.event.type];
+    assert.equal(sdkDraft.validateCapabilities(actual).ok, true);
+    for (const effect of request.params.capabilities.effects)
+      assert.ok(actual.effects.includes(effect));
+  }
+  assert.ok(caps["tool.before"].effects.includes("inject"));
+  assert.ok(caps["tool.before"].effects.includes("return"));
 });

@@ -6,6 +6,7 @@ import { createInterface } from "node:readline";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createAuth } from "../packages/testing/dist/src/interop/auth.js";
+import { send, accessToken } from "./security.mjs";
 import { rawExchange } from "./test-http.mjs";
 
 test(
@@ -27,12 +28,12 @@ test(
         request = JSON.parse(
           await readFile("packages/testing/interop/scenarios.json", "utf8"),
         ).request;
-      const tokenForm = new URLSearchParams({
-        grant_type: "client_credentials",
-        client_id: auth.credentials.clientId,
-        client_secret: auth.credentials.clientSecret,
+      const oauth = await accessToken({
+        mode: "oauth",
+        tokenEndpoint: `http://127.0.0.1:${ready.httpPort}/token`,
+        clientId: auth.credentials.clientId,
+        clientSecret: auth.credentials.clientSecret,
       });
-      const oauth = auth.token(tokenForm).body.access_token;
       const directory = resolve("packages/testing/interop/fixtures");
       const tls = {
         mode: "mtls",
@@ -53,15 +54,14 @@ test(
               : `http://127.0.0.1:${ready.httpPort}`,
           transport = mode === "mtls" ? tls : {};
         const fields = token ? ["Authorization", `Bearer ${token}`] : [];
-        const valid = await rawExchange(
+        const valid = await send(
           endpoint,
           "/" + mode,
           request,
-          transport,
-          fields,
+          mode === "mtls" ? tls : { mode },
+          token,
         );
-        assert.equal(valid.status, 200);
-        assert.deepEqual(valid.body.result.effects, []);
+        assert.deepEqual(valid.result.effects ?? [], []);
         const invalid = structuredClone(request);
         invalid.params.state = { candidate: null, permission: "garbage" };
         const rejected = await rawExchange(
@@ -91,7 +91,8 @@ test(
       }
       const invalid = structuredClone(request);
       invalid.params.state = { candidate: null, permission: "garbage" };
-      for (const wire of [request, invalid]) {
+      // Positive stdio boundaries are covered by public Hooks transport tests.
+      for (const wire of [invalid]) {
         const response = once(lines, "line");
         child.stdin.write(JSON.stringify(wire) + "\n");
         const [line] = await response;

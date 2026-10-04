@@ -11,6 +11,12 @@ import {
   type BoundaryState,
   type BoundaryCapabilities,
 } from "@agenthooksprotocol/sdk/draft";
+import { Hooks, auth } from "@agenthooksprotocol/sdk/client";
+import { hooks } from "@agenthooksprotocol/sdk/server";
+
+// Remaining draft tests intentionally exercise legacy state/lineage/receiver
+// primitives (including noncanonical synthetic kinds and scheduler injection).
+// They are compatibility unit tests, not public wire-conformance fixtures.
 const state = (): BoundaryState => ({
   input: { task: 123 },
   candidate: null,
@@ -171,43 +177,102 @@ test("request-scoped targets and operations reject rather than downgrade; permis
   );
   assert.equal(same.approval, "approved");
 });
-test("all intercepts precede observations regardless of registration order; one settled event identity", async () => {
-  const views: unknown[] = [];
-  const result = await dispatchBoundary("event-1", state(), [
+test("public boundaries settle intercepts before observers with one occurrence identity", async () => {
+  const seen: string[] = [];
+  const client = new Hooks(
     {
-      mode: "observe",
-      capabilities: caps,
-      receive: async (view) => {
-        views.push(view);
-        return [{ type: "deny", reason: "ignored" }];
-      },
+      protocolVersion: "draft",
+      hooks: [
+        ...["observer", "first", "second"].map((id) => ({
+          id: `test.${id}`,
+          transport: { type: "http" as const, url: `https://${id}.test/hooks` },
+          subscriptions: [
+            id === "observer"
+              ? {
+                  mode: "observe" as const,
+                  events: ["tool.before"],
+                  content: { default: "metadata" },
+                }
+              : {
+                  mode: "intercept" as const,
+                  content: { default: "metadata" },
+                  events: ["tool.before"],
+                  timeoutMs: 1000,
+                  failurePolicy: "fail-closed",
+                },
+          ],
+        })),
+      ],
     },
     {
-      mode: "intercept",
-      capabilities: caps,
-      receive: async (view) => {
-        assert.equal(view.input.task, 123);
-        return [
-          {
-            type: "modify",
-            target: "input",
-            operation: "merge",
-            value: { task: 124 },
-          },
-        ];
+      source: "urn:test:runtime",
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        assert.equal(
+          request.headers.get("authorization"),
+          "Bearer runtime-token",
+        );
+        return hooks.handle(request, (message) => {
+          if (message.method === "hooks/capabilities")
+            throw Error("Unexpected discovery");
+          const event = message.params.event;
+          assert.equal(event.id, "event-1");
+          assert.equal(event.type, "tool.before");
+          if (event.type !== "tool.before") throw Error("Unexpected event");
+          const route = new URL(request.url).hostname.split(".")[0]!;
+          seen.push(route);
+          assert.equal(
+            JSON.stringify(event.tool.input),
+            JSON.stringify({ task: route === "first" ? 123 : 124 }),
+          );
+          if (message.method === "hooks/observe") return;
+          assert.equal(message.id, "event-1");
+          return {
+            effects:
+              route === "first"
+                ? [
+                    {
+                      type: "modify",
+                      target: "input",
+                      operation: "merge",
+                      value: { task: 124 },
+                    },
+                  ]
+                : [{ type: "message", text: "settled" }],
+          };
+        });
       },
-    },
-    {
-      mode: "intercept",
-      capabilities: caps,
-      receive: async (view) => {
-        assert.equal(view.input.task, 124);
-        return [{ type: "message", text: "settled" }];
+      capabilities: {
+        "tool.before": {
+          effects: ["modify", "message"],
+          modify: { input: { replace: false, merge: true } },
+        },
       },
+      auth: auth({ authenticate: async () => ({ token: "runtime-token" }) }),
     },
-  ]);
-  assert.equal(result.denied, false);
-  assert.deepEqual(views, [{ ...result, eventId: "event-1" }]);
+  );
+  try {
+    const result = await client.toolBefore({
+      id: "event-1",
+      call: { id: "call-1" },
+      path: "native",
+      tool: { name: "task", origin: "native", input: { task: 123 } },
+    });
+    assert.deepEqual(result.errors, []);
+    assert.deepEqual(await result.observations, []);
+    assert.deepEqual(seen, ["first", "second", "observer"]);
+    assert.equal(
+      JSON.stringify(result.event.tool.input),
+      JSON.stringify({ task: 124 }),
+    );
+    assert.ok(
+      result.response.result.effects.some(
+        (effect) => effect.type === "message",
+      ),
+    );
+  } finally {
+    await client.close();
+  }
 });
 test("immutable credential-scoped content is ready before dispatch, selected and authorized with explicit gaps", async () => {
   const receiver = new ContentReceiver(),

@@ -39,16 +39,3 @@ export function mutableValues(event) {
         values[target] = structuredClone(event.model[target]);
   return values;
 }
-
-import { dispatchObservations as dispatch } from "../packages/sdk/dist/src/observation.js";
-export function dispatchObservations(
-  event,
-  subscriptions,
-  called,
-  prepare,
-  notify,
-) {
-  dispatch(event, subscriptions, new Set(called), prepare, notify, (work) => {
-    setImmediate(work).unref();
-  });
-}

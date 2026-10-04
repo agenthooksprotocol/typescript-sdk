@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { evaluate, matches } from "./evaluator.mjs";
+import { matches } from "./evaluator.mjs";
+import { evaluate } from "./raw-fixture-oracle.mjs";
+import { sdkDraft } from "./common.mjs";
 test("central canonical scenarios are independently evaluated with strict expected-key comparison", async () => {
   const { scenarios } = JSON.parse(
     await readFile("../agent-hooks-protocol/interop/scenarios.json", "utf8"),
@@ -62,8 +64,7 @@ test("continuation output is accumulated staged state, coalesces allowance, and 
   }
 });
 
-test("serial responses retain accepted stop, instructions and injections in both evaluators", async () => {
-  const { evaluate: lifecycle } = await import("./lifecycle-evaluator.mjs");
+test("raw fixture oracle retains stop, instructions and injections", async () => {
   const { scenarios } = JSON.parse(
     await readFile("../agent-hooks-protocol/interop/scenarios.json", "utf8"),
   );
@@ -72,8 +73,7 @@ test("serial responses retain accepted stop, instructions and injections in both
       !row.expectError && row.request.params.event.type === "tool.before",
   ).request;
   for (const evaluate of [
-    lifecycle,
-    (await import("./evaluator.mjs")).evaluate,
+    (await import("./raw-fixture-oracle.mjs")).evaluate,
   ]) {
     const first = structuredClone(seed);
     first.params.capabilities = {
@@ -146,8 +146,7 @@ test("serial continuation preserves remaining allowance without consuming it twi
   );
   const seed = scenarios.find((row) => row.id === "flow-continue-at-finish");
   for (const evaluate of [
-    (await import("./evaluator.mjs")).evaluate,
-    (await import("./lifecycle-evaluator.mjs")).evaluate,
+    (await import("./raw-fixture-oracle.mjs")).evaluate,
   ]) {
     const request = structuredClone(seed.request);
     request.params.state = {
@@ -182,9 +181,7 @@ test("serial continuation preserves remaining allowance without consuming it twi
 });
 
 test("unknown capabilities and controls are extensible, unsupported effects remain atomic failures", async () => {
-  const { validateCapabilities } = await import(
-    "../packages/sdk/dist/src/draft/index.js"
-  );
+  const { validateCapabilities } = sdkDraft;
   const { scenarios } = JSON.parse(
     await readFile("../agent-hooks-protocol/interop/scenarios.json", "utf8"),
   );

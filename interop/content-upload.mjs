@@ -1,3 +1,9 @@
+// @ts-check
+import { sdkClient, sdkServer, sdkDraft } from "./common.mjs";
+import { createServer } from "node:http";
+import { Readable } from "node:stream";
+const { Hooks, auth } = sdkClient;
+const { attachments, hooks } = sdkServer;
 import { connect as tcpConnect } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 import { createHash, randomUUID } from "node:crypto";
@@ -20,12 +26,135 @@ export function uploadURL(endpoint, allowLoopback = false) {
     throw Error("Unsafe upload endpoint");
   return url;
 }
-/** Raw binary binding; upload credentials never inherit event authentication. */
+/** Compatibility fixture: upload via an SDK boundary, never a second uploader.
+ * A local hook captures the published descriptor; the configured upload endpoint
+ * remains the receiver under test. SDK delivery failures reject.
+ */
 export async function uploadBytes(
   upload,
   bytes,
-  { allowLoopback = false, env = process.env, declaredSize, declaredHash } = {},
+  { allowLoopback = false, env = process.env } = {},
 ) {
+  uploadURL(upload.endpoint, allowLoopback);
+  if (!(bytes instanceof Uint8Array)) throw Error("Invalid upload input");
+  /** @type {{ref: string, size: number, sha256: string} | undefined} */
+  let descriptor;
+  const receiver = createServer(async (incoming, outgoing) => {
+    try {
+      const response = await hooks.handle(
+        new Request("http://localhost/hooks", {
+          method: incoming.method,
+          headers: new Headers(
+            incoming.rawHeaders.reduce(
+              (pairs, name, i, values) =>
+                i % 2 ? pairs : [...pairs, [name, values[i + 1]]],
+              /** @type {[string, string][]} */ ([]),
+            ),
+          ),
+          // Node and DOM declare distinct WHATWG stream types; IncomingMessage
+          // emits Uint8Array chunks and toWeb preserves that runtime contract.
+          body: /** @type {ReadableStream<Uint8Array>} */ (
+            /** @type {unknown} */ (Readable.toWeb(incoming))
+          ),
+          ...{ duplex: "half" },
+        }),
+        (message) => {
+          if (
+            message.method !== "hooks/intercept" ||
+            message.params.event.type !== "tool.before"
+          )
+            throw Error("Unexpected fixture event");
+          const parsed = sdkDraft.draftCodecs.parseContentReference(
+            message.params.event.items?.[0]?.body,
+          );
+          if (!parsed.ok) throw Error("Missing SDK upload descriptor");
+          descriptor = parsed.value;
+          return { effects: [] };
+        },
+      );
+      outgoing.writeHead(response.status, Object.fromEntries(response.headers));
+      outgoing.end(new Uint8Array(await response.arrayBuffer()));
+    } catch {
+      outgoing.writeHead(500).end();
+    }
+  });
+  await new Promise((resolve) =>
+    receiver.listen(0, "127.0.0.1", () => resolve(undefined)),
+  );
+  const address = receiver.address();
+  if (!address || typeof address === "string")
+    throw Error("Missing fixture address");
+  let client;
+  try {
+    client = new Hooks(
+      {
+        protocolVersion: "draft",
+        hooks: [
+          {
+            id: "interop.upload",
+            transport: {
+              type: "http",
+              url: `http://127.0.0.1:${address.port}/hooks`,
+            },
+            subscriptions: [
+              {
+                mode: "intercept",
+                events: ["tool.before"],
+                failurePolicy: "fail-closed",
+                timeoutMs: upload.timeoutMs ?? 15000,
+                content: { default: "body" },
+                upload: { timeoutMs: 15000, maxBytes: 52428800, ...upload },
+              },
+            ],
+          },
+        ],
+      },
+      {
+        source: "urn:ahp:interop:upload",
+        capabilities: { "tool.before": { effects: [] } },
+        auth: auth({ resolveEnvironmentVariable: (name) => env[name] }),
+      },
+    );
+    const result = await client.toolBefore({
+      call: { id: "upload" },
+      path: "native",
+      tool: { name: "upload", origin: "native", input: {} },
+      items: [
+        {
+          id: "bytes",
+          kind: "text",
+          mediaType: "application/octet-stream",
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(new Uint8Array(bytes));
+              controller.close();
+            },
+          }),
+        },
+      ],
+    });
+    if (result.errors.length || !descriptor)
+      throw Object.assign(Error("Required SDK upload failed"), {
+        errors: result.errors,
+      });
+    return { status: 201, body: descriptor };
+  } finally {
+    await client?.close();
+    receiver.closeAllConnections();
+    await new Promise((resolve) => receiver.close(resolve));
+  }
+}
+/** Adversarial wire probes only: deliberately bypass SDK upload validation. */
+/** @param {{endpoint: string, timeoutMs?: number, maxBytes?: number, auth?: {type: string, tokenEnv: string}}} upload
+ * @param {Uint8Array} bytes
+ * @param {{allowLoopback?: boolean, env?: Record<string, string | undefined>, declaredSize?: number, declaredHash?: string}} [options] */
+export async function rawUploadBytes(upload, bytes, options = {}) {
+  const {
+    allowLoopback = false,
+    env = process.env,
+    declaredSize,
+    declaredHash,
+  } = options;
   if (
     upload.timeoutMs !== undefined &&
     (!Number.isSafeInteger(upload.timeoutMs) || upload.timeoutMs < 1)
@@ -66,7 +195,11 @@ export async function uploadBytes(
   const url = uploadURL(upload.endpoint, allowLoopback);
   if (declaredSize !== undefined && declaredSize !== snapshot.length) {
     const status = await new Promise((resolve, reject) => {
-      const socket = (url.protocol === "https:" ? tlsConnect : tcpConnect)(
+      const connect =
+        url.protocol === "https:"
+          ? (options, listener) => tlsConnect(options, listener)
+          : (options, listener) => tcpConnect(options, listener);
+      const socket = connect(
         {
           host: url.hostname,
           port: Number(url.port) || (url.protocol === "https:" ? 443 : 80),
@@ -165,43 +298,34 @@ export class UploadStore {
       req.resume();
       return { ...metadata, status: typeof scope === "number" ? scope : 403 };
     }
-    const length = req.headers["content-length"],
-      sha256 = req.headers["ahp-content-sha256"];
-    if (
-      req.method !== "POST" ||
-      req.headers["content-type"] !== "application/octet-stream" ||
-      req.headers["content-encoding"] ||
-      req.headers["transfer-encoding"] ||
-      !/^\d+$/.test(length ?? "") ||
-      !Number.isSafeInteger(Number(length)) ||
-      !/^[a-f0-9]{64}$/.test(sha256 ?? "")
-    ) {
-      req.resume();
-      return { ...metadata, status: 400 };
-    }
-    if (Number(length) > this.maxBytes) {
-      req.resume();
-      return { ...metadata, status: 413 };
-    }
-    const chunks = [];
-    let size = 0;
     try {
-      for await (const chunk of req) {
-        size += chunk.length;
-        if (size > this.maxBytes) return { ...metadata, status: 413 };
-        chunks.push(chunk);
+      const upload = attachments.parse(
+        new Request("http://localhost/upload", {
+          method: req.method,
+          headers: req.headers,
+          body: /** @type {ReadableStream<Uint8Array>} */ (
+            /** @type {unknown} */ (Readable.toWeb(req))
+          ),
+          ...{ duplex: "half" },
+        }),
+      );
+      if (upload.size > this.maxBytes) {
+        await upload.body.cancel();
+        return { ...metadata, status: 413 };
       }
+      // Publish only after the SDK stream verifies EOF.
+      const bytes = Buffer.from(await new Response(upload.body).arrayBuffer());
+      const ref = randomUUID();
+      const descriptor = { ref, size: upload.size, sha256: upload.sha256 };
+      this.values.set(JSON.stringify([scope, ref]), { bytes, ...descriptor });
+      const response = attachments.response(descriptor);
+      return { ...(await response.json()), status: response.status };
     } catch {
+      req.resume();
       return { ...metadata, status: 400 };
     }
-    const bytes = Buffer.concat(chunks),
-      ref = randomUUID(),
-      key = JSON.stringify([scope, ref]);
-    if (size !== Number(length) || digest(bytes) !== sha256)
-      return { ...metadata, status: 400 };
-    this.values.set(key, { bytes, size, sha256 });
-    return { ref, size, sha256, status: 201 };
   }
+
   resolve(scope, body) {
     const stored = this.values.get(JSON.stringify([scope, body.ref]));
     if (!stored || stored.size !== body.size || stored.sha256 !== body.sha256)
@@ -237,6 +361,113 @@ export function authorizeUpload(config, authorization) {
   const [name, policy] = matches[0];
   return policy.authorized === false ? 403 : (policy.scope ?? name);
 }
+/** @typedef {{ref: string, size: number, sha256: string}} ContentDescriptor */
+/** @typedef {{descriptor: ContentDescriptor, bytes: string}} ContentSource */
+/** @typedef {{sourceRef: string, descriptor: ContentDescriptor}} ContentUploadReport */
+/** Per-operation userland stream handoff and observation of real confirmations.
+ * Use only on positive SDK paths. Bypass probes must retain their original wire
+ * descriptors and must not call hydrate. No SDK content registry is involved.
+ * @param {ContentSource[]} [contentSources]
+ * @param {typeof fetch} [networkFetch]
+ * @param {string[]} [uploadEndpoints]
+ */
+export function createContentAdapter(
+  contentSources = [],
+  networkFetch = fetch,
+  uploadEndpoints = [],
+) {
+  /** @type {Array<{descriptor: ContentDescriptor, confirmed: boolean}>} */
+  const selected = [];
+  /** @type {ContentUploadReport[]} */
+  const contentUploads = [];
+  const endpoints = new Set(
+    uploadEndpoints.map((endpoint) => new URL(endpoint).href),
+  );
+  return {
+    contentUploads,
+    /** @param {{items?: Array<{body?: unknown, [key: string]: unknown}>}} event */
+    hydrate(event) {
+      for (const item of event.items ?? []) {
+        if (!item.body) continue;
+        const parsed = sdkDraft.draftCodecs.parseContentReference(item.body);
+        if (!parsed.ok) throw Error("Invalid content source descriptor");
+        const descriptor = parsed.value;
+        const source = contentSources.find(
+          ({ descriptor: candidate }) =>
+            candidate?.ref === descriptor.ref &&
+            candidate.size === descriptor.size &&
+            candidate.sha256 === descriptor.sha256,
+        );
+        if (!source || typeof source.bytes !== "string")
+          throw Error("Unavailable exact content source");
+        const bytes = Buffer.from(source.bytes, "base64");
+        if (
+          bytes.length !== descriptor.size ||
+          digest(bytes) !== descriptor.sha256
+        )
+          throw Error("Content source integrity mismatch");
+        selected.push({ descriptor: { ...parsed.value }, confirmed: false });
+        item.body = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array(bytes));
+            controller.close();
+          },
+        });
+      }
+    },
+    /** @param {Parameters<typeof fetch>[0]} input @param {Parameters<typeof fetch>[1]} [init] */
+    async fetch(input, init) {
+      const request = new Request(input, init);
+      const observe =
+        endpoints.has(request.url) &&
+        request.method === "POST" &&
+        request.headers.get("content-type") === "application/octet-stream";
+      const requestCopy = observe ? request.clone() : undefined;
+      const response = await networkFetch(input, init);
+      if (
+        !requestCopy ||
+        response.status !== 201 ||
+        response.headers
+          .get("content-type")
+          ?.split(";")[0]
+          .trim()
+          .toLowerCase() !== "application/json"
+      )
+        return response;
+      // Read clones only: the SDK still validates and consumes the real response.
+      try {
+        const [bytes, body] = await Promise.all([
+          requestCopy.arrayBuffer(),
+          response.clone().json(),
+        ]);
+        const parsed = sdkDraft.draftCodecs.parseContentReference(body);
+        const sha256 = digest(new Uint8Array(bytes));
+        if (
+          !parsed.ok ||
+          parsed.value.size !== bytes.byteLength ||
+          parsed.value.sha256 !== sha256
+        )
+          return response;
+        const source = selected.find(
+          (entry) =>
+            !entry.confirmed &&
+            entry.descriptor.size === bytes.byteLength &&
+            entry.descriptor.sha256 === sha256,
+        );
+        if (source) {
+          source.confirmed = true;
+          contentUploads.push({
+            sourceRef: source.descriptor.ref,
+            descriptor: { ...parsed.value },
+          });
+        }
+      } catch {
+        // Invalid confirmations remain SDK errors, never manufactured reports.
+      }
+      return response;
+    },
+  };
+}
 /** Fixture labels select local policy, never wire encoding or authorization grants. */
 export async function prepareRequestContent(
   request,
@@ -261,17 +492,15 @@ export async function prepareRequestContent(
       const source = bodies?.find((value) => value.ref === item.body.ref);
       if (!source || typeof source.bodyBase64 !== "string")
         throw Error("Unavailable fixture bytes");
-      const result = await uploadBytes(
-        policy.upload,
-        Buffer.from(source.bodyBase64, "base64"),
-        { allowLoopback: config.allowLoopbackUploads === true },
-      );
-      if (
-        result.status !== 201 ||
-        result.body.size !== item.body.size ||
-        result.body.sha256 !== item.body.sha256
-      )
-        throw Error("Required upload failed or bytes changed");
-      item.body = result.body;
+      const bytes = Buffer.from(source.bodyBase64, "base64");
+      if (bytes.length !== item.body.size || digest(bytes) !== item.body.sha256)
+        throw Error("Fixture bytes changed");
+      // Compatibility hydration only: the caller's real Hooks boundary owns upload.
+      item.body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      });
     }
 }

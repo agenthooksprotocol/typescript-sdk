@@ -14,10 +14,10 @@ Each scenario defines an ID, failure policy, response effects, and a phase:
 - `accepted`: release the response and await the harness's pre-execution barrier.
   Interrupt there. Accepted effects and emitted messages remain; execution does
   not occur. This is not rollback.
-- `timeout`: explicitly advance the synthetic harness deadline at the received
-  barrier. This is a deadline callback, not a wall-clock race. The transport
-  closes locally and late effects are ignored, but the declared failure policy
-  still governs execution.
+- `timeout`: hold the response at the received barrier until the deadline
+  configured in the registration expires. The public SDK owns this deadline;
+  the host does not synthesize a timeout. Late effects are ignored, but the
+  declared failure policy still governs execution.
 - `failure`: release malformed backend output. JSON parsing rejects it;
   fail-open executes and fail-closed blocks.
 
@@ -27,25 +27,29 @@ operation. Pending-interruption rows keep unrelated work in flight: on the same
 HTTP server, or a separate persistent stdio backend (the binding is serial per
 backend). Cancellation must not cancel that work.
 
-Barriers and scripts use child-process IPC only. No sleeps, race-manufacturing
-polls, LLMs, services, cancellation RPCs, or test fields enter protocol requests.
-A watchdog is a test failure bound, not an ordering mechanism. The client uses
-SDK-generated codecs and canonical validation; the pipeline stages an entire
-response before its sole acceptance point. Process and socket cleanup is awaited.
+Barriers and scripts use the fixture control plane only. No sleeps,
+race-manufacturing polls, LLMs, external services, cancellation RPCs, or test
+fields enter protocol requests. A watchdog is a test failure bound, not an
+ordering mechanism. One public `Hooks` instance owns each boundary and its
+ordered routes, atomic validation/composition, deadlines and cancellation.
+Positive backend replies use `hooks.handle`; deliberately malformed replies
+bypass it. The host accepts one SDK result and enacts its effective input and
+effects, without a second staging pass. Process and socket cleanup is awaited.
 
 This is a synthetic harness decision pipeline, not a production adapter or a
 claim that already-running tools can be undone. `flow(stop/continue)` is neither
 implemented nor advertised by this tool.before slice; late continuation is
 explicitly **unsupported**, not counted as an accepted schema/effect test.
 
-A focused unit test also resolves a compound response and interrupts synchronously
-before its queued acceptance continuation runs, under both failure policies.
-This covers delivered-but-unaccepted effects independently of transport closure.
-The existing atomic matrix covers schema and semantic effect-validation failures.
+A focused host test resolves a real public SDK result and interrupts before its
+queued host-acceptance continuation runs. This covers delivered-but-unaccepted
+effects independently of transport closure. Ordered-route tests additionally
+cover input/state propagation, invalidation of earlier allowances/candidates,
+and interruption during the second route without dispatching the third. The
+atomic matrix sends adversarial replies through public client validation.
 
-Persistent stdio detaches the canceled waiter immediately and quarantines its
-framing slot until the late frame drains; it never assigns late bytes to the next
-request. Reuse after draining is tested in every row. If a backend never replies,
-dispose it and start a replacement: a separate test proves this path works without
-releasing the abandoned response. Unrelated work completes before the late
-response is released. HTTP abort destroys only the pending request.
+The SDK owns persistent stdio cancellation and replacement; late bytes must not
+be assigned to a new request. Client reuse is tested after interruption, and a
+separate test closes a cancelled SDK-owned process without releasing its reply.
+Unrelated work completes before the late response is released. HTTP cancellation
+is scoped to the pending request.

@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import process from "node:process";
-import { createAuth } from "../src/interop/auth.js";
+import { Hooks } from "@agenthooksprotocol/sdk/client";
+import { createAuth, clientAuth } from "../src/interop/auth.js";
 import { atomicScenarios } from "../src/interop/atomic-client.js";
 import {
   runInterop,
@@ -11,7 +12,9 @@ import {
 } from "../src/interop/client.js";
 
 test("synthetic interop: real concurrent stdio, HTTP, TLS and explicit auth matrix", async () => {
+  const nativeFetch = globalThis.fetch;
   const report = await runInterop();
+  assert.equal(globalThis.fetch, nativeFetch);
   assert.equal(
     report.ok,
     true,
@@ -38,21 +41,36 @@ test("synthetic interop: real concurrent stdio, HTTP, TLS and explicit auth matr
       "transport",
     ]);
 });
-test("credential references fail closed and resolve outside protocol payloads", () => {
-  assert.equal(
-    resolveCredential("env:TEST", { TEST: "fixture" }, {}),
-    "fixture",
-  );
-  assert.equal(
-    resolveCredential("credential:TEST", {}, { TEST: "fixture" }),
-    "fixture",
-  );
-  for (const reference of [
-    "env:MISSING",
-    "credential:MISSING",
-    "literal:secret",
-    "malformed",
+test("public auth resolves credential references outside protocol payloads and fails closed", async () => {
+  const provider = clientAuth("bearer", "http://127.0.0.1:1");
+  const credentials = createAuth().credentials;
+  for (const binding of [
+    { type: "bearer" as const, tokenEnv: "AHP_TEST_BEARER" },
+    { type: "bearer" as const, tokenRef: "bearer" },
   ]) {
+    const credential = await provider.authenticate({
+      url: "http://127.0.0.1:1/bearer",
+      authentication: binding,
+    });
+    assert.equal(credential?.token, credentials.bearer);
+  }
+  for (const binding of [
+    { type: "bearer" as const, tokenEnv: "MISSING" },
+    { type: "bearer" as const, tokenRef: "MISSING" },
+  ]) {
+    let rejected = false;
+    try {
+      await provider.authenticate({
+        url: "http://127.0.0.1:1/bearer",
+        authentication: binding,
+      });
+    } catch {
+      rejected = true;
+    }
+    assert.equal(rejected, true);
+  }
+  // Raw adversarial-wire helpers still reject unsupported reference syntax.
+  for (const reference of ["literal:secret", "malformed"]) {
     let rejected = false;
     try {
       resolveCredential(reference, {}, {});
@@ -109,6 +127,69 @@ test("HTTP authorization is independent of JSON-RPC correlation and event identi
         (await request(ready.httpPort, "/bearer", body)).status,
         401,
       );
+    }
+    // Public client upload -> attachments helpers -> committed reference -> hooks.handle.
+    const origin = `http://127.0.0.1:${ready.httpPort}`;
+    const hooks = new Hooks(
+      {
+        protocolVersion: "draft",
+        hooks: [
+          {
+            id: "interop.upload",
+            transport: { type: "http", url: `${origin}/bearer` },
+            authentication: { type: "bearer", tokenRef: "bearer" },
+            subscriptions: [
+              {
+                mode: "intercept",
+                events: ["user.message.inbound"],
+                failurePolicy: "fail-closed",
+                timeoutMs: 5000,
+                content: { default: "body" },
+                upload: {
+                  endpoint: `${origin}/attachments`,
+                  maxBytes: 1024,
+                  timeoutMs: 5000,
+                  auth: { type: "bearer", tokenRef: "bearer" },
+                },
+              },
+            ],
+          },
+        ],
+      },
+      {
+        source: "urn:interop:upload",
+        capabilities: { "user.message.inbound": { effects: [] } },
+        auth: clientAuth("bearer", origin),
+      },
+    );
+    try {
+      const result = await hooks.userMessageInbound({
+        message: {
+          channel: "chat",
+          sender: "user",
+          text: [
+            {
+              id: "upload-text",
+              kind: "message",
+              mediaType: "text/plain",
+              body: new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.enqueue(
+                    new TextEncoder().encode("verified Unicode 🚀"),
+                  );
+                  controller.close();
+                },
+              }),
+            },
+          ],
+        },
+      });
+      assert.deepEqual(result.errors, []);
+      assert.deepEqual(await result.observations, []);
+      assert.equal(result.interrupted, false);
+      assert.deepEqual(result.response.result.effects, []);
+    } finally {
+      await hooks.close();
     }
     // Authentication happens before JSON-RPC decoding, even for malformed input.
     assert.equal((await request(ready.httpPort, "/bearer", "{")).status, 401);

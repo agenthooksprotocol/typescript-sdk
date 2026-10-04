@@ -1,118 +1,105 @@
-/** Test-only backend: IPC scripts/barriers are not protocol cancellation RPCs. */
+/** Test backend barriers are out-of-band controls, never cancellation RPCs. */
 import { createServer } from "node:http";
 import process from "node:process";
-import { NdjsonDecoder } from "@agenthooksprotocol/sdk";
-import { parseInterceptRequest } from "@agenthooksprotocol/sdk/draft";
+import { createInterface } from "node:readline";
+import {
+  hooks,
+  type Effect,
+  type Message,
+} from "@agenthooksprotocol/sdk/server";
 
-type Hold = {
-  response: string;
-  respond?: (body: string, done: () => void) => void;
-};
-const holds = new Map<string, Hold>();
-const send = (message: object): void => {
-  if (process.connected)
-    process.send(message, (error: Error | null) => {
-      if (error) shutdown();
-    });
-};
-function receive(body: string, respond: NonNullable<Hold["respond"]>): void {
-  const parsed = parseInterceptRequest(body);
-  if (!parsed.ok) throw new Error("Invalid canonical request");
-  const id = parsed.value.id;
-  if (typeof id !== "string") throw new Error("Script IDs must be strings");
-  const hold = holds.get(id);
-  if (!hold || hold.respond) throw new Error("Missing or duplicate script");
-  hold.respond = respond;
-  send({ type: "received", id });
+export function barrier() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
-const http = createServer(async (req: any, res: any) => {
-  req.on("error", () => {});
-  res.on("error", () => {}); // Late responses to destroyed streams are expected.
-  try {
-    if (req.method !== "POST" || req.url !== "/")
-      throw new Error("Invalid route");
-    const utf8 = new TextDecoder("utf-8", { fatal: true });
-    let body = "";
-    for await (const chunk of req) {
-      body += utf8.decode(chunk, { stream: true });
-      if (body.length > 1024 * 1024) throw new Error("Request too large");
-    }
-    body += utf8.decode();
-    receive(body, (reply, done) => {
-      // Ack the attempt, not delivery: a destroyed stream may never call end's callback.
-      try {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(reply);
-      } finally {
-        done();
+export interface Script {
+  effects: Effect[];
+  /** Raw bytes are reserved for deliberately invalid backend responses. */
+  raw?: string | undefined;
+  received: ReturnType<typeof barrier>;
+  released: ReturnType<typeof barrier>;
+  replied: ReturnType<typeof barrier>;
+}
+export async function openBackend() {
+  const scripts = new Map<string, Script>();
+  const requests: Message[] = [];
+  const server = createServer(async (req: any, res: any) => {
+    req.on("error", () => {});
+    res.on("error", () => {});
+    try {
+      if (req.method !== "POST" || req.url !== "/hooks")
+        throw new Error("Invalid route");
+      let body = "";
+      const utf8 = new TextDecoder("utf-8", { fatal: true });
+      for await (const chunk of req) {
+        body += utf8.decode(chunk, { stream: true });
+        if (body.length > 1024 * 1024) throw new Error("Request too large");
       }
-    });
-  } catch (error) {
-    res.statusCode = 400;
-    res.end();
-    send({ type: "fatal", message: String(error) });
-  }
-});
-http.requestTimeout = 15000;
-http.headersTimeout = 15000;
-const decoder = new NdjsonDecoder();
-process.stdin.on("data", (chunk: Uint8Array) => {
-  try {
-    for (const line of decoder.push(chunk))
-      receive(line, (reply, done) => {
-        process.stdout.write(reply + "\n", (error: Error | null) => {
-          if (error) send({ type: "fatal", message: String(error) });
-          else done();
-        });
+      body += utf8.decode();
+      const request = new Request("http://localhost/hooks", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
       });
-  } catch (error) {
-    send({ type: "fatal", message: String(error) });
-  }
-});
-process.stdout.on("error", () => shutdown());
-process.stdin.on("error", () => shutdown());
-process.stdin.on("end", () => {
-  try {
-    decoder.end();
-  } catch {
-    process.exitCode = 1;
-  }
-  shutdown();
-});
-let stopping = false;
-function shutdown(): void {
-  if (stopping) return;
-  stopping = true;
-  holds.clear();
-  http.close();
-  http.closeAllConnections();
-  process.stdin.destroy();
-  if (process.connected) process.disconnect();
+      const decoded = JSON.parse(body);
+      const script = scripts.get(decoded.id);
+      if (!script) throw new Error("Missing script");
+      const response = await hooks.handle(request, async (message) => {
+        if (message.method !== "hooks/intercept")
+          throw new Error("Unexpected method");
+        requests.push(message);
+        script.received.resolve();
+        await script.released.promise;
+        return { effects: script.effects };
+      });
+      // Negative tests alone bypass the public server's response validation.
+      res.writeHead(response.status, { "content-type": "application/json" });
+      res.end(script.raw ?? (await response.text()));
+      script.replied.resolve();
+    } catch {
+      res.statusCode = 500;
+      res.end();
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${server.address().port}/hooks`;
+  return {
+    url,
+    requests,
+    configure(id: string, effects: Effect[], raw?: string): Script {
+      if (scripts.has(id)) throw new Error("Duplicate script");
+      const script = {
+        effects,
+        raw,
+        received: barrier(),
+        released: barrier(),
+        replied: barrier(),
+      };
+      scripts.set(id, script);
+      return script;
+    },
+    async close() {
+      for (const script of scripts.values()) script.released.resolve();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(resolve));
+    },
+  };
 }
-process.on("disconnect", shutdown);
-process.on("message", (message: any) => {
-  try {
-    if (message.type === "configure") {
-      if (holds.has(message.id)) throw new Error("Duplicate script");
-      // Deliberately raw: callers also script malformed response bytes.
-      holds.set(message.id, { response: message.responseBody });
-      send({ type: "configured", id: message.id });
-    } else if (message.type === "release") {
-      const hold = holds.get(message.id);
-      if (!hold) throw new Error("Unknown script");
-      holds.delete(message.id);
-      const done = (): void => send({ type: "released", id: message.id });
-      if (hold.respond) hold.respond(hold.response, done);
-      else done();
-    } else if (message.type === "shutdown") shutdown();
-  } catch (error) {
-    send({ type: "fatal", message: String(error) });
+
+// The SDK owns this persistent stdio process. The relay gives its backend the
+// same deterministic, out-of-band barriers as HTTP, including across respawns.
+if (process.argv[2] === "--stdio") {
+  const lines = createInterface({ input: process.stdin });
+  for await (const body of lines) {
+    const response = await fetch(process.argv[3]!, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+    const responseBody = await response.text();
+    if (responseBody !== "") process.stdout.write(responseBody + "\n");
   }
-});
-http.on("error", (error: Error) => {
-  send({ type: "fatal", message: String(error) });
-  shutdown();
-});
-http.listen(0, "127.0.0.1", () =>
-  send({ type: "ready", port: http.address().port }),
-);
+}

@@ -8,7 +8,8 @@ import {
   parseInterceptRequest,
   parseInterceptResponse,
 } from "@agenthooksprotocol/sdk/draft";
-import { createAuth } from "./auth.js";
+import { createAuth, clientAuth } from "./auth.js";
+import { Hooks, type BoundaryInput } from "@agenthooksprotocol/sdk/client";
 
 interface Scenario {
   id: string;
@@ -135,6 +136,7 @@ export async function runInterop(): Promise<{
       resolve(code);
     }),
   );
+  let publicStdio: Hooks | undefined;
   const deadline = setTimeout(() => {
     child.kill();
   }, 15000);
@@ -152,6 +154,71 @@ export async function runInterop(): Promise<{
         );
       },
     );
+    // Platform TLS injection only: Hooks still composes, authenticates and validates AHP.
+    // Exact endpoint matching prevents upload or OAuth traffic inheriting TLS identity.
+    // Keep this typed adapter local: root interop/security.mjs is outside package rootDir
+    // and loads its own SDK runtime through the root runner.
+    const tlsOrigin = `https://127.0.0.1:${ready.httpsPort}`;
+    const tlsFetch: typeof globalThis.fetch = async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.href !== `${tlsOrigin}/mtls`) return fetch(input, init);
+      const wire = new Request(input, init);
+      const bytes = new Uint8Array(await wire.arrayBuffer());
+      return new Promise<Response>((resolve, reject) => {
+        const req = httpsRequest(
+          {
+            hostname: url.hostname,
+            port: url.port,
+            path: url.pathname + url.search,
+            method: wire.method,
+            headers: Object.fromEntries(wire.headers),
+            ca: fixture("ca.pem"),
+            cert: fixture("client.pem"),
+            key: fixture("client-key.pem"),
+            rejectUnauthorized: true,
+            agent: false,
+          },
+          (res: {
+            statusCode?: number;
+            headers: Record<string, string | string[] | undefined>;
+            on(event: "data", listener: (chunk: Uint8Array) => void): void;
+            on(event: "error", listener: (error: Error) => void): void;
+            on(event: "end", listener: () => void): void;
+          }) => {
+            const chunks: Uint8Array[] = [];
+            let size = 0;
+            res.on("data", (chunk: Uint8Array) => {
+              size += chunk.byteLength;
+              if (size > 1024 * 1024)
+                req.destroy(new Error("Oversized response"));
+              else chunks.push(chunk);
+            });
+            res.on("error", reject);
+            res.on("end", () => {
+              const headers = new Headers();
+              for (const [name, value] of Object.entries(res.headers)) {
+                if (Array.isArray(value))
+                  for (const entry of value) headers.append(name, entry);
+                else if (value !== undefined) headers.set(name, value);
+              }
+              resolve(
+                new Response(Buffer.concat(chunks), {
+                  status: res.statusCode ?? 500,
+                  headers,
+                }),
+              );
+            });
+          },
+        );
+        const abort = () => req.destroy(new Error("Request aborted"));
+        wire.signal.addEventListener("abort", abort, { once: true });
+        req.on("close", () => wire.signal.removeEventListener("abort", abort));
+        req.on("error", reject);
+        req.setTimeout(5000, () => req.destroy(new Error("Request deadline")));
+        if (wire.signal.aborted) abort();
+        else req.end(bytes);
+      });
+    };
     const stdio = (body: string): Promise<string> =>
       new Promise((resolve, reject) => {
         pending = { resolve, reject };
@@ -169,6 +236,95 @@ export async function runInterop(): Promise<{
         ? "no-effect"
         : "unexpected-effect";
     };
+    async function positive(s: Scenario): Promise<string> {
+      const parsed = parseInterceptRequest(JSON.stringify(definitions.request));
+      if (!parsed.ok || parsed.value.params.event.type !== "tool.before")
+        throw Error("Invalid tool fixture");
+      const event = parsed.value.params.event;
+      const origin =
+        s.auth === "mtls" ? tlsOrigin : `http://127.0.0.1:${ready.httpPort}`;
+      const authentication =
+        s.auth === "bearer"
+          ? {
+              type: "bearer",
+              ...(s.credential === "env"
+                ? { tokenEnv: "AHP_TEST_BEARER" }
+                : { tokenRef: "bearer" }),
+            }
+          : s.auth === "oauth"
+            ? {
+                type: "oauth",
+                issuer: "https://issuer.interop.test",
+                resource: origin,
+                clientId: auth.credentials.clientId,
+                clientSecretRef: "client-secret",
+                flow: "client_credentials",
+              }
+            : undefined;
+      const hooks =
+        s.transport === "stdio" && publicStdio
+          ? publicStdio
+          : new Hooks(
+              {
+                protocolVersion: "draft",
+                hooks: [
+                  {
+                    id: "interop.public",
+                    transport:
+                      s.transport === "stdio"
+                        ? {
+                            type: "stdio",
+                            lifecycle: "persistent",
+                            command: process.execPath,
+                            args: [
+                              new URL("./server.js", import.meta.url).pathname,
+                            ],
+                          }
+                        : { type: "http", url: `${origin}/${s.auth}` },
+                    ...(authentication ? { authentication } : {}),
+                    subscriptions: [
+                      {
+                        mode: "intercept",
+                        events: ["tool.before"],
+                        content: { default: "metadata" },
+                        failurePolicy: "fail-closed",
+                        timeoutMs: 5000,
+                      },
+                    ],
+                  },
+                ],
+              },
+              {
+                source: event.source,
+                capabilities: {
+                  "tool.before": parsed.value.params.capabilities,
+                },
+                auth: clientAuth(s.auth, origin),
+                ...(s.auth === "mtls" ? { fetch: tlsFetch } : {}),
+              },
+            );
+      if (s.transport === "stdio") publicStdio = hooks;
+      try {
+        const boundary: BoundaryInput<"tool.before"> = {
+          id: event.id,
+          time: event.time,
+          ...(event.session ? { session: event.session } : {}),
+          call: event.call,
+          path: event.path,
+          tool: event.tool,
+        };
+        const result = await hooks.toolBefore(boundary);
+        const observations = await result.observations;
+        if (result.errors.length || observations.length || result.interrupted)
+          return "sdk-delivery-error";
+        if (result.event.id !== event.id) return "unexpected-event";
+        return result.response.result.effects.length === 0
+          ? "no-effect"
+          : "unexpected-effect";
+      } finally {
+        if (s.transport !== "stdio") await hooks.close();
+      }
+    }
     async function execute(s: Scenario): Promise<ScenarioResult> {
       let actual = "adapter-error";
       if (s.transport === "stdio" && s.auth !== "process-trust")
@@ -181,7 +337,9 @@ export async function runInterop(): Promise<{
             : JSON.stringify(definitions.request);
           if (!malformed && !parseInterceptRequest(body).ok)
             throw Error("Invalid canonical request"); // client-side SDK validation, not JSON echo
-          if (s.transport === "stdio")
+          // Malformed and adversarial probes intentionally control raw wire.
+          if (s.expected === "no-effect") actual = await positive(s);
+          else if (s.transport === "stdio")
             actual = outcome(await stdio(body), malformed);
           else {
             let authorization: string | undefined;
@@ -352,6 +510,7 @@ export async function runInterop(): Promise<{
     };
   } finally {
     clearTimeout(deadline);
+    await publicStdio?.close();
     child.kill();
     await exited;
   }

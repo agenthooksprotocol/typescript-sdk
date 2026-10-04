@@ -7,14 +7,20 @@ import { createInterface } from "node:readline";
 import { catalogueManifest } from "./catalogue.mjs";
 import { TaskLineage } from "./task-lineage.mjs";
 import { UploadStore, authorizeUpload } from "./content-upload.mjs";
-import { config, scenarios, atomic, body, reply, listen } from "./common.mjs";
-import {
+import { config, atomic, body, reply, listen } from "./common.mjs";
+import { sdkDraft } from "./common.mjs";
+const {
   validateInterceptRequest,
   validateInterceptResponse,
   validateCapabilitiesRequest,
   validateCapabilitiesResponse,
-} from "../packages/sdk/dist/src/draft/index.js";
-import { validateObserve } from "./lifecycle-common.mjs";
+} = sdkDraft;
+import {
+  lifecycleScenarios as scenarios,
+  validateObserve,
+  serverHooks,
+  control as fixtureControl,
+} from "./lifecycle-common.mjs";
 const cfg = await config(),
   rows = await scenarios(cfg.scenarioFile);
 if (cfg.suite !== undefined && !["lifecycle", "catalogue"].includes(cfg.suite))
@@ -29,6 +35,8 @@ const sequences = new Map(),
   occurrences = new Map();
 const responses = new Map(),
   entries = [],
+  sdkCalls = [],
+  delivered = new Set(),
   released = new Set(),
   waits = new Set();
 for (const row of rows)
@@ -39,6 +47,37 @@ for (const row of rows)
 for (const row of rows)
   if (row.chain?.holdObservers)
     sequences.set(row.requests.a.id + ":observers", []);
+// Bypass selection is per send occurrence, never per scenario/event family.
+const rawAttempts = new Map();
+for (const row of rows) {
+  const counts = new Map();
+  for (const step of row.steps ?? []) {
+    if (step.op !== "send") continue;
+    const id = row.requests[step.key].id;
+    const occurrence = counts.get(id) ?? 0;
+    counts.set(id, occurrence + 1);
+    if (step.bypassSDK === true) {
+      const attempts = rawAttempts.get(id) ?? new Set();
+      attempts.add(occurrence);
+      rawAttempts.set(id, attempts);
+    }
+  }
+}
+const rawNotifications = new Set(
+  rows.flatMap((row) =>
+    (row.steps ?? [])
+      .filter((step) => step.op === "rawNotify")
+      .map((step) => JSON.stringify(step.message)),
+  ),
+);
+function isRawProbe(message) {
+  return (
+    (message.method === "hooks/intercept" &&
+      rawAttempts.get(message.id)?.has(occurrences.get(message.id) ?? 0) ===
+        true) ||
+    rawNotifications.has(JSON.stringify(message))
+  );
+}
 const uploads = new UploadStore((authorization) =>
   authorizeUpload(cfg, authorization),
 );
@@ -151,6 +190,30 @@ async function dispatch(request) {
   record({ kind: "replied", id: request.id });
   return response;
 }
+// The application supplies fixture decisions; public helpers own canonical
+// envelope validation, correlation, safe errors, and notification suppression.
+async function publicDispatch(request) {
+  const handled = await serverHooks.handle(
+    new Request("http://localhost/hooks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+    }),
+    async (message) => {
+      const response = cfg.fixtureEndpoint
+        ? await fixtureControl(cfg.fixtureEndpoint, "/evaluate", {
+            message,
+            deliveryId: cfg.deliveryId,
+          })
+        : await dispatch(message);
+      if (message.method === "hooks/observe") return;
+      const { protocolVersion, ...result } = response.result;
+      return result;
+    },
+  );
+  const text = await handled.text();
+  return { status: handled.status, value: text ? JSON.parse(text) : undefined };
+}
 const protocolHandler = async (req, res) => {
   try {
     if (!authorize(req, auth))
@@ -160,11 +223,36 @@ const protocolHandler = async (req, res) => {
       ![
         "/intercept",
         "/observe",
+        "/hooks",
         ...(cfg.suite === "catalogue" ? ["/capabilities"] : []),
       ].includes(req.url)
     )
       return reply(res, 404, {});
-    reply(res, 200, await dispatch(await body(req)));
+    const message = await body(req);
+    if (!isRawProbe(message)) {
+      // Reference authorization/storage availability is application routing policy,
+      // not a backend evaluation failure. Preserve its HTTP status before handing
+      // a canonically valid message to the protocol helper.
+      if (
+        (message.method === "hooks/intercept" &&
+          validateInterceptRequest(message).ok) ||
+        (message.method === "hooks/observe" &&
+          sdkDraft.validateObserveNotification(message).ok)
+      )
+        resolveContent(message);
+      sdkCalls.push({
+        method: message.method,
+        eventId: message.params?.event?.id,
+      });
+      const response = await publicDispatch(message);
+      if (response.status === 204) {
+        res.writeHead(204).end();
+        return;
+      }
+      return reply(res, response.status, response.value);
+    }
+    // Raw fixture probes intentionally exercise unsupported effects and unsolicited replies.
+    reply(res, 200, await dispatch(message));
   } catch (error) {
     reply(res, error.status ?? 400, { error: error.message });
   }
@@ -186,7 +274,7 @@ const control = createServer(async (req, res) => {
   try {
     const path = req.url;
     if (path === "/health") return reply(res, 200, { ready: true });
-    if (path === "/receipts") return reply(res, 200, { entries });
+    if (path === "/receipts") return reply(res, 200, { entries, sdkCalls });
     if (path === (cfg.uploadPath ?? "/upload")) {
       const result = await uploads.receive(req);
       record({ kind: "upload", ...result });
@@ -200,7 +288,18 @@ const control = createServer(async (req, res) => {
       return;
     }
     const value = await body(req);
-    if (path === "/wait")
+    if (path === "/evaluate") {
+      sdkCalls.push({
+        method: value.message.method,
+        eventId: value.message.params?.event?.id,
+      });
+      const result = await dispatch(value.message);
+      delivered.add(value.deliveryId);
+      wake();
+      return reply(res, 200, result ?? null);
+    }
+    if (path === "/wait-delivered") await until(() => delivered.has(value.id));
+    else if (path === "/wait")
       await until(
         () =>
           entries.filter((e) => e.kind === "received" && e.id === value.id)
@@ -270,7 +369,17 @@ if (cfg.transport === "stdio") {
   lines = createInterface({ input: process.stdin });
   lines.on("line", (line) => {
     Promise.resolve()
-      .then(() => dispatch(JSON.parse(line)))
+      .then(async () => {
+        const request = JSON.parse(line);
+        if (!isRawProbe(request))
+          sdkCalls.push({
+            method: request.method,
+            eventId: request.params?.event?.id,
+          });
+        return cfg.fixtureEndpoint || !isRawProbe(request)
+          ? (await publicDispatch(request)).value
+          : dispatch(request);
+      })
       .then((value) => (value === undefined ? undefined : output(value)))
       .catch((error) => {
         if (cfg.suite === "catalogue" && error.rejected) return;

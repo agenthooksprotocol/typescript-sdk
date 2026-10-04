@@ -1,3 +1,6 @@
+// Low-level codec/validator compatibility contracts, not positive harness fixtures.
+// Public-client integration coverage lives in the transport, atomic, interruption,
+// content and public-fixtures suites.
 import test from "node:test";
 import assert from "node:assert/strict";
 import {

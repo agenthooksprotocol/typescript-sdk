@@ -1,16 +1,18 @@
+// @ts-check
 import { UploadStore, authorizeUpload } from "./content-upload.mjs";
 import { TaskLineage } from "./task-lineage.mjs";
 import { createServer } from "node:http";
 import { createServer as tlsServer } from "node:https";
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
-import {
+import { sdkDraft, sdkServer } from "./common.mjs";
+const {
   validateInterceptRequest,
   validateInterceptResponse,
   validateCapabilities,
   validateCapabilitiesRequest,
   validateCapabilitiesResponse,
-} from "../packages/sdk/dist/src/draft/index.js";
+} = sdkDraft;
 import { authorize } from "./security.mjs";
 import {
   config,
@@ -37,17 +39,24 @@ const tlsClientErrorCodes = {};
 const tlsRejectionCodes = {};
 if (!validateCapabilities(discovery).ok)
   throw Error("Invalid discovery capabilities");
-function capabilities(request) {
-  if (!validateCapabilitiesRequest(request).ok)
-    throw Error("Invalid discovery request");
-  const response = {
-    jsonrpc: "2.0",
-    id: request.id,
-    result: { protocolVersion: "draft", manifest },
-  };
-  if (!validateCapabilitiesResponse(response).ok)
-    throw Error("Invalid discovery response");
-  return response;
+// All valid JSON-RPC replies are framed and validated by the public helper.
+/** @param {unknown} request */
+async function handleMessage(request) {
+  const response = await sdkServer.hooks.handle(
+    new Request("http://localhost/intercept", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+    }),
+    async (message) => {
+      if (message.method === "hooks/capabilities") return { manifest };
+      const decoded = validateInterceptResponse(await fixtureResult(message));
+      if (!decoded.ok) throw Error("Invalid fixture result");
+      const { protocolVersion, ...fields } = decoded.value.result;
+      return fields;
+    },
+  );
+  return response.json();
 }
 const wait = (name) =>
   released.has(name)
@@ -64,7 +73,7 @@ const wait = (name) =>
         });
         barriers.set(name, callbacks);
       });
-async function intercept(request) {
+async function fixtureResult(request) {
   if (!validateInterceptRequest(request).ok)
     throw Error("Invalid canonical request");
   for (const item of request.params.event.items ?? [])
@@ -77,6 +86,12 @@ async function intercept(request) {
   if (!row.expectError && !validateInterceptResponse(row.response).ok)
     throw Error("Invalid canonical response");
   return row.response;
+}
+async function intercept(request) {
+  // Deliberately malformed negative fixtures must not be repaired by the SDK.
+  const row = rows.find((row) => row.id === request?.params?.event?.id);
+  if (row?.expectError) return fixtureResult(request);
+  return handleMessage(request);
 }
 const handler = async (req, res) => {
   try {
@@ -191,7 +206,7 @@ if (cfg.transport === "stdio") {
       request = JSON.parse(line);
       const response =
         request.method === "hooks/capabilities"
-          ? capabilities(request)
+          ? await handleMessage(request)
           : await intercept(request);
       process.stdout.write(JSON.stringify(response) + "\n");
     } catch {

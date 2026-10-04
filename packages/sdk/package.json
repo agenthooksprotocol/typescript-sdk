@@ -18,6 +18,14 @@
     "./generated": {
       "types": "./dist/src/generated.d.ts",
       "default": "./dist/src/generated.js"
+    },
+    "./client": {
+      "types": "./dist/src/client/index.d.ts",
+      "default": "./dist/src/client/index.js"
+    },
+    "./server": {
+      "types": "./dist/src/server/index.d.ts",
+      "default": "./dist/src/server/index.js"
     }
   },
   "scripts": {

@@ -37,14 +37,14 @@ TLS uses real wall-clock certificate validation, never `rejectUnauthorized: fals
 
 Expected outcomes:
 
-| Value | Required observation |
-| --- | --- |
-| `no-effect` | SDK-valid, ID-correlated response with `effects: []` |
-| `unauthorized` | HTTP 401; no protocol handler success |
-| `token-rejected` | Local token endpoint 400/401 |
-| `tls-rejected` | TLS-specific verification/handshake failure; untrusted-client reset additionally requires server certificate rejection evidence |
-| `invalid-request` | JSON-RPC invalid-request error (`-32600`) |
-| `inapplicable` | Stdio with HTTP auth; not a passed authentication test |
+| Value             | Required observation                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `no-effect`       | SDK-valid, ID-correlated response with `effects: []`                                                                            |
+| `unauthorized`    | HTTP 401; no protocol handler success                                                                                           |
+| `token-rejected`  | Local token endpoint 400/401                                                                                                    |
+| `tls-rejected`    | TLS-specific verification/handshake failure; untrusted-client reset additionally requires server certificate rejection evidence |
+| `invalid-request` | JSON-RPC invalid-request error (`-32600`)                                                                                       |
+| `inapplicable`    | Stdio with HTTP auth; not a passed authentication test                                                                          |
 
 The JSON report contains `format: ahp-synthetic-interop-results/1`, overall `ok`,
 and ordered `results`: each has `id`, `transport`, `auth`, `expected`, `actual`,
@@ -54,8 +54,18 @@ exception messages. Ports and TLS rejection codes travel only over IPC. No trace
 contain credentials; this initial runner deliberately does not record wire traces.
 
 Adapters in other languages may implement these test bindings and reuse the JSON,
-but this initial runner launches TypeScript only. No production agent, external
-issuer or LLM is involved. Requests use SDK codecs and canonical draft validation.
+but this runner launches TypeScript only. No production agent, external issuer
+or LLM is involved. Positive adapter paths use the public
+`@agenthooksprotocol/sdk/client` `Hooks` and `auth` surface. Canonical successful
+server replies use `@agenthooksprotocol/sdk/server` `hooks.handle`; content
+fixtures use its `attachments.parse` and `attachments.response` helpers.
+
+Raw transport probes remain intentional for malformed envelopes, invalid
+credentials, TLS rejection and deliberately invalid backend replies. Low-level
+draft codec, state and receiver unit tests are compatibility contracts, not
+claims of public-client interoperability. `public-fixtures.test.ts` additionally
+checks the canonical fake backend through persistent, chunked stdio; its legacy
+main-package `ToolBeforeRunner` branch remains available for compatibility.
 
 Subscription IDs and candidate suppliers are local harness bookkeeping, never
 wire identity or authorization claims. Atomic request snapshots omit local

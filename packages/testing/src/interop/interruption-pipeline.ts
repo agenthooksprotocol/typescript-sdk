@@ -1,108 +1,110 @@
-import {
-  parseInterceptResponse,
-  stageResponse,
-  decide,
-  type PendingState,
-  type Capabilities,
-} from "@agenthooksprotocol/sdk/draft";
+import type {
+  BoundaryInput,
+  BoundaryResult,
+} from "@agenthooksprotocol/sdk/client";
 
+export interface HostState {
+  input: BoundaryInput<"tool.before">["tool"]["input"];
+  candidate: {
+    value: unknown;
+    supplier: string;
+    input: HostState["input"];
+  } | null;
+  permission: "native" | "allow" | "ask";
+  approval: "pending" | "approved" | "not-required";
+  denied: boolean;
+  messages: string[];
+}
 export interface Exchange {
-  response: Promise<string>;
+  response: Promise<BoundaryResult<"tool.before">>;
   cancel(): void;
 }
-export interface Interceptor {
-  id: string;
-  failurePolicy: "fail-open" | "fail-closed";
-  capabilities: Capabilities;
-  start(state: PendingState): Exchange;
-}
-/** Synthetic asynchronous harness. Staging is pure; acceptance is a single commit. */
+/** Host acceptance of ONE boundary. Hooks owns all ordered subscribers,
+ * composition, validation, deadlines and failure policy. No host staging pass. */
 export class DecisionPipeline {
-  state: PendingState;
+  state: HostState;
   readonly trace: string[] = [];
   readonly messages: string[] = [];
   executions = 0;
   failures = 0;
   interrupted = false;
-  private pending:
-    | { exchange: Exchange; end(reason: string): void }
-    | undefined;
-  constructor(initial: PendingState) {
+  private pending: Exchange | undefined;
+  constructor(initial: HostState) {
     this.state = structuredClone(initial);
   }
   interrupt(): void {
     if (this.interrupted) return;
     this.interrupted = true;
     this.trace.push("interrupt");
-    this.endPending("interrupted");
-  }
-  /** The harness clock invokes this at its deadline; tests drive the clock explicitly. */
-  expire(): void {
-    this.endPending("timeout");
-  }
-  private endPending(reason: string): void {
-    const pending = this.pending;
-    if (!pending) return;
-    this.pending = undefined;
-    // Settle locally first: never await backend acknowledgement or cancellation.
-    pending.end(reason);
-    pending.exchange.cancel();
+    this.pending?.cancel();
   }
   async run(
-    subscribers: readonly Interceptor[],
+    id: string,
+    start: () => Exchange,
     beforeExecute: () => Promise<void> = async () => {},
   ): Promise<void> {
-    for (const subscriber of subscribers) {
-      if (this.interrupted) break;
-      this.trace.push(`dispatch:${subscriber.id}`);
+    if (!this.interrupted) {
+      this.trace.push(`dispatch:${id}`);
+      const exchange = start();
+      this.pending = exchange;
+      if (this.interrupted) exchange.cancel();
+      let result: BoundaryResult<"tool.before"> | undefined;
       try {
-        const exchange = subscriber.start(this.state);
-        // start() may synchronously call interrupt() before pending exists.
-        // Observe late rejection, but never await a reply or backend cancellation.
-        if (this.interrupted) {
-          void exchange.response.catch(() => {});
-          exchange.cancel();
-          break;
-        }
-        const ended = new Promise<never>((_, reject) => {
-          this.pending = {
-            exchange,
-            end: (reason) => reject(new Error(reason)),
-          };
-        });
-        const body = await Promise.race([exchange.response, ended]);
+        result = await exchange.response;
+      } finally {
         this.pending = undefined;
-        if (this.interrupted) break;
-        const decoded = parseInterceptResponse(body);
-        if (!decoded.ok || decoded.value.id !== subscriber.id)
-          throw new Error("Invalid response");
-        const staged = stageResponse(
-          this.state,
-          decoded.value.result.effects,
-          subscriber.capabilities,
-          subscriber.id,
-        );
-        if (this.interrupted) break;
-        const messages = staged.messages.slice(this.state.messages.length);
-        this.state = staged;
-        this.trace.push(`accept:${subscriber.id}`);
-        for (const message of messages) {
-          this.messages.push(message);
-          this.trace.push(`message:${message}`);
+      }
+      if (result?.interrupted) this.interrupted = true;
+      if (result && !this.interrupted) {
+        // Read the SDK's effective event; never replay modify or compose replies.
+        this.state.input = structuredClone(result.event.tool.input);
+        for (const effect of result.response.result.effects) {
+          switch (effect.type) {
+            case "modify":
+              break;
+            case "return":
+              this.state.candidate = {
+                value: structuredClone(effect.value),
+                supplier: id,
+                input: structuredClone(this.state.input),
+              };
+              break;
+            case "allow":
+              this.state.permission = "allow";
+              break;
+            case "ask":
+              this.state.permission = "ask";
+              this.state.approval = "pending";
+              break;
+            case "deny":
+              this.state.denied = true;
+              break;
+            case "message":
+              if (typeof effect.text !== "string")
+                throw new Error("Expected textual host message");
+              this.state.messages.push(effect.text);
+              this.messages.push(effect.text);
+              break;
+            default:
+              throw new Error(
+                "Unsupported host action in interruption fixture",
+              );
+          }
         }
-      } catch (error) {
-        this.pending = undefined;
-        if (this.interrupted) break;
-        this.failures++;
+        this.failures = result.errors.length;
+        if (this.failures)
+          for (const error of result.errors)
+            this.trace.push(
+              `reject:${id}`,
+              error.code === "DEADLINE_EXCEEDED"
+                ? "timeout"
+                : "backend-failure",
+              `failure:${error.failurePolicy}`,
+            );
+        else this.trace.push(`accept:${id}`);
         this.trace.push(
-          `reject:${subscriber.id}`,
-          error instanceof Error && error.message === "timeout"
-            ? "timeout"
-            : "backend-failure",
-          `failure:${subscriber.failurePolicy}`,
+          ...this.messages.map((message) => `message:${message}`),
         );
-        if (subscriber.failurePolicy === "fail-closed")
-          this.state = { ...this.state, denied: true };
       }
     }
     if (!this.interrupted) await beforeExecute();
@@ -110,8 +112,13 @@ export class DecisionPipeline {
       this.trace.push("interrupted");
       return;
     }
-    const actions = decide(this.state, "allow");
-    this.trace.push(...actions);
-    if (actions.includes("execute")) this.executions++;
+    this.trace.push("policy");
+    if (this.state.denied) this.trace.push("blocked");
+    else if (this.state.candidate)
+      this.trace.push(`candidate:${this.state.candidate.supplier}`);
+    else {
+      this.trace.push("execute");
+      this.executions++;
+    }
   }
 }

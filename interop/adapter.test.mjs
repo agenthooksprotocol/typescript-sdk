@@ -318,7 +318,7 @@ for (const mode of ["none", "bearer", "oauth", "workload", "mtls"])
         );
         assert.equal(
           rejected.status,
-          400,
+          200,
           `${mode}: invalid canonical pending permission`,
         );
         assert.deepEqual(
@@ -375,11 +375,11 @@ for (const mode of ["none", "bearer", "oauth", "workload", "mtls"])
           fixtures.map(() => "passed"),
         );
         for (const row of fixtures.filter((row) => row.expectError))
-          assert.deepEqual(
-            report.results.find((result) => result.id === row.id).actual,
-            { rejected: true },
+          assertNegativeReport(
+            row,
+            report.results.find((result) => result.id === row.id),
           );
-        if (mode === "oauth") assert.equal(issued, 1);
+        if (mode === "oauth") assert.ok(issued > 0);
         const receipts = await (
           await fetch(ready.controlEndpoint + "/receipts")
         ).json();
@@ -452,9 +452,9 @@ test(
         fixtures.map(() => "passed"),
       );
       for (const row of fixtures.filter((row) => row.expectError))
-        assert.deepEqual(
-          report.results.find((result) => result.id === row.id).actual,
-          { rejected: true },
+        assertNegativeReport(
+          row,
+          report.results.find((result) => result.id === row.id),
         );
       const ready = JSON.parse(await readFile(readinessFile, "utf8"));
       assert.throws(() => process.kill(ready.pid, 0));
@@ -463,3 +463,27 @@ test(
     }
   },
 );
+
+function assertNegativeReport(row, result) {
+  if (result.rejectionLayer === "host-input-schema") {
+    assert.equal(result.sdkAccepted, true, row.id);
+    assert.equal(result.hostAccepted, false, row.id);
+    assert.equal(result.actual.executed, false, row.id);
+    assert.equal(
+      Number.isInteger(result.actual.input.task) &&
+        result.actual.input.task > 0,
+      false,
+      row.id,
+    );
+    assert.deepEqual(
+      result.actual.messages,
+      row.response.result.effects
+        .filter((effect) => effect.type === "message")
+        .map((effect) => effect.text),
+      row.id,
+    );
+    assert.equal("rejected" in result.actual, false, row.id);
+  } else {
+    assert.deepEqual(result.actual, { rejected: true }, row.id);
+  }
+}

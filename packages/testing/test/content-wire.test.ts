@@ -6,7 +6,146 @@ import {
   draftCodecs,
   stageBoundary,
 } from "@agenthooksprotocol/sdk/draft";
-test("normalized content selection uses category, confirms binary bytes and emits no fallback body", async () => {
+import { Hooks, auth } from "@agenthooksprotocol/sdk/client";
+import { hooks, attachments } from "@agenthooksprotocol/sdk/server";
+
+// Positive deliveries use public boundaries; draft tests below retain malformed
+// wire and legacy primitive compatibility coverage.
+for (const selection of ["body", "metadata", "omit"] as const) {
+  for (const bytes of [new Uint8Array([0, 255, 128]), new Uint8Array()]) {
+    test(`public content ${selection}: ${bytes.length} binary bytes`, async () => {
+      let uploads = 0;
+      let deliveries = 0;
+      let reads = 0;
+      const client = new Hooks(
+        {
+          protocolVersion: "draft",
+          hooks: [
+            {
+              id: "test.content",
+              transport: { type: "http", url: "https://receiver.test/hooks" },
+              subscriptions: [
+                {
+                  mode: "observe",
+                  events: ["user.message.inbound"],
+                  content: { default: selection },
+                  upload: {
+                    endpoint: "https://receiver.test/uploads",
+                    maxBytes: bytes.length,
+                    timeoutMs: 1000,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        {
+          source: "urn:test:content",
+          fetch: async (input, init) => {
+            const request = new Request(input, init);
+            if (request.url.endsWith("/uploads")) {
+              assert.equal(
+                request.headers.get("authorization"),
+                "Bearer upload-only",
+              );
+              assert.equal(request.headers.has("ahp-subscription"), false);
+              const upload = attachments.parse(request);
+              assert.deepEqual(
+                new Uint8Array(await new Response(upload.body).arrayBuffer()),
+                bytes,
+              );
+              uploads++;
+              return attachments.response({
+                ref: "receiver-ref",
+                size: upload.size,
+                sha256: upload.sha256,
+              });
+            }
+            assert.equal(
+              request.headers.get("authorization"),
+              "Bearer event-only",
+            );
+            return hooks.handle(request, (message) => {
+              assert.equal(message.method, "hooks/observe");
+              if (message.method !== "hooks/observe")
+                throw Error("Unexpected method");
+              const event = message.params.event;
+              assert.equal(event.type, "user.message.inbound");
+              if (event.type !== "user.message.inbound")
+                throw Error("Unexpected event");
+              const item = event.message.text[0]!;
+              assert.equal(item.id, "item");
+              assert.equal(item.selection, selection);
+              const body = item.body;
+              if (
+                body !== undefined &&
+                (typeof body !== "object" ||
+                  body === null ||
+                  Array.isArray(body))
+              )
+                throw Error("Invalid body descriptor");
+              assert.equal(
+                body?.ref,
+                selection === "body" ? "receiver-ref" : undefined,
+              );
+              assert.equal(
+                body?.size,
+                selection === "body" ? bytes.length : undefined,
+              );
+              assert.equal(item.gap, undefined);
+              if (selection === "body") assert.equal(uploads, 1);
+              deliveries++;
+            });
+          },
+          capabilities: {},
+          auth: auth({
+            authenticate: async (context) => ({
+              token: context.url.endsWith("/uploads")
+                ? "upload-only"
+                : "event-only",
+            }),
+          }),
+        },
+      );
+      try {
+        const result = await client.userMessageInbound({
+          message: {
+            channel: "chat",
+            sender: "user",
+            text: [
+              {
+                id: "item",
+                kind: "message",
+                mediaType: "application/octet-stream",
+                body: new ReadableStream<Uint8Array>(
+                  {
+                    pull(controller) {
+                      reads++;
+                      controller.enqueue(bytes);
+                      controller.close();
+                    },
+                  },
+                  { highWaterMark: 0 },
+                ),
+              },
+            ],
+          },
+        });
+        assert.deepEqual(result.errors, []);
+        assert.deepEqual(await result.observations, []);
+        assert.equal(deliveries, 1);
+        assert.equal(uploads, selection === "body" ? 1 : 0);
+        assert.equal(reads, selection === "body" ? 1 : 0);
+      } finally {
+        await client.close();
+      }
+    });
+  }
+}
+
+// Legacy helper compatibility: category overrides and caller authorization callbacks
+// have no equivalent public Hooks option. Preserve these direct API guarantees.
+test("legacy helper compatibility: normalized content selection uses category, confirms binary bytes and emits no fallback body", async () => {
   const bytes = new Uint8Array([0, 255, 128]);
   let uploads = 0;
   const item = {
@@ -291,34 +430,6 @@ test("HTTP upload rejects unconfirmed status, media type and malformed or mismat
       }
       assert.equal(rejected, true, JSON.stringify(entry));
     }
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("zero-byte uploads are valid with a zero-byte transfer bound", async () => {
-  const originalFetch = globalThis.fetch;
-  const descriptor = {
-    ref: "empty-object",
-    size: 0,
-    sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  };
-  try {
-    globalThis.fetch = async (_input, init) => {
-      assert.equal((init!.body as Uint8Array).length, 0);
-      assert.equal(new Headers(init!.headers).get("content-length"), "0");
-      return new Response(JSON.stringify(descriptor), {
-        status: 201,
-        headers: { "content-type": "application/json" },
-      });
-    };
-    assert.deepEqual(
-      await uploadContent(
-        { endpoint: "https://upload.example.test", maxBytes: 0 },
-        new Uint8Array(),
-      ),
-      descriptor,
-    );
   } finally {
     globalThis.fetch = originalFetch;
   }
