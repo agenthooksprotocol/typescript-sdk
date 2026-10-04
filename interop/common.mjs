@@ -16,6 +16,10 @@ export const sdkClient = await import(
 export const sdkServer = await import(
   sdkRequire.resolve("@agenthooksprotocol/sdk/server")
 );
+/** @type {typeof import("@agenthooksprotocol/sdk/server/stdio")} */
+export const sdkStdio = await import(
+  sdkRequire.resolve("@agenthooksprotocol/sdk/server/stdio")
+);
 import { readFile, writeFile, rename } from "node:fs/promises";
 export async function config() {
   const i = process.argv.indexOf("--config");

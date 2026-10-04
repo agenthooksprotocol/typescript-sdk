@@ -60,3 +60,24 @@ hooks.handle(request, () => ({ status: "ok" }));
 attachments.response({ ref: "stored", size: 0 });
 void bad;
 void badOptional;
+
+import {
+  serveStdio,
+  type StdioOptions,
+} from "@agenthooksprotocol/sdk/server/stdio";
+import type { Readable, Writable } from "node:stream";
+declare const input: Readable;
+declare const output: Writable;
+const stdioOptions: StdioOptions = {
+  stdin: input,
+  stdout: output,
+  signal: new AbortController().signal,
+};
+const serving: Promise<void> = serveStdio(
+  (request) => hooks.handle(request, () => ({ effects: [] })),
+  stdioOptions,
+);
+void serving;
+serveStdio(() => new Response(null));
+// @ts-expect-error A stdio handler returns a Web Response, not a protocol result.
+serveStdio(() => ({ effects: [] }));

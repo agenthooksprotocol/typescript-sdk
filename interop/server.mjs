@@ -4,8 +4,7 @@ import { TaskLineage } from "./task-lineage.mjs";
 import { createServer } from "node:http";
 import { createServer as tlsServer } from "node:https";
 import { readFileSync } from "node:fs";
-import { createInterface } from "node:readline";
-import { sdkDraft, sdkServer } from "./common.mjs";
+import { sdkDraft, sdkServer, sdkStdio } from "./common.mjs";
 const {
   validateInterceptRequest,
   validateInterceptResponse,
@@ -39,22 +38,24 @@ const tlsClientErrorCodes = {};
 const tlsRejectionCodes = {};
 if (!validateCapabilities(discovery).ok)
   throw Error("Invalid discovery capabilities");
-// All valid JSON-RPC replies are framed and validated by the public helper.
+// All ordinary messages use the same public Web handler on either transport.
+const handleRequest = (request) =>
+  sdkServer.hooks.handle(request, async (message) => {
+    if (message.method === "hooks/capabilities") return { manifest };
+    if (message.method === "hooks/observe") return;
+    const decoded = validateInterceptResponse(await fixtureResult(message));
+    if (!decoded.ok) throw Error("Invalid fixture result");
+    const { protocolVersion, ...fields } = decoded.value.result;
+    return fields;
+  });
 /** @param {unknown} request */
 async function handleMessage(request) {
-  const response = await sdkServer.hooks.handle(
+  const response = await handleRequest(
     new Request("http://localhost/intercept", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(request),
     }),
-    async (message) => {
-      if (message.method === "hooks/capabilities") return { manifest };
-      const decoded = validateInterceptResponse(await fixtureResult(message));
-      if (!decoded.ok) throw Error("Invalid fixture result");
-      const { protocolVersion, ...fields } = decoded.value.result;
-      return fields;
-    },
   );
   return response.json();
 }
@@ -199,27 +200,29 @@ const endpoint =
     ? await listen(api, cfg.auth?.mode === "mtls" ? "https" : "http")
     : "stdio";
 if (cfg.transport === "stdio") {
-  const lines = createInterface({ input: process.stdin });
-  lines.on("line", async (line) => {
-    let request;
-    try {
-      request = JSON.parse(line);
-      const response =
-        request.method === "hooks/capabilities"
-          ? await handleMessage(request)
-          : await intercept(request);
-      process.stdout.write(JSON.stringify(response) + "\n");
-    } catch {
-      process.stdout.write(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: request?.id ?? null,
-          error: { code: -32600, message: "Invalid request" },
-        }) + "\n",
-      );
-    }
-  });
-  lines.on("close", () => process.exit(0));
+  // Start without awaiting so the independent HTTP control plane stays ready.
+  void sdkStdio
+    .serveStdio(async (request) => {
+      let message;
+      try {
+        message = await request.clone().json();
+      } catch {
+        // The public handler, not fixture routing, owns malformed input replies.
+        return handleRequest(request);
+      }
+      const row = rows.find((row) => row.id === message?.params?.event?.id);
+      // Only explicit adversarial fixtures bypass validation. Preserve their reply.
+      if (message?.method === "hooks/intercept" && row?.expectError)
+        return new Response(JSON.stringify(await fixtureResult(message)));
+      return handleRequest(request);
+    })
+    .then(
+      () => process.exit(0),
+      (error) => {
+        console.error(error);
+        process.exit(1);
+      },
+    );
 }
 await atomic(cfg.readinessFile, {
   endpoint,

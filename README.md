@@ -73,6 +73,41 @@ unregister();
 
 Backends use UTF-8 NDJSON over stdin and stdout. Commands and argument arrays are passed directly to `spawn` without a shell. Both per-event and persistent process lifecycles are supported.
 
+## Serve hooks over stdio (Node.js)
+
+Keep the same Web `Request`/`Response` handler for HTTP and stdio:
+
+```ts
+import { hooks } from "@agenthooksprotocol/sdk/server";
+import { serveStdio } from "@agenthooksprotocol/sdk/server/stdio";
+
+await serveStdio((request) =>
+  hooks.handle(request, (message) => {
+    if (message.method === "hooks/intercept") {
+      return { effects: [{ type: "deny", reason: "Blocked by policy" }] };
+    }
+    // Observe callbacks return void. Add a manifest for hooks/capabilities
+    // when this backend supports discovery.
+  }),
+);
+```
+
+`serveStdio(handler, { stdin?, stdout?, signal? })` defaults to the Node process
+streams. Each UTF-8 NDJSON line becomes a POST `Request` with an
+`application/json` body; the shim does not parse or validate JSON-RPC.
+`hooks.handle` remains responsible for validation and response correlation.
+Nonempty response bodies are written even for error HTTP statuses; empty bodies
+(including notification responses) produce no output. Physical CR/LF characters
+in response bodies become spaces so each reply occupies one line. Log to stderr,
+not stdout.
+
+Serving is sequential and respects output backpressure. The returned promise
+resolves after EOF and the final write, without closing stdout or exiting the
+process. Use dedicated streams for a serving session. Errors reject the promise
+without fabricated replies; failure or abort destroys both streams. Long-running
+handlers should honor `request.signal` for cooperative cancellation. The Node-only subpath keeps `node:` imports out of the
+Web server entrypoint.
+
 ## Packages
 
 - `@agenthooksprotocol/sdk` — hook runner, stdio transport, runtime types, and operational errors

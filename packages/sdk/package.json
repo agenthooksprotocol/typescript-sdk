@@ -26,6 +26,10 @@
     "./server": {
       "types": "./dist/src/server/index.d.ts",
       "default": "./dist/src/server/index.js"
+    },
+    "./server/stdio": {
+      "types": "./dist/src/server/stdio.d.ts",
+      "default": "./dist/src/server/stdio.js"
     }
   },
   "scripts": {
