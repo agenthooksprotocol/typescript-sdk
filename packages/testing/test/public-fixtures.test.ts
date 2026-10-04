@@ -28,7 +28,9 @@ for (const mode of ["no-effect", "deny"] as const) {
               {
                 mode: "intercept",
                 events: ["tool.before"],
-                timeoutMs: 2000,
+                // Include cold process startup under parallel CI load; this is
+                // a delivery smoke test, not a deadline behavior test.
+                timeoutMs: 10000,
                 failurePolicy: "fail-closed",
                 content: { default: "metadata" },
               },
