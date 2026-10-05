@@ -314,10 +314,7 @@ if (process.argv[2] === "client") {
       const capabilities = Object.fromEntries(
         messages.map((message) => [
           message.params.event.type,
-          {
-            ...message.params.capabilities,
-            elicitation: { [message.params.event.elicitation.mode]: {} },
-          },
+          message.params.capabilities,
         ]),
       );
       effects = c.op === "apply" ? c.effects : [];

@@ -144,6 +144,81 @@ test("elicitation sender hydrates exact sources and reports real upload confirma
   }
 });
 
+test("atomic elicitation preserves absent, empty, and other-mode AHP grants", async () => {
+  const answerBytes = Buffer.from(
+    JSON.stringify({ action: "accept", content: {} }),
+  );
+  const answerDescriptor = {
+    ref: "urn:test:answer",
+    size: answerBytes.length,
+    sha256: createHash("sha256").update(answerBytes).digest("hex"),
+  };
+  const rows = [];
+  for (const effect of [
+    { type: "return", value: { action: "decline" } },
+    { type: "deny", reason: "Policy" },
+    { type: "modify", target: "content", operation: "replace", value: {} },
+  ]) {
+    for (const grant of [null, {}, { url: {} }, { form: {} }]) {
+      const request = message();
+      request.params.event.session = { id: "atomic-mode" };
+      const result = structuredClone(request);
+      result.id = result.params.event.id = "result";
+      result.params.event.parentEventId = request.id;
+      result.params.event.type = "user.elicitation.result";
+      result.params.event.elicitation = {
+        mode: "form",
+        server: "test",
+        action: "accept",
+        result: { ...item(), id: "answer", body: answerDescriptor },
+      };
+      const boundary = effect.type === "modify" ? result : request;
+      boundary.params.capabilities = {
+        effects: [effect.type],
+        ...(effect.type === "modify"
+          ? { modify: { content: { replace: true, merge: false } } }
+          : {}),
+        ...(grant === null ? {} : { elicitation: grant }),
+      };
+      rows.push({
+        op: "apply",
+        request,
+        result: effect.type === "modify" ? result : null,
+        effects: [effect],
+        uploads: [
+          { ref: descriptor.ref, bytes: bytes.toString("base64") },
+          { ref: answerDescriptor.ref, bytes: answerBytes.toString("base64") },
+        ],
+      });
+    }
+  }
+  const result = await run(rows, [
+    "check",
+    "../agent-hooks-protocol/schema/draft",
+    "test-principal",
+  ]);
+  assert.equal(result.code, 0, result.stderr);
+  const outputs = JSON.parse(result.stdout);
+  assert.deepEqual(
+    outputs.map((row) => row.accepted),
+    [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+    ],
+  );
+  assert.ok(outputs.every((row) => row.inputUnchanged));
+});
+
 test("atomic elicitation presentation uses SDK effects and never disguises presentation failure as rejection", async () => {
   const request = message();
   request.params.capabilities.effects = ["return", "deny"];

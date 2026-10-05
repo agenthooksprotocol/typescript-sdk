@@ -489,8 +489,9 @@ for (const transport of ["stdio", "http"])
         !row.chain ||
         row.chain.subscriptions.some((sub) => sub.mode === "intercept")
       )
-        assert.ok(
+        assert.equal(
           publicCalls.some((entry) => entry.method === "hooks/intercept"),
+          row.id !== "observation-chain-fail-closed",
           row.id,
         );
       const received = report.receipts.entries.filter(
@@ -566,10 +567,16 @@ test("multi-send and cancellation retain actual public boundary results over HTT
           (delivery) => delivery.eventId === request.params.event.id,
         ),
       );
-      assert.ok(
+      const rawLateReply =
+        row.id === "cancel-before-reply" ||
+        row.id === "cancel-after-reply-before-acceptance";
+      // Clients still use Hooks; only these explicit unsupported late replies
+      // bypass server semantic validation so the discard probes reach the wire.
+      assert.equal(
         report.receipts.sdkCalls.some(
           (call) => call.eventId === request.params.event.id,
         ),
+        !rawLateReply,
       );
     }
   }

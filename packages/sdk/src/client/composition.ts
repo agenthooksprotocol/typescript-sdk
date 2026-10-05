@@ -157,7 +157,10 @@ function compose(
       event.type === "user.elicitation.result"
     )
       throw new Error("Body composition requires composeResponseAsync");
-    if (effect.type === "return" && event.type === "user.elicitation.request") {
+    if (
+      (effect.type === "return" || effect.type === "deny") &&
+      event.type === "user.elicitation.request"
+    ) {
       const meta = (event as ObjectValue).elicitation;
       if (
         !object(meta) ||
@@ -165,6 +168,9 @@ function compose(
         !capabilities.elicitation?.[meta.mode]
       )
         throw new Error("Unsupported elicitation mode");
+    }
+    if (effect.type === "return" && event.type === "user.elicitation.request") {
+      const meta = (event as ObjectValue).elicitation as ObjectValue;
       if (
         !ajv.validate(
           `${base}mcp-elicitation.schema.json#/$defs/result`,

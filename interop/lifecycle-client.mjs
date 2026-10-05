@@ -540,11 +540,9 @@ try {
               auth,
               token,
             );
-            if (
-              step.op === "notify"
-                ? response.status !== 200
-                : ![200, 400, 409].includes(response.status)
-            )
+            // Raw probes may be valid notifications too. Preserve legacy 200
+            // and expected rejection statuses while accepting canonical success.
+            if (![200, 202, 204, 400, 409].includes(response.status))
               throw Error(
                 `Catalogue event transport failed: ${response.status}`,
               );

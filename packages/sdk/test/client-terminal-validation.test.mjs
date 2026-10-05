@@ -11,6 +11,7 @@ async function dispatch(
   failurePolicy = "fail-open",
   type = "user.elicitation.request",
   selection = "body",
+  modeGrants = { form: {} },
 ) {
   let deliveries = 0;
   const client = new Hooks(
@@ -43,7 +44,9 @@ async function dispatch(
         [type]: {
           effects: ["return", "deny", "message"],
           ...(type === "user.elicitation.request"
-            ? { elicitation: { form: {} } }
+            ? modeGrants === null
+              ? {}
+              : { elicitation: modeGrants }
             : {}),
         },
       },
@@ -171,4 +174,20 @@ for (const effects of [
     assert.deepEqual(result.errors, []);
     assert.deepEqual(result.response.result.effects, [denied]);
   });
+}
+
+for (const modeGrants of [null, {}, { url: {} }]) {
+  for (const effect of [returned, denied]) {
+    test(`elicitation ${effect.type} rejects unsupported AHP mode ${JSON.stringify(modeGrants)}`, async () => {
+      const result = await dispatch(
+        [effect],
+        "fail-open",
+        "user.elicitation.request",
+        "body",
+        modeGrants,
+      );
+      assert.equal(result.errors.length, 1);
+      assert.deepEqual(result.response.result.effects, []);
+    });
+  }
 }

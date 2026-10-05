@@ -47,16 +47,35 @@ for (const row of rows)
 for (const row of rows)
   if (row.chain?.holdObservers)
     sequences.set(row.requests.a.id + ":observers", []);
+// These cancellation probes deliberately stage unsupported flow.continue
+// effects. Their original reply must reach the client unchanged so discard,
+// rather than a server-generated RPC error, is what the schedule exercises.
+const lateReplyProbes = new Set([
+  "cancel-before-reply",
+  "cancel-after-reply-before-acceptance",
+  "cancelled-boundary-observed",
+]);
 // Bypass selection is per send occurrence, never per scenario/event family.
 const rawAttempts = new Map();
+const chainFailureProbes = new Set([
+  "observation-chain-fail-open",
+  "observation-chain-fail-closed",
+]);
 for (const row of rows) {
+  // The first chain reply deliberately returns an unadvertised effect. Keep
+  // that canonical response intact so the client exercises its failure policy.
+  if (chainFailureProbes.has(row.id))
+    rawAttempts.set(row.requests.a.id, new Set([0]));
   const counts = new Map();
   for (const step of row.steps ?? []) {
     if (step.op !== "send") continue;
     const id = row.requests[step.key].id;
     const occurrence = counts.get(id) ?? 0;
     counts.set(id, occurrence + 1);
-    if (step.bypassSDK === true) {
+    if (
+      step.bypassSDK === true ||
+      (lateReplyProbes.has(row.id) && step.key === "a" && occurrence === 0)
+    ) {
       const attempts = rawAttempts.get(id) ?? new Set();
       attempts.add(occurrence);
       rawAttempts.set(id, attempts);
