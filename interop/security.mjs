@@ -48,9 +48,18 @@ export function fixtureFetch(config, eventEndpoints = []) {
           const headers = new Headers();
           for (let i = 0; i < response.rawHeaders.length; i += 2)
             headers.append(response.rawHeaders[i], response.rawHeaders[i + 1]);
+          const nullBody =
+            init.method?.toUpperCase() === "HEAD" ||
+            [204, 205, 304].includes(response.statusCode ?? 0);
+          if (nullBody) {
+            // No Web body owns this stream. Consume it so Node can finish the
+            // response and release the socket; ordinary bodies stay consumer-owned.
+            response.on("error", reject);
+            response.resume();
+          }
           resolve(
             new Response(
-              [204, 205, 304].includes(response.statusCode ?? 0)
+              nullBody
                 ? null
                 : /** @type {ReadableStream<Uint8Array>} */ (
                     /** @type {unknown} */ (Readable.toWeb(response))
