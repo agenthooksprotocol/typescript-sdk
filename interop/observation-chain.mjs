@@ -45,7 +45,12 @@ export async function runChain(row, options) {
     },
     {
       source,
-      capabilities: { [type]: original.params.capabilities },
+      capabilities: {
+        [type]: {
+          modes: ["intercept", "observe"],
+          capabilities: original.params.capabilities,
+        },
+      },
       auth: options.auth ?? auth(),
       ...(options.fetch ? { fetch: options.fetch } : {}),
       observationTimeoutMs: 10000,

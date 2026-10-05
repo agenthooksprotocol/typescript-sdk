@@ -126,8 +126,11 @@ test(
         source: "urn:test:harness",
         capabilities: {
           "tool.before": {
-            effects: ["modify"],
-            modify: { input: { merge: true, replace: true } },
+            modes: ["intercept", "observe"],
+            capabilities: {
+              effects: ["modify"],
+              modify: { input: { merge: true, replace: true } },
+            },
           },
         },
       },

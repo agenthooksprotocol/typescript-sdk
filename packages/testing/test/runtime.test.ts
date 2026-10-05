@@ -244,8 +244,11 @@ test("public boundaries settle intercepts before observers with one occurrence i
       },
       capabilities: {
         "tool.before": {
-          effects: ["modify", "message"],
-          modify: { input: { replace: false, merge: true } },
+          modes: ["intercept", "observe"],
+          capabilities: {
+            effects: ["modify", "message"],
+            modify: { input: { replace: false, merge: true } },
+          },
         },
       },
       auth: auth({ authenticate: async () => ({ token: "runtime-token" }) }),

@@ -260,7 +260,7 @@ export async function send(endpoint, path, payload, config, token) {
       {
         source: event.source,
         capabilities: observe
-          ? {}
+          ? { [event.type]: { modes: ["observe"] } }
           : { [event.type]: payload.params.capabilities },
         fetch: fixtureFetch(config, new URL(path, endpoint).href),
         auth: token

@@ -99,9 +99,7 @@ try {
   );
 
   for (const error of result.errors) console.error(error);
-  const denied = result.response.result.effects.some(
-    (effect) => effect.type === "deny",
-  );
+  const denied = result.state.permission === "deny";
   if (result.interrupted || denied) {
     throw new Error("File read interrupted or denied by hooks");
   }
@@ -119,6 +117,29 @@ per-boundary snapshot, not a constructor option. No separate `await hooks.initia
 is required. Boundary calls return protocol effects and delivery errors; `Hooks`
 does not execute or authorize host operations. Keep a client for the harness lifetime
 and close it in `finally`.
+
+`result.state` is a detached, deeply frozen projection of the final canonical
+pending state, including `permission` and `candidate`. It reflects accepted
+composition and initial state without requiring callers to fold effects. Always
+check `result.interrupted` before execution; interruption does not authorize work.
+
+Capability declarations never infer observation authority. A plain event value
+such as `{ effects: ["deny"] }` grants interception only. Use explicit `modes`
+when the harness supports observations, including fallback notifications after a
+short-circuit or interruption:
+
+```ts
+const capabilities: EventCapabilities = {
+  "tool.before": {
+    modes: ["intercept", "observe"],
+    capabilities: { effects: ["deny"] },
+  },
+  "tool.after": { modes: ["observe"] },
+};
+```
+
+Omitted events and modes grant nothing. Full static manifests remain supported.
+Effect grants and elicitation `form`/`url` grants must also be explicit.
 
 `ReadFileArguments` checks the host's original arguments at compile time. The SDK
 models tool input as structural JSON, not as a tool-specific generic schema. If you

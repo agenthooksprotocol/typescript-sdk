@@ -180,7 +180,10 @@ test("task lineage receives canonical SDK events and rejects malformed explicit 
         events: ["task.change.before", "task.change.after"],
       },
     ],
-    {},
+    {
+      "task.change.before": { modes: ["observe"] },
+      "task.change.after": { modes: ["observe"] },
+    },
     (message) => {
       messages.push(message);
       lineage.accept(message);
@@ -229,7 +232,7 @@ test("task lineage receives canonical SDK events and rejects malformed explicit 
   const other = await receiver(
     t,
     [{ id: "other", mode: "observe", events: ["task.change.before"] }],
-    {},
+    { "task.change.before": { modes: ["observe"] } },
     (message) => lineage.accept(message),
     "urn:other",
   );
@@ -350,8 +353,11 @@ test("short-circuit downgrades only uncalled interceptors without waiting for ob
     ],
     {
       "tool.before": {
-        effects: ["modify", "deny"],
-        modify: { input: { replace: true, merge: false } },
+        modes: ["intercept", "observe"],
+        capabilities: {
+          effects: ["modify", "deny"],
+          modify: { input: { replace: true, merge: false } },
+        },
       },
     },
     async (message, route) => {

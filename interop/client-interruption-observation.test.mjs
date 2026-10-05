@@ -50,8 +50,11 @@ function scenario() {
       observationTimeoutMs: 3000,
       capabilities: {
         "tool.before": {
-          effects: ["deny", "modify", "message", "allow", "return"],
-          modify: { input: { merge: true, replace: false } },
+          modes: ["intercept", "observe"],
+          capabilities: {
+            effects: ["deny", "modify", "message", "allow", "return"],
+            modify: { input: { merge: true, replace: false } },
+          },
         },
       },
       fetch: (url, init) =>

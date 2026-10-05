@@ -54,12 +54,20 @@ export type BoundaryInput<K extends EventType> = K extends EventType
       time?: string;
     }
   : never;
-export type EventCapabilities = Partial<Record<EventType, Capabilities>>;
+/** Explicit delivery authority for one event. Effects remain separately granted. */
+export interface EventGrant {
+  modes: ("intercept" | "observe")[];
+  capabilities?: Capabilities;
+}
+/** A plain capability value grants interception only. Omitted events grant nothing. */
+export type EventCapabilities = Partial<
+  Record<EventType, Capabilities | EventGrant>
+>;
 export interface HooksOptions {
   source: string;
-  /** A static manifest, or an event-to-capabilities map of interceptable events.
-   * The map derives delivery modes only; effect and elicitation form/url grants
-   * are never inferred. Omitted controls remain unsupported. */
+  /** A static manifest, or explicit event declarations. Plain Capabilities
+   * entries grant intercept only; use EventGrant to opt into observe. Omitted
+   * events, delivery modes, effects and elicitation form/url grants stay absent. */
   capabilities: StaticCapabilityManifest | EventCapabilities;
   auth?: AuthProvider;
   /** Trusted HTTP network adapter (for example, host-managed TLS). The SDK still
@@ -91,12 +99,37 @@ export interface DeliveryError {
   failurePolicy?: "fail-open" | "fail-closed";
   syntheticDenial: boolean;
 }
+/** Immutable JSON snapshot, including nested candidate values and extensions. */
+// Bound recursive JSON extension types for TypeScript; runtime freezing has no
+// depth limit. Six levels cover the canonical containers and nested JSON data.
+type StateDepth = [0, 0, 1, 2, 3, 4, 5];
+type ReadonlyState<T, D extends number = 6> = T extends
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  ? T
+  : D extends 0
+    ? Readonly<T>
+    : T extends object
+      ? { readonly [P in keyof T]: ReadonlyState<T[P], StateDepth[D]> }
+      : T;
+/** Canonical pending state after the last accepted settlement. */
+export type BoundaryState = ReadonlyState<
+  NonNullable<InterceptRequest["params"]["state"]>
+>;
 export interface BoundaryResult<K extends EventType = EventType> {
   /** Accepted effective input, with occurrence identity and static envelope supplied.
    * Body streams are owned delivery resources, not reusable output streams. */
   event: HarnessEvent<K>;
   /** Effective canonical effects. The harness enacts them; the SDK executes no operation. */
   response: InterceptResponse;
+  /** Detached, deeply frozen canonical state; no effects replay is needed.
+   * An interrupted boundary must not execute, even if earlier accepted state
+   * contains a candidate or permission. With no acceptance, initialState is
+   * preserved (or the neutral candidate/permission state is returned). */
+  readonly state: BoundaryState;
   errors: DeliveryError[];
   /** Optional explicit wait for best-effort deliveries; never delays interception. */
   observations: Promise<DeliveryError[]>;

@@ -384,9 +384,12 @@ for (const [transport, mode, authenticatedUpload] of [
             ...(transportFetch ? { fetch: transportFetch } : {}),
             capabilities: {
               "tool.before": {
-                effects: ["modify", "allow", "deny", "flow"],
-                modify: { input: { merge: true, replace: true } },
-                flow: { operations: ["stop"] },
+                modes: ["intercept", "observe"],
+                capabilities: {
+                  effects: ["modify", "allow", "deny", "flow"],
+                  modify: { input: { merge: true, replace: true } },
+                  flow: { operations: ["stop"] },
+                },
               },
             },
           },

@@ -97,7 +97,7 @@ for (const selection of ["body", "metadata", "omit"] as const) {
               deliveries++;
             });
           },
-          capabilities: {},
+          capabilities: { "user.message.inbound": { modes: ["observe"] } },
           auth: auth({
             authenticate: async (context) => ({
               token: context.url.endsWith("/uploads")

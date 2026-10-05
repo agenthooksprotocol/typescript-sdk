@@ -11,7 +11,15 @@ import {
 
 const options: HooksOptions = {
   source: "urn:test:harness",
-  capabilities: { "tool.before": { effects: ["deny", "modify"] } },
+  capabilities: {
+    "tool.before": {
+      modes: ["intercept", "observe"],
+      capabilities: { effects: ["deny", "modify"] },
+    },
+    "user.message.inbound": { modes: ["observe"] },
+    "model.request.before": { modes: ["observe"] },
+    "session.start": { modes: ["observe"] },
+  },
 };
 const hooks = new Hooks(
   {

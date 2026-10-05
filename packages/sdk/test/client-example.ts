@@ -26,9 +26,7 @@ try {
   );
 
   for (const error of result.errors) console.error(error);
-  const denied = result.response.result.effects.some(
-    (effect) => effect.type === "deny",
-  );
+  const denied = result.state.permission === "deny";
   if (result.interrupted || denied) {
     throw new Error("File read interrupted or denied by hooks");
   }

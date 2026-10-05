@@ -229,7 +229,10 @@ export async function runCompaction(
       source: "urn:ahp:compaction-host",
       capabilities: {
         "context.compact.before": compactionCapabilities("before"),
-        "context.compact.after": compactionCapabilities("after"),
+        "context.compact.after": options.observeOnly
+          ? { modes: ["observe"] }
+          : compactionCapabilities("after"),
+        "session.end": { modes: ["observe"] },
       },
       auth: auth({
         resolveEnvironmentVariable: (name) =>

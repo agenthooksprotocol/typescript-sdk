@@ -56,7 +56,9 @@ const config = (url, subscriptions = [sub()], extra = {}) => ({
 });
 const options = (extra) => ({
   source: "urn:test:harness",
-  capabilities: { "tool.before": caps },
+  capabilities: {
+    "tool.before": { modes: ["intercept", "observe"], capabilities: caps },
+  },
   ...extra,
 });
 async function server(run) {
@@ -362,7 +364,7 @@ test("metadata observations do not consume bodies and native is opt-in", async (
     config(s.url, [
       { mode: "observe", events: ["tool.*"], content: { default: "metadata" } },
     ]),
-    options({ capabilities: {} }),
+    options({ capabilities: { "tool.before": { modes: ["observe"] } } }),
   );
   try {
     const input = tool();
@@ -473,7 +475,7 @@ test("observation failures are available without delaying interception", async (
     config(s.url, [
       { mode: "observe", events: ["tool.*"], content: { default: "metadata" } },
     ]),
-    options({ capabilities: {} }),
+    options({ capabilities: { "tool.before": { modes: ["observe"] } } }),
   );
   try {
     const r = await hooks.toolBefore(tool());

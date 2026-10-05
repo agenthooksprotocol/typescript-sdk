@@ -170,16 +170,18 @@ export class Hooks {
             "call.id",
             "parentEventId",
           ],
-          events: eventTypes.map((event) => ({
-            event,
-            modes:
-              interceptable.has(event) && Object.hasOwn(c, event)
-                ? ["intercept", "observe"]
-                : ["observe"],
-            ...(Object.hasOwn(c, event)
-              ? { capabilities: (c as Record<string, Capabilities>)[event]! }
-              : {}),
-          })),
+          events: Object.entries(c).map(([event, grant]) => {
+            const explicit = Object.hasOwn(grant ?? {}, "modes");
+            return {
+              event,
+              modes: explicit ? grant.modes : ["intercept"],
+              ...(explicit
+                ? grant.capabilities === undefined
+                  ? {}
+                  : { capabilities: grant.capabilities }
+                : { capabilities: grant }),
+            };
+          }),
           gaps: [],
           limits: {
             maxUploadBytes: this.options.maxContentBytes ?? 64 * 1024 * 1024,
@@ -383,6 +385,23 @@ export class Hooks {
     if (type === "session.start")
       event.manifest = structuredClone(this.manifest);
     const requestId = event.id;
+    // Project actual settled state, never replay cumulative effects: that would
+    // duplicate injections/instructions and lose candidate invalidation.
+    const snapshotState = (
+      value: BoundaryOptions["initialState"],
+    ): BoundaryResult<K>["state"] => {
+      const snapshot = structuredClone(
+        value ?? { candidate: null, permission: "none" },
+      );
+      const freeze = (value: unknown): void => {
+        if (value !== null && typeof value === "object") {
+          for (const child of Object.values(value)) freeze(child);
+          Object.freeze(value);
+        }
+      };
+      freeze(snapshot);
+      return snapshot;
+    };
     if (signal.aborted)
       return {
         event,
@@ -391,6 +410,7 @@ export class Hooks {
           id: requestId,
           result: { protocolVersion: "draft", effects: [] },
         },
+        state: snapshotState(options.initialState),
         errors: [],
         observations: Promise.resolve([]),
         interrupted: true,
@@ -627,8 +647,9 @@ export class Hooks {
       // Observers cannot hold the interception result or keep interrupted work alive.
       const observations = matching.filter(
         (r) =>
-          r.subscription.mode === "observe" ||
-          ((shortCircuit || interrupted) && !called.has(r)),
+          advertised.modes.includes("observe") &&
+          (r.subscription.mode === "observe" ||
+            ((shortCircuit || interrupted) && !called.has(r))),
       );
       let observed: Promise<DeliveryError[]> = Promise.resolve([]);
       // Caller cancellation ends decisions, not best-effort settlement delivery.
@@ -683,6 +704,7 @@ export class Hooks {
       return {
         event,
         response,
+        state: snapshotState(state),
         errors,
         observations: observed,
         interrupted,

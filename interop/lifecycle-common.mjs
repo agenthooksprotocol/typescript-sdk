@@ -76,9 +76,12 @@ export function lifecycleHooks(options) {
     },
     {
       source: options.source,
-      capabilities: options.capabilities
-        ? { [options.event]: options.capabilities }
-        : {},
+      capabilities: {
+        [options.event]: {
+          modes: [options.mode],
+          ...(options.capabilities ? { capabilities: options.capabilities } : {}),
+        },
+      },
       auth: options.auth,
       ...(options.fetch ? { fetch: options.fetch } : {}),
     },

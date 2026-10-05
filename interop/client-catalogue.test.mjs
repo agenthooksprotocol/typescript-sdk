@@ -158,7 +158,12 @@ const observe = (includeNative) => ({
   content: { default: "metadata" },
   includeNative,
 });
-const options = { source: "urn:test:catalogue", capabilities: {} };
+const options = {
+  source: "urn:test:catalogue",
+  capabilities: Object.fromEntries(
+    Object.keys(occurrences).map((event) => [event, { modes: ["observe"] }]),
+  ),
+};
 async function until(predicate) {
   for (let i = 0; i < 300; i++) {
     if (await predicate()) return;
@@ -339,7 +344,12 @@ for (const lifecycle of ["persistent", "per_event"]) {
       );
       const hooks = new Hooks(config, {
         ...options,
-        capabilities: { "tool.before": { effects: ["message"] } },
+        capabilities: {
+          "tool.before": {
+            modes: ["intercept", "observe"],
+            capabilities: { effects: ["message"] },
+          },
+        },
       });
       const rows = async () =>
         (await readFile(path, "utf8")).trim().split("\n").map(JSON.parse);

@@ -54,7 +54,9 @@ function setup(
     {
       ...extra,
       source: "urn:test:state",
-      capabilities: { "tool.before": staticCaps },
+      capabilities: {
+        "tool.before": { modes: ["intercept", "observe"], capabilities: staticCaps },
+      },
       fetch: async (url, init) =>
         hooks.handle(new Request(url, init), (message) => {
           seen.push(structuredClone(message));
@@ -66,7 +68,11 @@ function setup(
   return { client, seen };
 }
 test("event-map delivery modes never infer elicitation answer grants", async () => {
-  const capabilities = { "user.elicitation.request": { effects: ["deny"] } };
+  const capabilities = {
+    "user.elicitation.request": { effects: ["deny"] },
+    "session.start": { modes: ["observe"] },
+    "session.end": { modes: ["observe"] },
+  };
   const client = new Hooks(
     {
       protocolVersion: "draft",
@@ -100,7 +106,7 @@ test("event-map delivery modes never infer elicitation answer grants", async () 
     const event = start.event.manifest.events.find(
       (event) => event.event === "user.elicitation.request",
     );
-    assert.deepEqual(event.modes, ["intercept", "observe"]);
+    assert.deepEqual(event.modes, ["intercept"]);
     assert.deepEqual(event.capabilities, { effects: ["deny"] });
     assert.equal(Object.hasOwn(event.capabilities, "elicitation"), false);
     await assert.rejects(
@@ -114,6 +120,8 @@ test("event-map delivery modes never infer elicitation answer grants", async () 
     );
     assert.deepEqual(capabilities, {
       "user.elicitation.request": { effects: ["deny"] },
+      "session.start": { modes: ["observe"] },
+      "session.end": { modes: ["observe"] },
     });
   } finally {
     await client.close();
