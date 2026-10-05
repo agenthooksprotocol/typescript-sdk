@@ -93,9 +93,15 @@ void hooks.toolBefore(
   { ...minimalTool, id: "occurrence", time: "2026-01-01T00:00:00Z" },
   {
     signal: new AbortController().signal,
+    initialState: { permission: "none", candidate: null },
     capabilities: { effects: ["deny"] },
   },
 );
+
+void hooks.toolBefore(minimalTool, {
+  // @ts-expect-error The boundary option is initialState, not the wire state field.
+  state: { permission: "none", candidate: null },
+});
 
 declare const manifest: StaticCapabilityManifest;
 const staticOptions: HooksOptions = {

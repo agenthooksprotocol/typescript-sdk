@@ -1,4 +1,7 @@
 /* Minimal declarations for the dependency-free Node 20+ reference slice. */
+declare module "node:fs/promises" {
+  export function readFile(path: string, encoding: "utf8"): Promise<string>;
+}
 declare class Buffer extends Uint8Array {
   static alloc(size: number): Buffer;
   static concat(chunks: readonly Uint8Array[]): Buffer;

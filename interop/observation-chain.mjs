@@ -12,7 +12,7 @@ const { Hooks, auth } = await import(
 /**
  * The controller only schedules external fixture releases. The public client
  * owns all event construction, real transport, composition and observations.
- * @param {{id: string, requests: {a: {params: {event: Extract<import("@agenthooksprotocol/sdk/client").Event, {type: "tool.before"}>, capabilities: import("@agenthooksprotocol/sdk/client").Capabilities, state?: import("@agenthooksprotocol/sdk/client").BoundaryOptions["state"]}}}, chain: {subscriptions: {id: string, mode: 'intercept'|'observe', content: 'metadata'|'omit', failurePolicy: 'fail-open'|'fail-closed'}[], interrupt?: boolean, holdObservers?: boolean}}} row
+ * @param {{id: string, requests: {a: {params: {event: Extract<import("@agenthooksprotocol/sdk/client").Event, {type: "tool.before"}>, capabilities: import("@agenthooksprotocol/sdk/client").Capabilities, state?: import("@agenthooksprotocol/sdk/client").BoundaryOptions["initialState"]}}}, chain: {subscriptions: {id: string, mode: 'intercept'|'observe', content: 'metadata'|'omit', failurePolicy: 'fail-open'|'fail-closed'}[], interrupt?: boolean, holdObservers?: boolean}}} row
  * @param {{transport: import("@agenthooksprotocol/sdk/client").Registration["hooks"][number]["transport"], authentication?: import("@agenthooksprotocol/sdk/client").Authentication, auth?: import("@agenthooksprotocol/sdk/client").AuthProvider, fetch?: typeof globalThis.fetch, control: (path: string, value?: object) => Promise<unknown>}} options
  */
 export async function runChain(row, options) {
@@ -57,7 +57,7 @@ export async function runChain(row, options) {
     const boundary = hooks.dispatch(type, input, {
       signal: controller.signal,
       ...(original.params.state !== undefined
-        ? { state: original.params.state }
+        ? { initialState: original.params.state }
         : {}),
     });
     void boundary.then(

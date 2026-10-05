@@ -86,13 +86,13 @@ export function lifecycleHooks(options) {
 }
 /** @param {InstanceType<typeof Hooks>} client
  * @param {{type: import("@agenthooksprotocol/sdk/client").EventType, source: string} & import("@agenthooksprotocol/sdk/client").BoundaryInput<import("@agenthooksprotocol/sdk/client").EventType>} event
- * @param {import("@agenthooksprotocol/sdk/client").BoundaryOptions["state"]} [state]
+ * @param {import("@agenthooksprotocol/sdk/client").BoundaryOptions["initialState"]} [state]
  * @param {AbortSignal} [signal]
  */
 export function dispatchLifecycle(client, event, state, signal) {
   const { type, source, ...input } = event;
   return client.dispatch(type, input, {
-    ...(state === undefined ? {} : { state }),
+    ...(state === undefined ? {} : { initialState: state }),
     ...(signal ? { signal } : {}),
   });
 }

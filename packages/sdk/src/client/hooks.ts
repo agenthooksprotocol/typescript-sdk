@@ -397,7 +397,7 @@ export class Hooks {
       } as BoundaryResult<K>;
     const originalRequest = this.elicitationFor(event);
     let effects: Effect[] = [];
-    let state = structuredClone(options.state);
+    let state = structuredClone(options.initialState);
     // A supplied snapshot is input to the first receiver, not a newly accepted
     // result in this chain. Composition settles terminal state after acceptance.
     let shortCircuit = false;

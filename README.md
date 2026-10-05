@@ -2,7 +2,7 @@
 
 TypeScript models, JSON codecs, and runtime utilities for the [Agent Hooks Protocol (AHP)](https://github.com/agenthooksprotocol/agent-hooks-protocol).
 
-The generated schema API follows the current AHP `draft` snapshot. The root runtime provides the deny/no-effect `tool.before` interception flow over stdio; the draft entrypoint adds canonical validation and reference boundary helpers. Node.js 20 or newer is required.
+The generated schema API follows the current AHP `draft` snapshot. The `/client` entrypoint provides the configuration-driven `Hooks` API for harness integrations. The root entrypoint retains the legacy deny/no-effect `tool.before` runner; the draft entrypoint adds canonical validation and reference boundary helpers. Node.js 20 or newer is required.
 
 ## Installation
 
@@ -40,7 +40,94 @@ const encoded = encodeCapabilities(result.value);
 
 Every public AHP schema has a generated TypeScript type plus `parse<Type>` and `encode<Type>` functions. Successful parse results include the typed value, preserved raw JSON, and compatibility diagnostics.
 
-## Run a `tool.before` hook
+## Intercept a tool call with `Hooks`
+
+Use `@agenthooksprotocol/sdk/client` for new harness integrations. Store a registration
+in `hooks.json` (replace the URL with your hook backend):
+
+```json
+{
+  "protocolVersion": "draft",
+  "hooks": [
+    {
+      "id": "example.policy",
+      "transport": { "type": "http", "url": "https://hooks.example/intercept" },
+      "subscriptions": [
+        {
+          "mode": "intercept",
+          "events": ["tool.before"],
+          "includeNative": true,
+          "timeoutMs": 2000,
+          "failurePolicy": "fail-closed",
+          "content": { "default": "metadata" }
+        }
+      ]
+    }
+  ]
+}
+```
+
+The host loads that JSON and explicitly grants the backend permission to deny.
+This TypeScript example uses Node.js types (`@types/node`):
+
+```ts
+import { readFile } from "node:fs/promises";
+import { Hooks, type EventCapabilities } from "@agenthooksprotocol/sdk/client";
+
+// Hooks validates registration; JSON.parse alone does not validate it.
+const config: unknown = JSON.parse(await readFile("hooks.json", "utf8"));
+const capabilities: EventCapabilities = {
+  "tool.before": { effects: ["deny"] },
+};
+const hooks = new Hooks(config, {
+  source: "urn:example:agent",
+  capabilities,
+});
+
+type ReadFileArguments = { path: string };
+const args: ReadFileArguments = { path: "README.md" };
+
+try {
+  // Boundary calls wait for initialization internally.
+  const result = await hooks.toolBefore(
+    {
+      call: { id: "read-1" },
+      path: "native",
+      tool: { name: "read_file", origin: "native", input: args },
+    },
+    { initialState: { permission: "none", candidate: null } },
+  );
+
+  for (const error of result.errors) console.error(error);
+  const denied = result.response.result.effects.some(
+    (effect) => effect.type === "deny",
+  );
+  if (result.interrupted || denied) {
+    throw new Error("File read interrupted or denied by hooks");
+  }
+
+  // Only deny is granted, so hooks cannot rewrite args. The host executes
+  // the operation after its own authorization and path checks.
+  console.log(await readFile(args.path, "utf8"));
+} finally {
+  await hooks.close();
+}
+```
+
+`source` and `capabilities` belong to the constructor. `initialState` is an optional
+per-boundary snapshot, not a constructor option. No separate `await hooks.initialized`
+is required. Boundary calls return protocol effects and delivery errors; `Hooks`
+does not execute or authorize host operations. Keep a client for the harness lifetime
+and close it in `finally`.
+
+`ReadFileArguments` checks the host's original arguments at compile time. The SDK
+models tool input as structural JSON, not as a tool-specific generic schema. If you
+grant `modify`, validate the effective `result.event.tool.input` against your own
+tool schema before executing it; do not cast it back to `ReadFileArguments` or use
+the original arguments as though a rewrite had not occurred. The host is responsible
+for tool-specific runtime validation and for enacting any other granted effects.
+
+## Legacy `ToolBeforeRunner`
 
 ```ts
 import { ToolBeforeRunner } from "@agenthooksprotocol/sdk";
@@ -110,7 +197,8 @@ Web server entrypoint.
 
 ## Packages
 
-- `@agenthooksprotocol/sdk` — hook runner, stdio transport, runtime types, and operational errors
+- `@agenthooksprotocol/sdk/client` — configuration-driven harness client, typed event boundaries, and HTTP/stdio delivery
+- `@agenthooksprotocol/sdk` — legacy hook runner, stdio transport, runtime types, and operational errors
 - `@agenthooksprotocol/sdk/generated` — schema-derived models and structural codecs
 - `@agenthooksprotocol/sdk/draft` — canonical draft validators, generated models, and reference boundary helpers
 - `@agenthooksprotocol/testing` — configurable fake backend for integration tests

@@ -197,7 +197,7 @@ export async function runAtomicInterop(): Promise<AtomicRow[]> {
             },
           },
           {
-            state: {
+            initialState: {
               permission: scenario.initial.denied
                 ? "deny"
                 : scenario.initial.permission === "native"

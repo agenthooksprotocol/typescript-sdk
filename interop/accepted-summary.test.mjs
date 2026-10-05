@@ -49,7 +49,7 @@ test("canonical summaries distinguish SDK protocol rejection from userland tool-
     );
     try {
       const result = await client.dispatch(event.type, event, {
-        state: row.request.params.state,
+        initialState: row.request.params.state,
       });
       const hostRejected =
         result.event.type === "tool.before" &&

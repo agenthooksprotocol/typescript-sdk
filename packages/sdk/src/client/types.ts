@@ -57,7 +57,9 @@ export type BoundaryInput<K extends EventType> = K extends EventType
 export type EventCapabilities = Partial<Record<EventType, Capabilities>>;
 export interface HooksOptions {
   source: string;
-  /** A static manifest, or an event-to-capabilities map of interceptable events. */
+  /** A static manifest, or an event-to-capabilities map of interceptable events.
+   * The map derives delivery modes only; effect and elicitation form/url grants
+   * are never inferred. Omitted controls remain unsupported. */
   capabilities: StaticCapabilityManifest | EventCapabilities;
   auth?: AuthProvider;
   /** Trusted HTTP network adapter (for example, host-managed TLS). The SDK still
@@ -72,7 +74,7 @@ export interface HooksOptions {
 }
 export interface BoundaryOptions {
   /** Canonical pending state before any interceptor runs. */
-  state?: InterceptRequest["params"]["state"];
+  initialState?: InterceptRequest["params"]["state"];
   signal?: AbortSignal;
   /** Complete narrowed advertisement; omitted controls stay absent. */
   capabilities?: Capabilities;

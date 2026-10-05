@@ -208,7 +208,7 @@ try {
               capabilities: row.request.params.capabilities,
               ...(row.request.params.state === undefined
                 ? {}
-                : { state: row.request.params.state }),
+                : { initialState: row.request.params.state }),
             });
             const observationErrors = await result.observations;
             if (

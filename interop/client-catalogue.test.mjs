@@ -409,6 +409,7 @@ test(
         "ES2022,DOM",
         "--skipLibCheck",
         "packages/sdk/test/client-types.ts",
+        "packages/sdk/test/client-example.ts",
         "node-shims.d.ts",
       ],
       { cwd: root, encoding: "utf8", timeout: 25000 },

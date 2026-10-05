@@ -65,13 +65,68 @@ function setup(
   );
   return { client, seen };
 }
+test("event-map delivery modes never infer elicitation answer grants", async () => {
+  const capabilities = { "user.elicitation.request": { effects: ["deny"] } };
+  const client = new Hooks(
+    {
+      protocolVersion: "draft",
+      hooks: [
+        {
+          id: "test.observer",
+          transport: { type: "http", url: "https://hooks.example/observe" },
+          subscriptions: [
+            {
+              mode: "observe",
+              events: ["session.end"],
+              content: { default: "metadata" },
+            },
+          ],
+        },
+      ],
+    },
+    {
+      source: "urn:test:mode-authority",
+      capabilities,
+    },
+  );
+  try {
+    const start = await client.sessionStart({
+      session: { id: "session" },
+      harness: { name: "test", version: "1" },
+      permissionMode: "default",
+      trigger: "startup",
+      items: [],
+    });
+    const event = start.event.manifest.events.find(
+      (event) => event.event === "user.elicitation.request",
+    );
+    assert.deepEqual(event.modes, ["intercept", "observe"]);
+    assert.deepEqual(event.capabilities, { effects: ["deny"] });
+    assert.equal(Object.hasOwn(event.capabilities, "elicitation"), false);
+    await assert.rejects(
+      client.userElicitationRequest(
+        {
+          elicitation: { mode: "form", server: "test" },
+        },
+        { capabilities: { effects: ["deny"], elicitation: { form: {} } } },
+      ),
+      ConfigurationError,
+    );
+    assert.deepEqual(capabilities, {
+      "user.elicitation.request": { effects: ["deny"] },
+    });
+  } finally {
+    await client.close();
+  }
+});
+
 test("public Hooks sends exact initial state and complete narrowed capabilities", async () => {
   const { client, seen } = setup([[], []]);
   const state = seed();
   const narrowed = { effects: ["deny"] };
   try {
     const result = await client.toolBefore(tool(), {
-      state,
+      initialState: state,
       capabilities: narrowed,
     });
     assert.deepEqual(result.errors, []);
@@ -94,7 +149,7 @@ test("changed input invalidates preseeded candidate/provenance and allow atomica
     [],
   ]);
   try {
-    const result = await client.toolBefore(tool(), { state: seed() });
+    const result = await client.toolBefore(tool(), { initialState: seed() });
     assert.deepEqual(result.errors, []);
     assert.equal(seen[1].params.state.candidate, null);
     assert.equal(seen[1].params.state.permission, "none");
@@ -112,7 +167,7 @@ test("rejected compound preserves preseeded state and effective input", async ()
     [],
   ]);
   try {
-    const result = await client.toolBefore(tool(), { state: seed() });
+    const result = await client.toolBefore(tool(), { initialState: seed() });
     assert.equal(result.errors.length, 1);
     assert.deepEqual(seen[1].params.state, seed());
     assert.equal(seen[1].params.event.tool.input.x, 1);
@@ -127,7 +182,7 @@ test("later return replaces provenance; ask survives later allow", async () => {
   ]);
   try {
     const result = await client.toolBefore(tool(), {
-      state: { ...seed(), permission: "ask" },
+      initialState: { ...seed(), permission: "ask" },
     });
     assert.deepEqual(result.errors, []);
     assert.deepEqual(seen[1].params.state.candidate, { value: 5 });
@@ -141,7 +196,7 @@ test("invalid state and widening fail before delivery", async () => {
   const { client, seen } = setup([[]]);
   try {
     await assert.rejects(
-      client.toolBefore(tool(), { state: { permission: "allow" } }),
+      client.toolBefore(tool(), { initialState: { permission: "allow" } }),
       ConfigurationError,
     );
     await assert.rejects(
@@ -175,7 +230,7 @@ test("preseeded terminal state reaches the first receiver and settles after acce
     ]) {
       const { client, seen } = setup([response, []]);
       try {
-        const result = await client.toolBefore(tool(), { state });
+        const result = await client.toolBefore(tool(), { initialState: state });
         await result.observations;
         assert.deepEqual(result.errors, []);
         assert.deepEqual(
@@ -344,7 +399,7 @@ test("pending state omits unrelated neutral fields but preserves explicit fields
   ]) {
     const { client, seen } = setup([[], []]);
     try {
-      const result = await client.toolBefore(tool(), { state });
+      const result = await client.toolBefore(tool(), { initialState: state });
       assert.deepEqual(result.errors, []);
       assert.deepEqual(seen[1].params.state, state);
     } finally {
