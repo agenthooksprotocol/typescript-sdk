@@ -86,6 +86,23 @@ function flushPeerQueue() {
   }
 }
 const wireAttempts = new Map();
+const sentAttempts = new Map();
+// Cancelling the SDK boundary does not mean a released foreign reply has run.
+// An HTTP receive step must still rendezvous with actual receiver evidence.
+async function waitReplied(id, count) {
+  const deadline = Date.now() + 15000;
+  for (;;) {
+    const receipts = await control(cfg.controlEndpoint, "/receipts");
+    if (
+      receipts.entries.filter(
+        (entry) => entry.kind === "replied" && entry.id === id,
+      ).length >= count
+    )
+      return;
+    if (Date.now() >= deadline) throw Error("Cancelled reply watchdog");
+    await delay(1);
+  }
+}
 const wireGates = new Set();
 const activeWireGates = new Map();
 async function rawSend(endpoint, path, message, authentication, credential) {
@@ -655,8 +672,11 @@ try {
               (value) => ({ value }),
               (error) => ({ error }),
             );
+            const replyCount = (sentAttempts.get(id) ?? 0) + 1;
+            sentAttempts.set(id, replyCount);
             slots.set(step.slot, {
               request,
+              replyCount,
               promise,
               controller,
               gate,
@@ -688,6 +708,8 @@ try {
                 !actual.published.includes(attempt.request.id)
               )
                 throw Error("Cancellation did not interrupt the SDK boundary");
+              if (cfg.transport === "http")
+                await waitReplied(attempt.request.id, attempt.replyCount);
               actual.ignored.push(step.slot);
               break;
             }
