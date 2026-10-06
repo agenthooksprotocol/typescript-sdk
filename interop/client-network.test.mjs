@@ -81,7 +81,7 @@ test("client network delegation preserves independent event and upload authentic
     },
   );
   try {
-    const result = await client.toolBefore({
+    const result = await client.dispatch("tool.before", {
       id: "network-occurrence",
       path: "native",
       call: { id: "network-call" },

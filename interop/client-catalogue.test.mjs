@@ -233,9 +233,9 @@ test(
           native: { type: "host.event", details: { event: type } },
         });
         const original = structuredClone(input);
-        const result = await hooks[methodFor(type)](input).catch((error) =>
-          assert.fail(`${type}: ${error.message}`),
-        );
+        const result = await hooks
+          .dispatch(type, input)
+          .catch((error) => assert.fail(`${type}: ${error.message}`));
         assert.equal(result.event.type, type);
         assert.equal(result.event.source, options.source);
         assert.ok(result.event.id);
@@ -289,7 +289,8 @@ test(
         { ...options, capabilities: manifest },
       );
       try {
-        const started = await advertised.sessionStart(
+        const started = await advertised.dispatch(
+          "session.start",
           occurrences["session.start"],
         );
         assert.deepEqual(
@@ -356,8 +357,8 @@ for (const lifecycle of ["persistent", "per_event"]) {
       try {
         await hooks.initialized;
         await assert.rejects(readFile(path), { code: "ENOENT" });
-        const one = await hooks.toolBefore(structuredClone(tool));
-        const two = await hooks.toolBefore(structuredClone(tool));
+        const one = await hooks.dispatch("tool.before", structuredClone(tool));
+        const two = await hooks.dispatch("tool.before", structuredClone(tool));
         for (const result of [one, two]) {
           assert.deepEqual(result.errors, []);
           assert.deepEqual(result.response.result.effects, [

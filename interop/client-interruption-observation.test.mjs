@@ -20,11 +20,9 @@ const deferred = () => {
 function scenario() {
   const pending = deferred();
   const releasePending = deferred();
-  const observed = deferred();
   const releaseObservers = deferred();
   const messages = [];
   let intercepts = 0;
-  let observations = 0;
   const client = new Hooks(
     {
       protocolVersion: "draft",
@@ -61,8 +59,6 @@ function scenario() {
         hooks.handle(new Request(url, init), async (message) => {
           messages.push(structuredClone(message));
           if (message.method === "hooks/observe") {
-            observations++;
-            if (observations === 2) observed.resolve();
             await releaseObservers.promise;
             return;
           }
@@ -101,7 +97,6 @@ function scenario() {
     messages,
     pending,
     releasePending,
-    observed,
     releaseObservers,
   };
 }
@@ -113,17 +108,19 @@ const tool = () => ({
 });
 
 test(
-  "interruption observes uncalled and explicit subscriptions with accepted content without delaying settlement",
+  "interruption retains accepted changes without starting uncalled or explicit observations",
   { timeout: 10000 },
   async () => {
     const s = scenario();
     const controller = new AbortController();
     try {
       await s.client.initialized;
-      const work = s.client.toolBefore(tool(), { signal: controller.signal });
+      const work = s.client.dispatch("tool.before", tool(), {
+        signal: controller.signal,
+      });
       await s.pending.promise;
       controller.abort();
-      const result = await work; // Observers deliberately remain blocked.
+      const result = await work; // The interrupted receiver remains blocked.
       assert.equal(result.interrupted, true);
       assert.equal(result.event.tool.input.x, 2);
       assert.deepEqual(
@@ -132,17 +129,17 @@ test(
       );
       assert.equal(result.errors.length, 1);
       assert.equal(result.errors[0].syntheticDenial, false);
-      await s.observed.promise;
-      const notifications = s.messages.filter(
-        (m) => m.method === "hooks/observe",
+      assert.equal(
+        s.messages.filter((m) => m.method === "hooks/intercept").length,
+        2,
       );
-      assert.equal(notifications.length, 2); // One uncalled interceptor + explicit observer; no duplicates.
-      for (const m of notifications) {
-        assert.equal(m.params.event.id, "interrupted-boundary");
-        assert.equal(m.params.event.source, "urn:test:interruption");
-        assert.equal(m.params.event.tool.input.x, 2);
-      }
-      s.releaseObservers.resolve();
+      assert.equal(
+        s.messages.filter((m) => m.method === "hooks/observe").length,
+        0,
+      );
+      s.releasePending.resolve();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(s.messages.length, 2); // No late response can start fallback work.
       assert.deepEqual(await result.observations, []);
     } finally {
       s.releasePending.resolve();
@@ -159,7 +156,7 @@ test(
     const s = scenario();
     try {
       await s.client.initialized;
-      const work = s.client.toolBefore(tool());
+      const work = s.client.dispatch("tool.before", tool());
       await s.pending.promise;
       await s.client.close();
       const result = await work;

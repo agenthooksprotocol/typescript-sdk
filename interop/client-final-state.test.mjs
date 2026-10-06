@@ -60,7 +60,7 @@ function setup(responses, failurePolicy = "fail-open") {
 async function run(responses, options, failurePolicy) {
   const client = setup(responses, failurePolicy);
   try {
-    return await client.toolBefore(tool(), options);
+    return await client.dispatch("tool.before", tool(), options);
   } finally {
     await client.close();
   }
@@ -263,7 +263,8 @@ test("final-state projection does not append continuation instructions twice", a
     },
   );
   try {
-    const result = await client.turnFinishBefore(
+    const result = await client.dispatch(
+      "turn.finish.before",
       {
         turn: { id: "t" },
         outcome: "completed",

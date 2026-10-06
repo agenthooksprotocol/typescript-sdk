@@ -116,8 +116,10 @@ export class BackendTransport {
     if (signal?.aborted) abort();
     else signal?.addEventListener("abort", abort, { once: true });
     this.#controllers.add(controller);
+    let started = false;
     const run = async () => {
       controller.signal.throwIfAborted();
+      started = true;
       return this.#transport.type === "http"
         ? this.#http(message, notification, controller.signal)
         : this.#stdio(message, notification, controller.signal);
@@ -135,7 +137,11 @@ export class BackendTransport {
       work.then(resolve, reject).finally(() => {
         controller.signal.removeEventListener("abort", cancel);
       });
-    }).finally(() => {
+    }).finally(async () => {
+      // Retire queued work immediately, but reap an active SDK child before
+      // completing its cancelled operation. The queue remains occupied too.
+      if (stdio && started && controller.signal.aborted)
+        await work.catch(() => {});
       signal?.removeEventListener("abort", abort);
       this.#controllers.delete(controller);
     });
@@ -177,12 +183,24 @@ export class BackendTransport {
           ?.trim()
           .toLowerCase() !== "application/json"
       ) {
-        throw failure("Backend response must use application/json");
+        throw new HookOperationalError(
+          "MALFORMED_JSON_RPC",
+          "Backend response must use application/json",
+        );
       }
       // Match the SDK's 1 MiB NDJSON frame budget rather than buffering unbounded JSON.
       const text = await this.#responseText(response, signal, 1024 * 1024);
       signal.throwIfAborted();
-      return responseFor(JSON.parse(text), message);
+      let decoded: unknown;
+      try {
+        decoded = JSON.parse(text);
+      } catch {
+        throw new HookOperationalError(
+          "MALFORMED_JSON",
+          "Malformed backend response",
+        );
+      }
+      return responseFor(decoded, message);
     } finally {
       // Also release rejected responses and late results from fetchers that ignore abort.
       // A custom stream's cancellation hook must not hold a deadline or close hostage.

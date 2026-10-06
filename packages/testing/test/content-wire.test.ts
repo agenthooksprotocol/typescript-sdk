@@ -108,7 +108,7 @@ for (const selection of ["body", "metadata", "omit"] as const) {
         },
       );
       try {
-        const result = await client.userMessageInbound({
+        const result = await client.dispatch("user.message.inbound", {
           message: {
             channel: "chat",
             sender: "user",

@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { MessageChannel } from "node:worker_threads";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runCompaction, compactionCapabilities } from "./compaction.mjs";
@@ -98,12 +97,9 @@ test("after failure prevents delivery; observation does not advertise control", 
 });
 
 test(
-  "blocked observer promises do not gate settlement or downstream",
+  "blocked observers complete within compaction without changing settled content",
   { timeout: 5000 },
   async () => {
-    // A live port keeps Node running while unref'd best-effort tasks execute.
-    const keepalive = new MessageChannel();
-    keepalive.port1.on("message", () => {});
     let start, release, finish, failed;
     const entered = new Promise((resolve) => {
       start = resolve;
@@ -118,8 +114,9 @@ test(
       failed = resolve;
     });
     let snapshot;
+    let returned = false;
     try {
-      const r = await runCompaction("base", [], [], {
+      const work = runCompaction("base", [], [], {
         observeOnly: true,
         observers: [
           {
@@ -142,61 +139,88 @@ test(
             },
           },
         ],
+      }).then((result) => {
+        returned = true;
+        return result;
       });
-      const downstream = r.applied ? [r.bodies[r.summary.ref]] : [];
       await entered;
       await rejected;
-      assert.deepEqual(downstream, ["summary:base"]);
+      assert.equal(
+        returned,
+        false,
+        "compaction returned while an observer was blocked",
+      );
       assert.equal(snapshot.applied, true);
       assert.deepEqual(snapshot.capabilities, { effects: [], modify: {} });
-      const saved = structuredClone(r);
       release();
+      const r = await work;
       await finished;
-      assert.deepEqual(r, saved);
+      const downstream = r.applied ? [r.bodies[r.summary.ref]] : [];
+      assert.deepEqual(downstream, ["summary:base"]);
       assert.deepEqual(r.failures, []);
+      const saved = structuredClone(r);
+      snapshot.bodies = { late: "mutation" };
+      snapshot.summary = "forbidden";
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(r, saved);
     } finally {
       release();
-      keepalive.port1.close();
-      keepalive.port2.close();
     }
   },
 );
 
 test(
-  "observe-only legacy after callbacks are never invoked inline",
+  "observe-only legacy after callbacks complete inline without applying effects",
   { timeout: 5000 },
   async () => {
-    const keepalive = new MessageChannel();
-    keepalive.port1.on("message", () => {});
     let returned = false,
-      sawReturn = false,
-      notify;
+      snapshot,
+      notify,
+      release;
     const entered = new Promise((resolve) => {
       notify = resolve;
     });
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
     try {
-      const r = await runCompaction(
+      const work = runCompaction(
         "base",
         [],
         [
-          hook("legacy", () => {
-            sawReturn = returned;
+          hook("legacy", async (value) => {
+            snapshot = value;
             notify();
+            await gate;
+            value.bodies = {};
             return [modify("summary", "forbidden")];
           }),
         ],
         { observeOnly: true },
-      );
-      returned = true;
-      const downstream = r.applied ? [r.bodies[r.summary.ref]] : [];
+      ).then((result) => {
+        returned = true;
+        return result;
+      });
       await entered;
-      assert.equal(sawReturn, true, "callback ran inside settlement");
+      assert.equal(
+        returned,
+        false,
+        "compaction returned before its callback completed",
+      );
+      assert.equal(snapshot.applied, true);
+      assert.deepEqual(snapshot.capabilities, { effects: [], modify: {} });
+      release();
+      const r = await work;
+      const downstream = r.applied ? [r.bodies[r.summary.ref]] : [];
       assert.deepEqual(downstream, ["summary:base"]);
       assert.deepEqual(r.failures, []);
       assert.equal(r.bodies[r.summary.ref], "summary:base");
+      const saved = structuredClone(r);
+      snapshot.summary = "late mutation";
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(r, saved);
     } finally {
-      keepalive.port1.close();
-      keepalive.port2.close();
+      release();
     }
   },
 );

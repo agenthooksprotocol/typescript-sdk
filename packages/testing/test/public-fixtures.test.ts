@@ -46,7 +46,7 @@ for (const mode of ["no-effect", "deny"] as const) {
     );
     try {
       for (let occurrence = 0; occurrence < 2; occurrence++) {
-        const result = await client.toolBefore({
+        const result = await client.dispatch("tool.before", {
           id: `occurrence-${occurrence}`,
           call: { id: `call-${occurrence}` },
           path: "native",

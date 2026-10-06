@@ -61,7 +61,10 @@ for (const [name, capabilities] of [
       },
     });
     try {
-      await assert.rejects(client.toolBefore(input), ConfigurationError);
+      await assert.rejects(
+        client.dispatch("tool.before", input),
+        ConfigurationError,
+      );
       assert.equal(deliveries, 0);
     } finally {
       await client.close();
@@ -80,7 +83,7 @@ test("explicit observe-only declaration delivers no interception or effect grant
     },
   });
   try {
-    const result = await client.toolBefore(input);
+    const result = await client.dispatch("tool.before", input);
     assert.deepEqual(await result.observations, []);
     assert.deepEqual(result.response.result.effects, []);
     assert.equal(messages.length, 1);
@@ -121,7 +124,7 @@ for (const observe of [false, true]) {
       },
     );
     try {
-      const result = await client.toolBefore(input);
+      const result = await client.dispatch("tool.before", input);
       assert.deepEqual(await result.observations, []);
       assert.deepEqual(
         messages.map((message) => message.method),
@@ -144,7 +147,7 @@ test("wildcard subscriptions intersect explicit modes without broadening them", 
     },
   });
   try {
-    const result = await client.toolBefore(input);
+    const result = await client.dispatch("tool.before", input);
     await result.observations;
     assert.equal(deliveries, 0);
   } finally {

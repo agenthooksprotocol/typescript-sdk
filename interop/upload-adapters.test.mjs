@@ -140,7 +140,7 @@ for (const name of ["compaction", "elicitation"])
               },
             );
             try {
-              const result = await client.contextCompactBefore({
+              const result = await client.dispatch("context.compact.before", {
                 trigger: "manual",
                 items: [],
                 instructions: {

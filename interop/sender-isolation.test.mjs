@@ -105,7 +105,7 @@ test("public sender never inherits event Authorization when upload auth is omitt
         }),
       },
     );
-    const result = await client.toolBefore({
+    const result = await client.dispatch("tool.before", {
       id: "unrelated-correlation",
       time: "2026-01-01T00:00:00Z",
       call: { id: "call" },

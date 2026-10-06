@@ -313,7 +313,7 @@ export async function runInterop(): Promise<{
           path: event.path,
           tool: event.tool,
         };
-        const result = await hooks.toolBefore(boundary);
+        const result = await hooks.dispatch("tool.before", boundary);
         const observations = await result.observations;
         if (result.errors.length || observations.length || result.interrupted)
           return "sdk-delivery-error";

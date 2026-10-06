@@ -1,4 +1,12 @@
 import type {
+  EventInputs,
+  EventType,
+  Permission,
+  ContentSourceBinding,
+  DeliveryDiagnosticCode,
+} from "../draft/generated.js";
+import type { ContentSource } from "./content.js";
+import type {
   Capabilities,
   ContentReference,
   ExecutionEventContextCompactBefore,
@@ -7,10 +15,10 @@ import type {
   ObserveNotification,
   StaticCapabilityManifest,
 } from "../draft/generated.js";
-import type { AuthProvider } from "./auth.js";
+import type { AuthProvider, DeliveryAuthProvider } from "./auth.js";
 
 export type Event = ObserveNotification["params"]["event"];
-export type EventType = Event["type"];
+export type { EventType } from "../draft/generated.js";
 /** Remove generated JSON extension index signatures while preserving named fields. */
 type Fields<T> = {
   [K in keyof T as string extends K
@@ -21,7 +29,7 @@ type Fields<T> = {
 };
 /** Harness content bodies may be owned streams instead of uploaded references. */
 export type HarnessValue<T> = T extends ContentReference
-  ? ContentReference | ReadableStream<Uint8Array>
+  ? ContentReference | ContentSource | ReadableStream<Uint8Array>
   : T extends readonly (infer V)[]
     ? HarnessValue<V>[]
     : T extends { selection: string }
@@ -54,6 +62,8 @@ export type BoundaryInput<K extends EventType> = K extends EventType
       time?: string;
     }
   : never;
+/** Generated, flattened host facts for named boundary calls. */
+export type EventInput<K extends EventType> = HarnessValue<EventInputs[K]>;
 /** Explicit delivery authority for one event. Effects remain separately granted. */
 export interface EventGrant {
   modes: ("intercept" | "observe")[];
@@ -69,7 +79,7 @@ export interface HooksOptions {
    * entries grant intercept only; use EventGrant to opt into observe. Omitted
    * events, delivery modes, effects and elicitation form/url grants stay absent. */
   capabilities: StaticCapabilityManifest | EventCapabilities;
-  auth?: AuthProvider;
+  auth?: AuthProvider | DeliveryAuthProvider;
   /** Trusted HTTP network adapter (for example, host-managed TLS). The SDK still
    * owns protocol/authentication and cancellation. Scope transport credentials
    * to their exact destination; upload requests must not inherit event TLS identity.
@@ -77,15 +87,24 @@ export interface HooksOptions {
   fetch?: typeof globalThis.fetch;
   /** Bound the immutable raw-content snapshot held by each boundary. */
   maxContentBytes?: number;
-  /** Best-effort observation budget; observation never delays the boundary result. */
+  /** Best-effort observation budget, bounded by the operation signal. */
   observationTimeoutMs?: number;
 }
 export interface BoundaryOptions {
+  /** Generated named slots bind owned sources to producer descriptors, without refs. */
+  contentSources?: readonly ContentSourceBinding<
+    ContentSource | ReadableStream<Uint8Array>
+  >[];
   /** Canonical pending state before any interceptor runs. */
   initialState?: InterceptRequest["params"]["state"];
+  /** One operation budget: queue, authentication, content, delivery and observations. */
   signal?: AbortSignal;
   /** Complete narrowed advertisement; omitted controls stay absent. */
   capabilities?: Capabilities;
+}
+/** Structured SDK delivery evidence; messages and credential material are excluded. */
+export interface DeliveryDiagnostic extends Omit<DeliveryError, "code"> {
+  code: DeliveryDiagnosticCode;
 }
 export interface DeliveryError {
   backendId: string;
@@ -130,8 +149,14 @@ export interface BoundaryResult<K extends EventType = EventType> {
    * contains a candidate or permission. With no acceptance, initialState is
    * preserved (or the neutral candidate/permission state is returned). */
   readonly state: BoundaryState;
+  /** Canonical settled permission. None is not approval; interruption forbids execution. */
+  readonly permission: `${Permission}`;
+  /** Accepted tool arguments, not the original proposal. Validate in host code before use. */
+  readonly input: unknown;
+  /** All interception and observation delivery diagnostics. */
+  diagnostics: DeliveryDiagnostic[];
   errors: DeliveryError[];
-  /** Optional explicit wait for best-effort deliveries; never delays interception. */
+  /** Compatibility view of observation diagnostics; already settled when the call returns. */
   observations: Promise<DeliveryError[]>;
   interrupted: boolean;
 }

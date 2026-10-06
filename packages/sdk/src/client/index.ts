@@ -15,3 +15,14 @@ export type {
   ContentSelection,
   ContentUpload,
 } from "../draft/generated.js";
+
+export {
+  Permission,
+  state,
+  effects,
+  contentSlots,
+  capabilities,
+  events,
+  CapabilityBuilder,
+} from "../draft/generated.js";
+export type * from "../draft/generated.js";

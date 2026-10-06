@@ -72,12 +72,19 @@ This TypeScript example uses Node.js types (`@types/node`):
 
 ```ts
 import { readFile } from "node:fs/promises";
-import { Hooks, type EventCapabilities } from "@agenthooksprotocol/sdk/client";
+import {
+  Hooks,
+  capabilities as capability,
+  events,
+  state,
+  Permission,
+  type EventCapabilities,
+} from "@agenthooksprotocol/sdk/client";
 
 // Hooks validates registration; JSON.parse alone does not validate it.
 const config: unknown = JSON.parse(await readFile("hooks.json", "utf8"));
 const capabilities: EventCapabilities = {
-  "tool.before": { effects: ["deny"] },
+  [events.toolBefore]: capability.intercept().deny(),
 };
 const hooks = new Hooks(config, {
   source: "urn:example:agent",
@@ -91,15 +98,17 @@ try {
   // Boundary calls wait for initialization internally.
   const result = await hooks.toolBefore(
     {
-      call: { id: "read-1" },
+      callId: "read-1",
       path: "native",
-      tool: { name: "read_file", origin: "native", input: args },
+      name: "read_file",
+      origin: "native",
+      input: args,
     },
-    { initialState: { permission: "none", candidate: null } },
+    { initialState: state.initial(Permission.None) },
   );
 
-  for (const error of result.errors) console.error(error);
-  const denied = result.state.permission === "deny";
+  for (const diagnostic of result.diagnostics) console.error(diagnostic);
+  const denied = result.permission === Permission.Deny;
   if (result.interrupted || denied) {
     throw new Error("File read interrupted or denied by hooks");
   }
@@ -123,10 +132,73 @@ pending state, including `permission` and `candidate`. It reflects accepted
 composition and initial state without requiring callers to fold effects. Always
 check `result.interrupted` before execution; interruption does not authorize work.
 
-Capability declarations never infer observation authority. A plain event value
+`result.permission` reads that canonical settled permission; `none` is not approval,
+`ask` requires host approval, and an interrupted result is not executable. For tool
+boundaries, `result.input` exposes accepted arguments as `unknown`; validate them
+against the host's tool schema. `result.event` and `result.response` remain available.
+
+### Operation and resource ownership
+
+Awaiting a boundary also waits for its selected, bounded observation deliveries.
+Observations cannot change the settled decision. `result.diagnostics` includes both
+interception and observation delivery failures; the compatibility `observations`
+promise is already settled when the boundary returns. To run a call concurrently,
+retain its promise in the harness. Do not execute a gated operation before that
+promise settles and its permission, interruption, and host-validation gates pass.
+
+Pass `signal: AbortSignal.timeout(milliseconds)` for one outer operation budget,
+or a host-owned cancellation signal. Queue waits, authentication, selected content,
+uploads, retries, and observations share that signal. Existing subscription/upload
+limits can shorten it, never reset it. Cancellation stops new delivery work; SDK
+child processes are reaped before operation cleanup completes. Safety cleanup can
+extend beyond the deadline. `close()` cancels active calls and releases SDK-owned
+resources, is repeatable, and rejects subsequent calls. It does not close shared
+providers or injected HTTP adapters. Await active calls first if graceful completion
+is wanted; close does not implicitly drain normal observation processing.
+
+Wrap owned streams as `new ContentSource(stream)` (imported from the client entry
+point), then place the source in a content item's `body`. Construction does no I/O.
+Metadata/omit/unmatched routes do not read bytes; selected body deliveries snapshot
+once under the configured limit and upload independently to authorized destinations.
+The SDK computes size/hash and verifies receiver descriptors before publishing the
+event. Calling a boundary transfers read/cancel ownership, including unused and
+failed-call paths. Native raw streams and canonical references remain supported.
+Keep host execution data separately from these owned delivery sources.
+
+Alternatively, keep a metadata descriptor in a generated input and pass
+`contentSources: [contentSlots[events.toolBefore].items(0, source)]` as boundary
+options. The generated slot binds the owned source to that descriptor without a
+caller-created ref. Only authorized body selection promotes it to a verified
+receiver-allocated reference; metadata and omit selections never read it.
+
+### Harness-owned authentication
+
+`HooksOptions.auth` accepts a small `DeliveryAuthProvider`: `credential(context)`
+returns `{ type: "bearer", token, attempt? }`, and `challenge(context)` handles an
+actual 401 response before the one bounded retry. Context includes the selected
+registration authentication binding, backend ID, destination URL, event/upload
+purpose, and operation signal. Challenge context also contains the exact attempted
+credential, including its opaque identity, for stale-token rejection handling.
+Requests retain their identity and prepared body across recovery.
+
+The provider owns secret lookup, discovery/trust policy, OAuth login/exchange,
+rotation, shared coordination and persistence. Callbacks must honor their signal;
+cancelling one wait does not authorize cancelling other callers' shared work.
+Absent bindings start anonymously and may use challenge-driven discovery under the
+host's trust policy. Configured missing credentials fail closed. Upload bindings
+never fall back to event credentials. Existing `auth()` discovery/exchange helpers
+remain optional conveniences; TLS/network policy stays in the trusted HTTP adapter.
+
+Generated `capability.intercept()` deliberately advertises both interception and
+observation; `capability.observe()` advertises observation only. Builders compose
+without mutating reused declarations, and host boundary compatibility is checked
+before delivery. Effect helpers imported as `effects` from the server entry point
+construct canonical effects; they never grant permission to emit those effects.
+
+Raw capability declarations never infer observation authority. A plain event value
 such as `{ effects: ["deny"] }` grants interception only. Use explicit `modes`
 when the harness supports observations, including fallback notifications after a
-short-circuit or interruption:
+normal short-circuit:
 
 ```ts
 const capabilities: EventCapabilities = {
@@ -143,7 +215,7 @@ Effect grants and elicitation `form`/`url` grants must also be explicit.
 
 `ReadFileArguments` checks the host's original arguments at compile time. The SDK
 models tool input as structural JSON, not as a tool-specific generic schema. If you
-grant `modify`, validate the effective `result.event.tool.input` against your own
+grant `modify`, validate the effective `result.input` against your own
 tool schema before executing it; do not cast it back to `ReadFileArguments` or use
 the original arguments as though a rewrite had not occurred. The host is responsible
 for tool-specific runtime validation and for enacting any other granted effects.

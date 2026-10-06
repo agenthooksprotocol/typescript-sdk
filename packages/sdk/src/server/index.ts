@@ -14,3 +14,5 @@ export type {
   CapabilitiesRequest,
   Effect,
 } from "../draft/generated.js";
+
+export { effects } from "../draft/generated.js";

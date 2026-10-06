@@ -1,3 +1,10 @@
+import {
+  toEventInput,
+  contentSlots,
+  CapabilityBuilder,
+  Permission,
+} from "../draft/generated.js";
+import { HookOperationalError } from "../errors.js";
 import { randomUUID } from "node:crypto";
 import type {
   Authentication,
@@ -16,19 +23,21 @@ import {
   validateInterceptResponse,
 } from "../draft/index.js";
 import { BackendTransport } from "./transport.js";
-import { ContentManager } from "./content.js";
+import { ContentManager, ContentSource } from "./content.js";
 import { composeResponseAsync, normalizeEffects } from "./composition.js";
 import { auth } from "./auth.js";
 import { validateWire } from "./validation.js";
 import {
   ConfigurationError,
   type BoundaryInput,
+  type EventInput,
   type BoundaryOptions,
   type BoundaryResult,
   type Event,
   type EventType,
   type HooksOptions,
   type DeliveryError,
+  type DeliveryDiagnostic,
 } from "./types.js";
 
 type Subscription = InterceptSubscription | ObserveSubscription;
@@ -119,7 +128,20 @@ export class Hooks {
   constructor(config: unknown, options: HooksOptions) {
     this.options = {
       ...options,
-      capabilities: structuredClone(options.capabilities),
+      capabilities: structuredClone(
+        Array.isArray(
+          (options.capabilities as StaticCapabilityManifest)?.events,
+        )
+          ? options.capabilities
+          : Object.fromEntries(
+              Object.entries(options.capabilities ?? {}).map(
+                ([event, grant]) => [
+                  event,
+                  grant instanceof CapabilityBuilder ? grant.build() : grant,
+                ],
+              ),
+            ),
+      ),
     };
     this.provider = options.auth ?? auth();
     // No credentials or processes are acquired until a matching boundary needs them.
@@ -267,7 +289,13 @@ export class Hooks {
     if (issues.length) throw new ConfigurationError(issues);
     for (const backend of registration.hooks) {
       const transport = new BackendTransport(backend, (url, init) =>
-        this.fetchAuthenticated(url, init, backend.authentication),
+        this.fetchAuthenticated(
+          url,
+          init,
+          backend.authentication,
+          "event",
+          backend.id,
+        ),
       );
       backend.subscriptions.forEach((subscription, index) =>
         this.routes.push({
@@ -285,26 +313,39 @@ export class Hooks {
   private async fetchAuthenticated(
     url: string,
     init: RequestInit,
-    authentication?: Authentication,
-    purpose: "event" | "upload" = "event",
+    authentication: Authentication | undefined,
+    purpose: "event" | "upload",
+    backendId: string,
   ): Promise<Response> {
     secureEndpoint(url);
     const signal = init.signal ?? this.lifetime.signal;
     signal.throwIfAborted();
-    const key = JSON.stringify([purpose, url, authentication ?? null]);
+    const key = JSON.stringify([
+      backendId,
+      purpose,
+      url,
+      authentication ?? null,
+    ]);
     let context = this.authContexts.get(key);
     if (!context) {
       context = {
         url,
+        backendId,
         purpose,
         ...(authentication ? { authentication } : {}),
         cache: new Map(),
       };
       this.authContexts.set(key, context);
     }
+    // Challenge state belongs to this delivery attempt, never another caller.
+    context = { ...context };
     for (let attempt = 0; attempt < 2; attempt++) {
       const credential = await raceAbort(
-        this.provider.authenticate({ ...context, signal }, {}),
+        Promise.resolve(
+          "credential" in this.provider
+            ? this.provider.credential({ ...context, signal })
+            : this.provider.authenticate({ ...context, signal }, {}),
+        ),
         signal,
       );
       if (
@@ -319,7 +360,10 @@ export class Hooks {
           typeof credential.token !== "string" ||
           !credential.token ||
           /[\s\x00-\x1f\x7f]/.test(credential.token) ||
-          (credential.expiresAt !== undefined &&
+          ("credential" in this.provider &&
+            (!("type" in credential) || credential.type !== "bearer")) ||
+          ("expiresAt" in credential &&
+            credential.expiresAt !== undefined &&
             (!Number.isFinite(credential.expiresAt) ||
               credential.expiresAt <= Date.now()))
         )
@@ -332,9 +376,33 @@ export class Hooks {
           headers,
           redirect: "error",
           signal,
+        }).then((response) => {
+          if (signal.aborted) {
+            void response.body?.cancel().catch(() => {});
+            signal.throwIfAborted();
+          }
+          return response;
         }),
         signal,
       );
+      if (response.status === 401 && "credential" in this.provider) {
+        try {
+          await raceAbort(
+            Promise.resolve(
+              this.provider.challenge({
+                ...context,
+                signal,
+                response,
+                credential,
+              }),
+            ),
+            signal,
+          );
+        } catch (error) {
+          void response.body?.cancel().catch(() => {});
+          throw error;
+        }
+      }
       if (response.status !== 401 || attempt === 1) {
         delete context.challenge;
         delete context.challenged;
@@ -353,18 +421,32 @@ export class Hooks {
     input: BoundaryInput<K>,
     options: BoundaryOptions = {},
   ): Promise<BoundaryResult<K>> {
-    // Calls made after close remain misuse; cancellation of an active boundary
-    // (including before initialization settles) is an interrupted result.
-    this.lifetime.signal.throwIfAborted();
-    // Initialization only resolves configuration; it acquires no credentials or
-    // processes. Let run return the normal interrupted result for early aborts.
-    await this.initialized;
+    const manager = new ContentManager({
+      // Invalid configuration still transfers unused-source cleanup ownership;
+      // initialize rejects it before any preparation can use this fallback.
+      maxSnapshotBytes:
+        Number.isSafeInteger(this.options.maxContentBytes) &&
+        this.options.maxContentBytes! > 0
+          ? this.options.maxContentBytes!
+          : 64 * 1024 * 1024,
+      allowLoopback: true,
+    });
+    manager.own(input);
+    manager.own(options.contentSources);
+    this.managers.add(manager);
     const signal = combineSignals(this.lifetime.signal, options.signal);
-    const work = this.run(type, input, options, signal);
+    const work = (async () => {
+      // Calls after close are misuse. Active calls return interruption evidence.
+      this.lifetime.signal.throwIfAborted();
+      await this.initialized;
+      return this.run(type, input, options, signal, manager);
+    })();
     this.pending.add(work);
     try {
       return await work;
     } finally {
+      await manager.close();
+      this.managers.delete(manager);
       this.pending.delete(work);
     }
   }
@@ -374,6 +456,7 @@ export class Hooks {
     input: BoundaryInput<K>,
     options: BoundaryOptions,
     signal: AbortSignal,
+    manager: ContentManager,
   ): Promise<BoundaryResult<K>> {
     let event: any = cloneInput({
       ...input,
@@ -382,6 +465,7 @@ export class Hooks {
       id: input.id ?? randomUUID(),
       time: input.time ?? new Date().toISOString(),
     });
+    bindContentSources(type, event, options.contentSources);
     if (type === "session.start")
       event.manifest = structuredClone(this.manifest);
     const requestId = event.id;
@@ -393,6 +477,12 @@ export class Hooks {
       const snapshot = structuredClone(
         value ?? { candidate: null, permission: "none" },
       );
+      if (
+        !Object.values(Permission).includes(snapshot.permission as Permission)
+      )
+        throw new ConfigurationError([
+          { path: "initialState.permission", code: "INVALID_BOUNDARY_STATE" },
+        ]);
       const freeze = (value: unknown): void => {
         if (value !== null && typeof value === "object") {
           for (const child of Object.values(value)) freeze(child);
@@ -411,7 +501,14 @@ export class Hooks {
           result: { protocolVersion: "draft", effects: [] },
         },
         state: snapshotState(options.initialState),
+        get permission() {
+          return this.state.permission as `${Permission}`;
+        },
+        get input(): unknown {
+          return (this.event as any).tool?.input;
+        },
         errors: [],
+        diagnostics: [],
         observations: Promise.resolve([]),
         interrupted: true,
       } as BoundaryResult<K>;
@@ -455,11 +552,6 @@ export class Hooks {
       throw new ConfigurationError([
         { path: type, code: "INVALID_CAPABILITY_NARROWING" },
       ]);
-    const manager = new ContentManager({
-      maxSnapshotBytes: this.options.maxContentBytes ?? 64 * 1024 * 1024,
-      allowLoopback: true,
-    });
-    this.managers.add(manager);
     const called = new Set<Route>();
     const matching = this.routes.filter(
       (r) =>
@@ -515,6 +607,7 @@ export class Hooks {
         const s = route.subscription;
         let phase: DeliveryError["phase"] = "preparation";
         let deadline: AbortSignal | undefined;
+        let received = false;
         let budget: ReturnType<typeof deadlineAfter> | undefined;
         try {
           const projected = await raceAbort(
@@ -523,7 +616,13 @@ export class Hooks {
               s.content,
               s.upload,
               (url, init, upload) =>
-                this.fetchAuthenticated(url, init, upload.auth, "upload"),
+                this.fetchAuthenticated(
+                  url,
+                  init,
+                  upload.auth,
+                  "upload",
+                  route.backend.id,
+                ),
               signal,
             ),
             signal,
@@ -555,11 +654,14 @@ export class Hooks {
           phase = "interception";
           budget = deadlineAfter(s.timeoutMs, signal);
           deadline = budget.signal;
-          const reply = await raceAbort(
-            route.transport.request(request, deadline),
-            deadline,
-          );
+          const reply = await route.transport.request(request, deadline);
+          received = true;
           budget.check();
+          if (reply && typeof reply === "object" && "error" in reply)
+            throw new HookOperationalError(
+              "JSON_RPC_ERROR",
+              "Backend returned a JSON-RPC error",
+            );
           const decoded = validateInterceptResponse(reply);
           if (!decoded.ok || decoded.value.id !== requestId)
             throw new Error("Invalid interception response");
@@ -603,16 +705,16 @@ export class Hooks {
           effects = staged.effects;
           state = staged.state;
           shortCircuit = staged.shortCircuit;
-        } catch {
+        } catch (cause) {
           interrupted = signal.aborted;
           const syntheticDenial =
             !interrupted && s.failurePolicy === "fail-closed";
-          errors.push({
+          const error: DeliveryError = {
             backendId: route.backend.id,
             subscriptionIndex: route.index,
             phase,
             code: interrupted
-              ? "INTERRUPTED"
+              ? cancellationCode(signal)
               : deadline?.aborted
                 ? "DEADLINE_EXCEEDED"
                 : phase === "preparation"
@@ -620,7 +722,17 @@ export class Hooks {
                   : "DELIVERY_FAILED",
             failurePolicy: s.failurePolicy as "fail-open" | "fail-closed",
             syntheticDenial,
-          });
+          };
+          diagnosticCauses.set(
+            error,
+            classifyDiagnostic(
+              cause,
+              signal.aborted ? signal : deadline,
+              phase === "preparation",
+              received,
+            ),
+          );
+          errors.push(error);
           if (interrupted) break;
           if (syntheticDenial) {
             const denial: Effect = {
@@ -644,7 +756,7 @@ export class Hooks {
             e.type !== "return" &&
             !(e.type === "flow" && e.operation === "continue"),
         );
-      // Observers cannot hold the interception result or keep interrupted work alive.
+      // Observation deliveries are owned by this call, but cannot change its decision.
       const observations = matching.filter(
         (r) =>
           advertised.modes.includes("observe") &&
@@ -652,22 +764,12 @@ export class Hooks {
             ((shortCircuit || interrupted) && !called.has(r))),
       );
       let observed: Promise<DeliveryError[]> = Promise.resolve([]);
-      // Caller cancellation ends decisions, not best-effort settlement delivery.
-      // A closed client or a boundary canceled before any interception starts
-      // must not initiate new callbacks. Observers have their own bounded budget.
-      if (
-        !this.lifetime.signal.aborted &&
-        (!interrupted || called.size > 0) &&
-        observations.length
-      ) {
+      // Cancellation stops new work, including settlement notifications. Each
+      // observer budget can shorten, but never extend, the operation signal.
+      if (!signal.aborted && observations.length) {
         const snapshot = cloneInput(event);
         const jobs = observations.map((route) =>
-          this.observe(
-            route,
-            snapshot,
-            manager,
-            interrupted ? this.lifetime.signal : signal,
-          ),
+          this.observe(route, snapshot, manager, signal),
         );
         observed = Promise.all(jobs)
           .then((results) =>
@@ -679,12 +781,12 @@ export class Hooks {
             await manager.close();
             this.managers.delete(manager);
           });
-        this.pending.add(observed);
-        void observed.finally(() => this.pending.delete(observed));
+        await observed;
       } else {
         await manager.close();
         this.managers.delete(manager);
       }
+      interrupted ||= signal.aborted;
       if (type === "user.elicitation.result")
         this.forgetElicitation(event.parentEventId);
       if (
@@ -705,7 +807,14 @@ export class Hooks {
         event,
         response,
         state: snapshotState(state),
+        get permission() {
+          return this.state.permission as `${Permission}`;
+        },
+        get input(): unknown {
+          return (this.event as any).tool?.input;
+        },
         errors,
+        diagnostics: [...errors, ...(await observed)].map(deliveryDiagnostic),
         observations: observed,
         interrupted,
       } as BoundaryResult<K>;
@@ -727,6 +836,7 @@ export class Hooks {
       parentSignal,
     );
     const signal = budget.signal;
+    let preparing = true;
     try {
       const s = route.subscription;
       const projected = await raceAbort(
@@ -735,34 +845,43 @@ export class Hooks {
           s.content,
           s.upload,
           (url, init, upload) =>
-            this.fetchAuthenticated(url, init, upload.auth, "upload"),
+            this.fetchAuthenticated(
+              url,
+              init,
+              upload.auth,
+              "upload",
+              route.backend.id,
+            ),
           signal,
         ),
         signal,
       );
-      await raceAbort(
-        route.transport.notify(
-          {
-            jsonrpc: "2.0",
-            method: "hooks/observe",
-            params: { protocolVersion: "draft", event: projected },
-          },
-          signal,
-        ),
+      preparing = false;
+      await route.transport.notify(
+        {
+          jsonrpc: "2.0",
+          method: "hooks/observe",
+          params: { protocolVersion: "draft", event: projected },
+        },
         signal,
       );
-    } catch {
-      return {
+    } catch (cause) {
+      const error: DeliveryError = {
         backendId: route.backend.id,
         subscriptionIndex: route.index,
         phase: "observation",
         code: parentSignal.aborted
-          ? "INTERRUPTED"
+          ? cancellationCode(parentSignal)
           : signal.aborted
             ? "DEADLINE_EXCEEDED"
             : "DELIVERY_FAILED",
         syntheticDenial: false,
       };
+      diagnosticCauses.set(
+        error,
+        classifyDiagnostic(cause, signal, preparing, false),
+      );
+      return error;
     } finally {
       budget.dispose();
     }
@@ -823,201 +942,216 @@ export class Hooks {
     }
     return this.closed;
   }
+  private boundary<K extends EventType>(
+    type: K,
+    input: EventInput<K>,
+    options?: BoundaryOptions,
+  ): Promise<BoundaryResult<K>> {
+    // Generated projection preserves owned source identities; dispatch clones
+    // host facts, owns cleanup, and validates the canonical request before I/O.
+    return this.dispatch(
+      type,
+      toEventInput(type, input as any) as unknown as BoundaryInput<K>,
+      options,
+    );
+  }
+
   toolBefore(
-    input: BoundaryInput<"tool.before">,
+    input: EventInput<"tool.before">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"tool.before">> {
-    return this.dispatch("tool.before", input, options);
+    return this.boundary("tool.before", input, options);
   }
   toolAfter(
-    input: BoundaryInput<"tool.after">,
+    input: EventInput<"tool.after">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"tool.after">> {
-    return this.dispatch("tool.after", input, options);
+    return this.boundary("tool.after", input, options);
   }
   sessionStart(
-    input: BoundaryInput<"session.start">,
+    input: EventInput<"session.start">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"session.start">> {
-    return this.dispatch("session.start", input, options);
+    return this.boundary("session.start", input, options);
   }
   sessionEnd(
-    input: BoundaryInput<"session.end">,
+    input: EventInput<"session.end">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"session.end">> {
-    return this.dispatch("session.end", input, options);
+    return this.boundary("session.end", input, options);
   }
   configChangeBefore(
-    input: BoundaryInput<"config.change.before">,
+    input: EventInput<"config.change.before">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"config.change.before">> {
-    return this.dispatch("config.change.before", input, options);
+    return this.boundary("config.change.before", input, options);
   }
   configChangeAfter(
-    input: BoundaryInput<"config.change.after">,
+    input: EventInput<"config.change.after">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"config.change.after">> {
-    return this.dispatch("config.change.after", input, options);
+    return this.boundary("config.change.after", input, options);
   }
   turnStart(
-    input: BoundaryInput<"turn.start">,
+    input: EventInput<"turn.start">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"turn.start">> {
-    return this.dispatch("turn.start", input, options);
+    return this.boundary("turn.start", input, options);
   }
   turnFinishBefore(
-    input: BoundaryInput<"turn.finish.before">,
+    input: EventInput<"turn.finish.before">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"turn.finish.before">> {
-    return this.dispatch("turn.finish.before", input, options);
+    return this.boundary("turn.finish.before", input, options);
   }
   turnEnd(
-    input: BoundaryInput<"turn.end">,
+    input: EventInput<"turn.end">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"turn.end">> {
-    return this.dispatch("turn.end", input, options);
+    return this.boundary("turn.end", input, options);
   }
   turnProgress(
-    input: BoundaryInput<"turn.progress">,
+    input: EventInput<"turn.progress">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"turn.progress">> {
-    return this.dispatch("turn.progress", input, options);
+    return this.boundary("turn.progress", input, options);
   }
   modelRequestBefore(
-    input: BoundaryInput<"model.request.before">,
+    input: EventInput<"model.request.before">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"model.request.before">> {
-    return this.dispatch("model.request.before", input, options);
+    return this.boundary("model.request.before", input, options);
   }
   modelResponseAfter(
-    input: BoundaryInput<"model.response.after">,
+    input: EventInput<"model.response.after">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"model.response.after">> {
-    return this.dispatch("model.response.after", input, options);
+    return this.boundary("model.response.after", input, options);
   }
   modelError(
-    input: BoundaryInput<"model.error">,
+    input: EventInput<"model.error">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"model.error">> {
-    return this.dispatch("model.error", input, options);
+    return this.boundary("model.error", input, options);
   }
   modelSwitchBefore(
-    input: BoundaryInput<"model.switch.before">,
+    input: EventInput<"model.switch.before">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"model.switch.before">> {
-    return this.dispatch("model.switch.before", input, options);
+    return this.boundary("model.switch.before", input, options);
   }
   modelSwitchAfter(
-    input: BoundaryInput<"model.switch.after">,
+    input: EventInput<"model.switch.after">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"model.switch.after">> {
-    return this.dispatch("model.switch.after", input, options);
+    return this.boundary("model.switch.after", input, options);
   }
   toolPermissionRequest(
-    input: BoundaryInput<"tool.permission.request">,
+    input: EventInput<"tool.permission.request">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"tool.permission.request">> {
-    return this.dispatch("tool.permission.request", input, options);
+    return this.boundary("tool.permission.request", input, options);
   }
   toolPermissionResolved(
-    input: BoundaryInput<"tool.permission.resolved">,
+    input: EventInput<"tool.permission.resolved">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"tool.permission.resolved">> {
-    return this.dispatch("tool.permission.resolved", input, options);
+    return this.boundary("tool.permission.resolved", input, options);
   }
   toolProgress(
-    input: BoundaryInput<"tool.progress">,
+    input: EventInput<"tool.progress">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"tool.progress">> {
-    return this.dispatch("tool.progress", input, options);
+    return this.boundary("tool.progress", input, options);
   }
   toolBatchAfter(
-    input: BoundaryInput<"tool.batch.after">,
+    input: EventInput<"tool.batch.after">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"tool.batch.after">> {
-    return this.dispatch("tool.batch.after", input, options);
+    return this.boundary("tool.batch.after", input, options);
   }
   contextCompactBefore(
-    input: BoundaryInput<"context.compact.before">,
+    input: EventInput<"context.compact.before">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"context.compact.before">> {
-    return this.dispatch("context.compact.before", input, options);
+    return this.boundary("context.compact.before", input, options);
   }
   contextCompactAfter(
-    input: BoundaryInput<"context.compact.after">,
+    input: EventInput<"context.compact.after">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"context.compact.after">> {
-    return this.dispatch("context.compact.after", input, options);
+    return this.boundary("context.compact.after", input, options);
   }
   taskChangeBefore(
-    input: BoundaryInput<"task.change.before">,
+    input: EventInput<"task.change.before">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"task.change.before">> {
-    return this.dispatch("task.change.before", input, options);
+    return this.boundary("task.change.before", input, options);
   }
   taskChangeAfter(
-    input: BoundaryInput<"task.change.after">,
+    input: EventInput<"task.change.after">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"task.change.after">> {
-    return this.dispatch("task.change.after", input, options);
+    return this.boundary("task.change.after", input, options);
   }
   userAttention(
-    input: BoundaryInput<"user.attention">,
+    input: EventInput<"user.attention">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"user.attention">> {
-    return this.dispatch("user.attention", input, options);
+    return this.boundary("user.attention", input, options);
   }
   userElicitationRequest(
-    input: BoundaryInput<"user.elicitation.request">,
+    input: EventInput<"user.elicitation.request">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"user.elicitation.request">> {
-    return this.dispatch("user.elicitation.request", input, options);
+    return this.boundary("user.elicitation.request", input, options);
   }
   userElicitationResult(
-    input: BoundaryInput<"user.elicitation.result">,
+    input: EventInput<"user.elicitation.result">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"user.elicitation.result">> {
-    return this.dispatch("user.elicitation.result", input, options);
+    return this.boundary("user.elicitation.result", input, options);
   }
   userMessageInbound(
-    input: BoundaryInput<"user.message.inbound">,
+    input: EventInput<"user.message.inbound">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"user.message.inbound">> {
-    return this.dispatch("user.message.inbound", input, options);
+    return this.boundary("user.message.inbound", input, options);
   }
   userMessageOutbound(
-    input: BoundaryInput<"user.message.outbound">,
+    input: EventInput<"user.message.outbound">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"user.message.outbound">> {
-    return this.dispatch("user.message.outbound", input, options);
+    return this.boundary("user.message.outbound", input, options);
   }
   workspaceChangeBefore(
-    input: BoundaryInput<"workspace.change.before">,
+    input: EventInput<"workspace.change.before">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"workspace.change.before">> {
-    return this.dispatch("workspace.change.before", input, options);
+    return this.boundary("workspace.change.before", input, options);
   }
   workspaceChangeAfter(
-    input: BoundaryInput<"workspace.change.after">,
+    input: EventInput<"workspace.change.after">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"workspace.change.after">> {
-    return this.dispatch("workspace.change.after", input, options);
+    return this.boundary("workspace.change.after", input, options);
   }
   fileChanged(
-    input: BoundaryInput<"file.changed">,
+    input: EventInput<"file.changed">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"file.changed">> {
-    return this.dispatch("file.changed", input, options);
+    return this.boundary("file.changed", input, options);
   }
   hookFailure(
-    input: BoundaryInput<"hook.failure">,
+    input: EventInput<"hook.failure">,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<"hook.failure">> {
-    return this.dispatch("hook.failure", input, options);
+    return this.boundary("hook.failure", input, options);
   }
 }
 
 function cloneInput(value: any): any {
+  if (value instanceof ContentSource) return value.stream;
   if (value instanceof ReadableStream) return value;
   if (Array.isArray(value)) return value.map(cloneInput);
   if (value && typeof value === "object")
@@ -1109,7 +1243,10 @@ function deadlineAfter(ms: number, parent: AbortSignal) {
   const controller = new AbortController();
   const expires = Date.now() + ms;
   const timer = setTimeout(
-    () => controller.abort(new Error("Hook deadline exceeded")),
+    () =>
+      controller.abort(
+        new DOMException("Hook deadline exceeded", "TimeoutError"),
+      ),
     ms,
   );
   const signal = combineSignals(parent, controller.signal);
@@ -1118,8 +1255,114 @@ function deadlineAfter(ms: number, parent: AbortSignal) {
     dispose: () => clearTimeout(timer),
     check: () => {
       if (Date.now() >= expires)
-        controller.abort(new Error("Hook deadline exceeded"));
+        controller.abort(
+          new DOMException("Hook deadline exceeded", "TimeoutError"),
+        );
       signal.throwIfAborted();
     },
   };
+}
+
+function cancellationCode(
+  signal: AbortSignal,
+): "DEADLINE_EXCEEDED" | "INTERRUPTED" {
+  return signal.reason?.name === "TimeoutError"
+    ? "DEADLINE_EXCEEDED"
+    : "INTERRUPTED";
+}
+
+// Causes remain separate from delivery stage and never retain raw endpoint data.
+const diagnosticCauses = new WeakMap<
+  DeliveryError,
+  DeliveryDiagnostic["code"]
+>();
+function deliveryDiagnostic(error: DeliveryError): DeliveryDiagnostic {
+  return { ...error, code: diagnosticCauses.get(error) ?? "transport" };
+}
+function classifyDiagnostic(
+  cause: unknown,
+  signal: AbortSignal | undefined,
+  preparing: boolean,
+  received: boolean,
+): DeliveryDiagnostic["code"] {
+  if (signal?.aborted)
+    return signal.reason?.name === "TimeoutError"
+      ? "deadline_exceeded"
+      : "cancelled";
+  if (cause instanceof Error && cause.name === "TimeoutError")
+    return "deadline_exceeded";
+  if (cause instanceof HookOperationalError) {
+    if (cause.code === "JSON_RPC_ERROR") return "remote_rpc";
+    if (
+      [
+        "MALFORMED_UTF8",
+        "MALFORMED_JSON",
+        "MALFORMED_JSON_RPC",
+        "ID_MISMATCH",
+        "INCOMPATIBLE_VERSION",
+        "UNSUPPORTED_EVENT",
+        "UNSUPPORTED_EFFECT",
+        "MULTIPLE_EFFECTS",
+      ].includes(cause.code)
+    )
+      return "protocol_rejection";
+  }
+  if (preparing) return "preparation";
+  return received ? "protocol_rejection" : "transport";
+}
+
+/** Only schema-derived named slots may receive out-of-band sources. */
+function bindContentSources(
+  type: EventType,
+  event: any,
+  bindings: BoundaryOptions["contentSources"],
+): void {
+  const used = new Set<string>();
+  for (const binding of bindings ?? []) {
+    const source =
+      binding.source instanceof ContentSource
+        ? binding.source.stream
+        : binding.source;
+    if (!(source instanceof ReadableStream))
+      throw new TypeError("Expected an owned content source");
+    const path = binding.path;
+    const allowed = Object.values(contentSlots[type]).some((factory) => {
+      const bind = factory as (...args: any[]) => {
+        path: readonly (string | number)[];
+      };
+      const expected = (factory.length === 2 ? bind(0, source) : bind(source))
+        .path;
+      return (
+        path.length === expected.length &&
+        expected.every((part, index) =>
+          typeof part === "number"
+            ? Number.isSafeInteger(path[index]) && Number(path[index]) >= 0
+            : path[index] === part,
+        )
+      );
+    });
+    const key = JSON.stringify(path);
+    if (!allowed || used.has(key))
+      throw new TypeError("Invalid or duplicate content source slot");
+    used.add(key);
+    let parent = event;
+    for (const part of path.slice(0, -1)) {
+      parent = parent?.[part];
+      if (!parent || typeof parent !== "object")
+        throw new TypeError("Missing content source descriptor");
+    }
+    const last = path[path.length - 1]!;
+    const descriptor = parent[last];
+    if (descriptor && typeof descriptor === "object" && "kind" in descriptor) {
+      if (descriptor.body !== undefined)
+        throw new TypeError("Content source conflicts with an existing body");
+      descriptor.body = source;
+    } else {
+      if (descriptor !== undefined)
+        throw new TypeError(
+          "Content source conflicts with an existing reference",
+        );
+      parent[last] = source;
+    }
+  }
 }

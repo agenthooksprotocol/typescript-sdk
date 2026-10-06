@@ -169,7 +169,7 @@ test("public Hooks initializes, fans out stable identities, and returns accepted
   );
   const hooks = new Hooks(config(s.url, [sub(), sub()]), options());
   try {
-    const result = await hooks.toolBefore(tool());
+    const result = await hooks.dispatch("tool.before", tool());
     assert.deepEqual(result.event.tool.input, { x: 3 });
     assert.equal(result.errors.length, 0);
     assert.deepEqual(
@@ -217,7 +217,7 @@ test("compound response rejects atomically once, then fail-closed observes uncal
     options(),
   );
   try {
-    const r = await hooks.toolBefore(tool());
+    const r = await hooks.dispatch("tool.before", tool());
     assert.equal(r.errors.length, 1);
     assert.equal(r.errors[0].syntheticDenial, true);
     assert.deepEqual(r.event.tool.input, { x: 1 });
@@ -250,7 +250,7 @@ test("dispatch authentication failure honors fail-open without unauthenticated f
     options({ auth: provider }),
   );
   try {
-    const r = await hooks.toolBefore(tool());
+    const r = await hooks.dispatch("tool.before", tool());
     assert.equal(s.messages.length, 0);
     assert.equal(r.errors.length, 2);
     assert.equal(r.errors[0].syntheticDenial, false);
@@ -278,7 +278,7 @@ test("top-level authentication override can ignore challenge; retry preserves bo
     }),
   );
   try {
-    const r = await hooks.toolBefore(tool());
+    const r = await hooks.dispatch("tool.before", tool());
     assert.equal(r.errors.length, 0);
     assert.equal(calls, 2);
     assert.deepEqual(s.messages[0].message, s.messages[1].message);
@@ -298,7 +298,7 @@ test("deadline bounds even an authentication override that ignores its signal", 
   );
   try {
     const start = Date.now();
-    const r = await hooks.toolBefore(tool());
+    const r = await hooks.dispatch("tool.before", tool());
     assert.ok(Date.now() - start < 1000);
     assert.equal(r.errors[0].code, "DEADLINE_EXCEEDED");
     assert.equal(r.response.result.effects[0].type, "deny");
@@ -323,13 +323,13 @@ test("cancellation overrides fail-closed and close cancels pending work", async 
       }),
     }),
   );
-  const work = hooks.toolBefore(tool());
+  const work = hooks.dispatch("tool.before", tool());
   await waiting;
   await hooks.close();
   const result = await work;
   assert.equal(result.interrupted, true);
   assert.equal(result.errors[0].syntheticDenial, false);
-  await assert.rejects(hooks.toolBefore(tool()));
+  await assert.rejects(hooks.dispatch("tool.before", tool()));
 });
 
 test("configuration errors are structured and observable by initialized or any boundary", async () => {
@@ -341,7 +341,10 @@ test("configuration errors are structured and observable by initialized or any b
       e.code === "INVALID_CONFIGURATION" &&
       e.issues.length > 0,
   );
-  await assert.rejects(hooks.toolBefore(tool()), ConfigurationError);
+  await assert.rejects(
+    hooks.dispatch("tool.before", tool()),
+    ConfigurationError,
+  );
   await hooks.close();
 });
 
@@ -376,7 +379,7 @@ test("metadata observations do not consume bodies and native is opt-in", async (
       eventName: "native",
       payload: { hidden: true },
     };
-    await hooks.toolBefore(input);
+    await hooks.dispatch("tool.before", input);
     await until(() => s.messages.length === 1);
     assert.equal(reads, 0);
     assert.equal(s.messages[0].message.params.event.native, undefined);
@@ -446,7 +449,7 @@ test("uploads consume one raw snapshot, authenticate separately, and finish befo
     input.items = [
       { id: "same-item", kind: "text", mediaType: "text/plain", body },
     ];
-    const r = await hooks.toolBefore(input);
+    const r = await hooks.dispatch("tool.before", input);
     assert.equal(r.errors.length, 0);
     assert.equal(reads, 1);
     assert.deepEqual(seen, ["/upload-a", "/event", "/upload-b", "/event"]);
@@ -469,7 +472,7 @@ test("uploads consume one raw snapshot, authenticate separately, and finish befo
   }
 });
 
-test("observation failures are available without delaying interception", async () => {
+test("observation failures are available when the boundary call settles", async () => {
   const s = await server((m, q, r) => r.writeHead(503).end());
   const hooks = new Hooks(
     config(s.url, [
@@ -478,7 +481,7 @@ test("observation failures are available without delaying interception", async (
     options({ capabilities: { "tool.before": { modes: ["observe"] } } }),
   );
   try {
-    const r = await hooks.toolBefore(tool());
+    const r = await hooks.dispatch("tool.before", tool());
     assert.equal(r.errors.length, 0);
     const errors = await r.observations;
     assert.equal(errors.length, 1);
@@ -501,7 +504,7 @@ test("invalid and expired override credentials fail before a network request", a
       options({ auth: auth({ authenticate: async () => credential }) }),
     );
     try {
-      const r = await hooks.toolBefore(tool());
+      const r = await hooks.dispatch("tool.before", tool());
       assert.equal(r.errors.length, 1);
       assert.equal(s.messages.length, 0);
     } finally {
@@ -596,7 +599,7 @@ test("elicitation retains authorized request schema and rewrites result bodies b
     }),
   );
   try {
-    const request = await hooks.userElicitationRequest({
+    const request = await hooks.dispatch("user.elicitation.request", {
       session: { id: "session" },
       elicitation: {
         server: "mcp",
@@ -619,7 +622,7 @@ test("elicitation retains authorized request schema and rewrites result bodies b
       request.response.result.effects[0].value.content.name,
       "Alice",
     );
-    const result = await hooks.userElicitationResult({
+    const result = await hooks.dispatch("user.elicitation.result", {
       session: { id: "session" },
       parentEventId: request.event.id,
       elicitation: {
@@ -715,7 +718,7 @@ test("compaction rewrites body snapshots for later subscribers, and canonical co
     }),
   );
   try {
-    const result = await hooks.contextCompactBefore({
+    const result = await hooks.dispatch("context.compact.before", {
       trigger: "manual",
       items: [],
       instructions: streamItem("instructions", "original"),
@@ -723,7 +726,7 @@ test("compaction rewrites body snapshots for later subscribers, and canonical co
     assert.equal(result.errors.length, 0);
     assert.deepEqual(uploads, ["original", "replacement"]);
     assert.equal(result.event.instructions.id, "instructions");
-    const finish = await hooks.turnFinishBefore({
+    const finish = await hooks.dispatch("turn.finish.before", {
       turn: { id: "turn" },
       outcome: "completed",
       continuationCount: 0,
@@ -756,7 +759,7 @@ test("no-auth override cannot bypass an explicit binding or retry a challenge an
       options({ auth: auth({ authenticate: async () => undefined }) }),
     );
     try {
-      const r = await hooks.toolBefore(tool());
+      const r = await hooks.dispatch("tool.before", tool());
       assert.equal(r.errors.length, 1);
       assert.equal(r.errors[0].syntheticDenial, true);
       assert.equal(s.messages.length, explicit ? 0 : 1);
@@ -785,7 +788,7 @@ test("capability narrowing ignores opaque extensions but rejects known expansion
     options({ capabilities: { "tool.before": advertised } }),
   );
   try {
-    const accepted = await hooks.toolBefore(tool(), {
+    const accepted = await hooks.dispatch("tool.before", tool(), {
       capabilities: {
         effects: caps.effects,
         futureHint: { different: true },
@@ -811,7 +814,7 @@ test("capability narrowing ignores opaque extensions but rejects known expansion
       { elicitation: { url: {} } },
     ])
       await assert.rejects(
-        hooks.toolBefore(tool(), {
+        hooks.dispatch("tool.before", tool(), {
           capabilities: { effects: caps.effects, ...expansion },
         }),
         ConfigurationError,
@@ -853,7 +856,7 @@ for (const failure of ["timeout", "auth", "malformed"]) {
       }),
     );
     try {
-      const result = await hooks.toolBefore(tool());
+      const result = await hooks.dispatch("tool.before", tool());
       assert.deepEqual(result.response.result.effects, [
         { type: "deny", reason: "Required policy backend unavailable." },
       ]);
@@ -908,7 +911,7 @@ for (const exit of [
       options(),
     );
     try {
-      const result = await hooks.toolBefore(tool());
+      const result = await hooks.dispatch("tool.before", tool());
       assert.deepEqual(result.response.result.effects, []);
       assert.deepEqual(result.errors, []);
       const errors = await result.observations;
@@ -929,11 +932,16 @@ for (const exit of [
   });
 }
 
-test("caller cancellation after interception returns interrupts pending observations", async () => {
+test("caller cancellation interrupts observations within the pending boundary call", async () => {
   let entered;
   const waiting = new Promise((resolve) => {
     entered = resolve;
   });
+  let releaseAuthentication;
+  const authentication = new Promise((resolve) => {
+    releaseAuthentication = () => resolve({ token: "late-token" });
+  });
+  let requests = 0;
   const controller = new AbortController();
   const hooks = new Hooks(
     config("http://127.0.0.1:1", [
@@ -944,21 +952,32 @@ test("caller cancellation after interception returns interrupts pending observat
       },
     ]),
     options({
+      fetch: async () => {
+        requests++;
+        throw new Error("Canceled observation must not start a request");
+      },
       auth: auth({
         authenticate: () => {
           entered();
-          return new Promise(() => {});
+          return authentication;
         },
       }),
     }),
   );
   try {
-    const result = await hooks.toolBefore(tool(), {
-      signal: controller.signal,
-    });
+    let settled = false;
+    const work = hooks
+      .dispatch("tool.before", tool(), {
+        signal: controller.signal,
+      })
+      .then((result) => {
+        settled = true;
+        return result;
+      });
     await waiting;
+    assert.equal(settled, false);
     controller.abort();
-    assert.equal(result.interrupted, false);
+    const result = await work;
     assert.deepEqual(result.response.result.effects, []);
     assert.deepEqual(await result.observations, [
       {
@@ -969,7 +988,12 @@ test("caller cancellation after interception returns interrupts pending observat
         syntheticDenial: false,
       },
     ]);
+    releaseAuthentication();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(requests, 0);
+    assert.equal(result.interrupted, true);
   } finally {
+    releaseAuthentication();
     await hooks.close();
   }
 });

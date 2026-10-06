@@ -4,12 +4,38 @@ import {
   type ContentUpload,
 } from "../draft/generated.js";
 
-/** Producer content is metadata with the raw stream directly in `body`. */
+/** An owned native content stream, distinct from a receiver content reference.
+ * Construction does not read, lock, or upload the stream. Passing this source to
+ * an awaited SDK operation transfers cleanup responsibility to that operation;
+ * callers must not consume or reuse the underlying stream afterward. Native
+ * streams can prefetch independently; use highWaterMark: 0 to disable that.
+ */
+export class ContentSource {
+  readonly #stream: ReadableStream<Uint8Array>;
+
+  constructor(stream: ReadableStream<Uint8Array>) {
+    if (!(stream instanceof ReadableStream))
+      throw new Error("Content source requires a native ReadableStream");
+    this.#stream = stream;
+  }
+
+  /** Native stream identity is preserved for snapshot sharing and cleanup. */
+  get stream(): ReadableStream<Uint8Array> {
+    return this.#stream;
+  }
+}
+
+function sourceStream(value: unknown): ReadableStream<Uint8Array> | undefined {
+  if (value instanceof ContentSource) return value.stream;
+  return value instanceof ReadableStream ? value : undefined;
+}
+
+/** Producer content is metadata with an owned source or raw stream in `body`. */
 export interface StreamContentItem {
   id: string;
   kind: string;
   mediaType: string;
-  body: ReadableStream<Uint8Array>;
+  body: ContentSource | ReadableStream<Uint8Array>;
   category?: string;
   size?: number;
   sha256?: string;
@@ -60,19 +86,43 @@ export class ContentManager {
     this.allowLoopback = options.allowLoopback ?? false;
   }
 
+  /** Take cleanup ownership without selecting or reading any body. Call before
+   * routing/projection so unmatched and unauthorized sources are also closed.
+   * Close the manager in the operation's finally block, including on failure.
+   */
+  own(event: unknown): void {
+    this.lifetime.signal.throwIfAborted();
+    const visited = new WeakSet<object>();
+    const visit = (value: unknown): void => {
+      if (value === null || typeof value !== "object" || visited.has(value))
+        return;
+      visited.add(value);
+      const stream = sourceStream(value);
+      if (stream) {
+        this.seenStreams.add(stream);
+        return;
+      }
+      for (const child of Object.values(value)) visit(child);
+    };
+    visit(event);
+  }
+
   /** Reads local producer bytes for composition, never remote references.
    * Reuses the same bounded snapshot as prepare; returns an independent copy.
    * Aborting the initial read cancels the stream and leaves that snapshot failed.
    */
   async readBody(
-    body: ReadableStream<Uint8Array>,
+    body: ContentSource | ReadableStream<Uint8Array>,
     signal?: AbortSignal,
   ): Promise<Uint8Array> {
     this.lifetime.signal.throwIfAborted();
+    this.own(body);
     signal?.throwIfAborted();
-    if (!(body instanceof ReadableStream))
-      throw new Error("Content body must be a raw ReadableStream");
-    this.seenStreams.add(body);
+    const stream = sourceStream(body);
+    if (!stream)
+      throw new Error(
+        "Content body must be a ContentSource or raw ReadableStream",
+      );
     const controller = new AbortController();
     const abort = () =>
       controller.abort(signal?.reason ?? this.lifetime.signal.reason);
@@ -81,7 +131,7 @@ export class ContentManager {
     if (signal?.aborted || this.lifetime.signal.aborted) abort();
     try {
       const snapshot = await abortable(
-        this.snapshot(body, controller.signal),
+        this.snapshot(stream, controller.signal),
         controller.signal,
       );
       controller.signal.throwIfAborted();
@@ -103,6 +153,7 @@ export class ContentManager {
     signal?: AbortSignal,
   ): Promise<any> {
     this.lifetime.signal.throwIfAborted();
+    this.own(event);
     signal?.throwIfAborted();
     const omitted = Symbol("omitted file content");
     const visit = async (
@@ -129,15 +180,14 @@ export class ContentManager {
         return Promise.all(
           value.map((child, index) => visit(child, [...path, index])),
         );
-      if (value instanceof ReadableStream) return value;
+      if (sourceStream(value)) return value;
       if (
         isContentPath(path) &&
         typeof value.id === "string" &&
         typeof value.kind === "string" &&
         typeof value.mediaType === "string"
       ) {
-        if (value.body instanceof ReadableStream)
-          this.seenStreams.add(value.body);
+        const stream = sourceStream(value.body);
         const category =
           value.kind === "reasoning"
             ? "reasoning"
@@ -158,9 +208,9 @@ export class ContentManager {
           result.gap = await visit(value.gap, [...path, "gap"]);
           return result;
         }
-        if (!(value.body instanceof ReadableStream))
+        if (!stream)
           throw new Error(
-            "Body selection requires a raw ReadableStream, not a receiver reference",
+            "Body selection requires a ContentSource or raw ReadableStream, not a receiver reference",
           );
         if (!upload)
           throw new Error("Body selection requires upload configuration");
@@ -172,12 +222,15 @@ export class ContentManager {
         this.lifetime.signal.addEventListener("abort", abort, { once: true });
         if (signal?.aborted || this.lifetime.signal.aborted) abort();
         const timeout = setTimeout(
-          () => controller.abort(new Error("Content upload timed out")),
+          () =>
+            controller.abort(
+              new DOMException("Content upload timed out", "TimeoutError"),
+            ),
           upload.timeoutMs,
         );
         try {
           const snapshot = await abortable(
-            this.snapshot(value.body, controller.signal),
+            this.snapshot(stream, controller.signal),
             controller.signal,
           );
           if (value.size !== undefined && value.size !== snapshot.size)

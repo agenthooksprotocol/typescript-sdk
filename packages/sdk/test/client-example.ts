@@ -1,10 +1,17 @@
 import { readFile } from "node:fs/promises";
-import { Hooks, type EventCapabilities } from "@agenthooksprotocol/sdk/client";
+import {
+  Hooks,
+  capabilities as capability,
+  events,
+  state,
+  Permission,
+  type EventCapabilities,
+} from "@agenthooksprotocol/sdk/client";
 
 // Hooks validates registration; JSON.parse alone does not validate it.
 const config: unknown = JSON.parse(await readFile("hooks.json", "utf8"));
 const capabilities: EventCapabilities = {
-  "tool.before": { effects: ["deny"] },
+  [events.toolBefore]: capability.intercept().deny(),
 };
 const hooks = new Hooks(config, {
   source: "urn:example:agent",
@@ -18,15 +25,17 @@ try {
   // Boundary calls wait for initialization internally.
   const result = await hooks.toolBefore(
     {
-      call: { id: "read-1" },
+      callId: "read-1",
       path: "native",
-      tool: { name: "read_file", origin: "native", input: args },
+      name: "read_file",
+      origin: "native",
+      input: args,
     },
-    { initialState: { permission: "none", candidate: null } },
+    { initialState: state.initial(Permission.None) },
   );
 
-  for (const error of result.errors) console.error(error);
-  const denied = result.state.permission === "deny";
+  for (const diagnostic of result.diagnostics) console.error(diagnostic);
+  const denied = result.permission === Permission.Deny;
   if (result.interrupted || denied) {
     throw new Error("File read interrupted or denied by hooks");
   }

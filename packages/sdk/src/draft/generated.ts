@@ -16886,3 +16886,2258 @@ export function encodeWireMessage(value: WireMessage): string {
   return encodeJson(value as JsonValue);
 }
 export const wireMessageSchemaRevision = SCHEMA_REVISION;
+
+export type DeliveryDiagnosticCode =
+  | "protocol_rejection"
+  | "remote_rpc"
+  | "transport"
+  | "cancelled"
+  | "deadline_exceeded"
+  | "preparation"
+  | "capacity";
+export type ConfigChangeAfterInput = {
+  change: {
+    mcpServers?: Array<{} & AdditionalProperties>;
+    path?: string;
+    scope: string;
+    settings: Array<string>;
+    source: string;
+    summary: string;
+  } & AdditionalProperties;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type ConfigChangeBeforeInput = {
+  change: {
+    path?: string;
+    scope: string;
+    settings: Array<string>;
+    source: string;
+    summary: string;
+  } & AdditionalProperties;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type ContextCompactAfterInput = {
+  execution: ExecutionEventExecution;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ModelVisibleItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  removed: Array<
+    {
+      id: string;
+    } & AdditionalProperties
+  >;
+  session?: Session;
+  summary: ModelVisibleItem;
+  synthesized?: boolean;
+  time?: string;
+  tokenCounts?: ExecutionEventTokencounts;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type ContextCompactBeforeInput = {
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  instructions?: ContentItem;
+  items: Array<ModelVisibleItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  tokenCounts?: ExecutionEventTokencounts;
+  trigger: OpenString<"auto" | "manual" | "hook">;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type FileChangedInput = {
+  changes: Array<
+    {
+      after?: ContentReference;
+      agentCaused: boolean;
+      before?: ContentReference;
+      operation: OpenString<"create" | "update" | "remove">;
+      path: string;
+    } & AdditionalProperties
+  >;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type HookFailureInput = {
+  extensions?: Extensions;
+  failure: {
+    backendId: string;
+    policy: OpenString<"fail-open" | "fail-closed">;
+    reason: string;
+  } & AdditionalProperties;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type ModelErrorInput = {
+  attempt: ExecutionEventAttempt;
+  error: ExecutionEventError;
+  execution: ExecutionEventExecution & {
+    status?: "executed";
+  } & AdditionalProperties;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  latencyMs?: number;
+  model: ExecutionEventModel;
+  native?: NativeEvent;
+  parentEventId?: string;
+  recovery?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+  usage?: ExecutionEventAttemptusage;
+};
+export type ModelRequestBeforeInput = {
+  attempt: ExecutionEventAttempt;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items: Array<ModelVisibleItem>;
+  model: ExecutionEventModel;
+  native?: NativeEvent;
+  params: {} & AdditionalProperties;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type ModelResponseAfterInput = {
+  attempt: ExecutionEventAttempt;
+  execution: ExecutionEventExecution;
+  extensions?: Extensions;
+  finishReason: string;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items: Array<ModelVisibleItem>;
+  latencyMs?: number;
+  model: ExecutionEventModel;
+  native?: NativeEvent;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+  usage?: ExecutionEventAttemptusage;
+};
+export type ModelSwitchAfterInput = {
+  current: ExecutionEventModel;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  previous: ExecutionEventModel;
+  reason: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type ModelSwitchBeforeInput = {
+  current: ExecutionEventModel;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  pricing?: {
+    currency: string;
+    inputPerMillionTokens?: number;
+    outputPerMillionTokens?: number;
+  } & AdditionalProperties;
+  proposed: ExecutionEventModel;
+  reason: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type SessionEndInput = {
+  counters?: {} & AdditionalProperties;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  outcome: OpenString<"completed" | "cancelled" | "error" | "unknown">;
+  parentEventId?: string;
+  reason: string;
+  session: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type SessionStartInput = {
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  harness: {
+    name: string;
+    version: string;
+  } & AdditionalProperties;
+  id?: string;
+  items: Array<ModelVisibleItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  permissionMode: string;
+  resumedFrom?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+  session: Session;
+  synthesized?: boolean;
+  time?: string;
+  trigger: OpenString<"startup" | "resume" | "clear" | "compact" | "fork">;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type TaskChangeAfterInput = {
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  task: {
+    change: {} & AdditionalProperties;
+    description?: string;
+    id: string;
+    operation: OpenString<"create" | "update" | "remove">;
+    prior?: {} & AdditionalProperties;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type TaskChangeBeforeInput = {
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  task: {
+    change: {} & AdditionalProperties;
+    description?: string;
+    id: string;
+    operation: OpenString<"create" | "update" | "remove">;
+    prior?: {} & AdditionalProperties;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type ToolAfterInput<T = unknown> = {
+  batch?: ExecutionEventBatch;
+  callId: string;
+  callSynthesized?: boolean;
+  durationMs?: number;
+  error?: ExecutionEventError;
+  execution: ExecutionEventExecution;
+  extensions?: Extensions;
+  fileChanges?: Array<ExecutionEventFilechange>;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items: Array<ModelVisibleItem>;
+  native?: NativeEvent;
+  outcome: OpenString<"ok" | "error" | "denied" | "cancelled" | "timeout">;
+  parentEventId?: string;
+  path: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  input: T;
+  toolKind?: string;
+  toolMcp?: ExecutionEventMcp;
+  name: string;
+  origin: OpenString<"native" | "mcp">;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type ToolBatchAfterInput = {
+  batch: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+  calls: Array<
+    {
+      batch?: ExecutionEventBatch;
+      call: {
+        id: string;
+        synthesized?: boolean;
+      } & AdditionalProperties;
+      execution: ExecutionEventExecution;
+      outcome: OpenString<"ok" | "error" | "denied" | "cancelled" | "timeout">;
+      path: string;
+      tool: ExecutionEventTool;
+    } & AdditionalProperties
+  >;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type ToolBeforeInput<T = unknown> = {
+  batch?: ExecutionEventBatch;
+  callId: string;
+  callSynthesized?: boolean;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  path: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  input: T;
+  toolKind?: string;
+  toolMcp?: ExecutionEventMcp;
+  name: string;
+  origin: OpenString<"native" | "mcp">;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type ToolPermissionRequestInput<T = unknown> = {
+  batch?: ExecutionEventBatch;
+  callId: string;
+  callSynthesized?: boolean;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  path: string;
+  sandboxBypass: boolean;
+  session?: Session;
+  suggestions: Array<{} & AdditionalProperties>;
+  synthesized?: boolean;
+  time?: string;
+  input: T;
+  toolKind?: string;
+  toolMcp?: ExecutionEventMcp;
+  name: string;
+  origin: OpenString<"native" | "mcp">;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type ToolPermissionResolvedInput<T = unknown> = {
+  batch?: ExecutionEventBatch;
+  callId: string;
+  callSynthesized?: boolean;
+  decidedBy: OpenString<"user" | "policy" | "hook" | "auto" | "classifier">;
+  decision: OpenString<"allow" | "deny">;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  path: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  input: T;
+  toolKind?: string;
+  toolMcp?: ExecutionEventMcp;
+  name: string;
+  origin: OpenString<"native" | "mcp">;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type ToolProgressInput<T = unknown> = {
+  backgrounded: boolean;
+  batch?: ExecutionEventBatch;
+  callId: string;
+  callSynthesized?: boolean;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  partialOutput: ModelVisibleItem;
+  path: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  input: T;
+  toolKind?: string;
+  toolMcp?: ExecutionEventMcp;
+  name: string;
+  origin: OpenString<"native" | "mcp">;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type TurnEndInput = {
+  continuationCount: number;
+  error?: ExecutionEventError;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items: Array<ModelVisibleItem>;
+  lastAssistantItem?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+  native?: NativeEvent;
+  outcome: OpenString<"completed" | "failed" | "cancelled" | "max_iterations">;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+  usage?: ExecutionEventTurnusage;
+};
+export type TurnFinishBeforeInput = {
+  continuationCount: number;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items: Array<ModelVisibleItem>;
+  lastAssistantItem?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+  native?: NativeEvent;
+  outcome: OpenString<"completed" | "failed" | "cancelled" | "max_iterations">;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+  usage?: ExecutionEventTurnusage;
+};
+export type TurnProgressInput = {
+  delta: ModelVisibleItem;
+  extensions?: Extensions;
+  final: boolean;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  item: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type TurnStartInput = {
+  expandedFrom?: string;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items: Array<ModelVisibleItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  trigger: OpenString<"user" | "continuation" | "hook" | "external">;
+  turn: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type UserAttentionInput = {
+  attention: {
+    kind: string;
+    message: Array<ContentItem>;
+    title: Array<ContentItem>;
+  } & AdditionalProperties;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type UserElicitationRequestInput = {
+  elicitation: {
+    mode: OpenString<"form" | "url">;
+    request?: ContentItem & {
+      mediaType?: "application/json";
+    } & AdditionalProperties;
+    server: string;
+  } & AdditionalProperties;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type UserElicitationResultInput = {
+  elicitation: {
+    action: OpenString<"accept" | "decline" | "cancel">;
+    mode: OpenString<"form" | "url">;
+    result?: ContentItem & {
+      mediaType?: "application/json";
+    } & AdditionalProperties;
+    server: string;
+  } & AdditionalProperties;
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type UserMessageInboundInput = {
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  message: {
+    channel: string;
+    sender: string;
+    text: Array<ContentItem>;
+  } & AdditionalProperties;
+  native?: NativeEvent;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type UserMessageOutboundInput = {
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  message: {
+    channel: string;
+    payload: Array<ContentItem>;
+  } & AdditionalProperties;
+  native?: NativeEvent;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+};
+export type WorkspaceChangeAfterInput = {
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+  workspace: {
+    change: {
+      cwd?: string;
+      workspaceRoots?: Array<string>;
+    } & AdditionalProperties;
+    kind: OpenString<"cwd" | "roots" | "switch">;
+    prior?: {
+      cwd?: string;
+      workspaceRoots?: Array<string>;
+    } & AdditionalProperties;
+    reason?: string;
+  } & AdditionalProperties;
+};
+export type WorkspaceChangeBeforeInput = {
+  extensions?: Extensions;
+  gaps?: Array<
+    {
+      path: string;
+      reason: string;
+    } & AdditionalProperties
+  >;
+  id?: string;
+  items?: Array<ContentItem>;
+  native?: NativeEvent;
+  parentEventId?: string;
+  session?: Session;
+  synthesized?: boolean;
+  time?: string;
+  turn?: {
+    id: string;
+    synthesized?: boolean;
+  } & AdditionalProperties;
+  workspace: {
+    change: {
+      cwd?: string;
+      workspaceRoots?: Array<string>;
+    } & AdditionalProperties;
+    kind: OpenString<"cwd" | "roots" | "switch">;
+    prior?: {
+      cwd?: string;
+      workspaceRoots?: Array<string>;
+    } & AdditionalProperties;
+    reason?: string;
+  } & AdditionalProperties;
+};
+export interface EventInputs {
+  "config.change.after": ConfigChangeAfterInput;
+  "config.change.before": ConfigChangeBeforeInput;
+  "context.compact.after": ContextCompactAfterInput;
+  "context.compact.before": ContextCompactBeforeInput;
+  "file.changed": FileChangedInput;
+  "hook.failure": HookFailureInput;
+  "model.error": ModelErrorInput;
+  "model.request.before": ModelRequestBeforeInput;
+  "model.response.after": ModelResponseAfterInput;
+  "model.switch.after": ModelSwitchAfterInput;
+  "model.switch.before": ModelSwitchBeforeInput;
+  "session.end": SessionEndInput;
+  "session.start": SessionStartInput;
+  "task.change.after": TaskChangeAfterInput;
+  "task.change.before": TaskChangeBeforeInput;
+  "tool.after": ToolAfterInput;
+  "tool.batch.after": ToolBatchAfterInput;
+  "tool.before": ToolBeforeInput;
+  "tool.permission.request": ToolPermissionRequestInput;
+  "tool.permission.resolved": ToolPermissionResolvedInput;
+  "tool.progress": ToolProgressInput;
+  "turn.end": TurnEndInput;
+  "turn.finish.before": TurnFinishBeforeInput;
+  "turn.progress": TurnProgressInput;
+  "turn.start": TurnStartInput;
+  "user.attention": UserAttentionInput;
+  "user.elicitation.request": UserElicitationRequestInput;
+  "user.elicitation.result": UserElicitationResultInput;
+  "user.message.inbound": UserMessageInboundInput;
+  "user.message.outbound": UserMessageOutboundInput;
+  "workspace.change.after": WorkspaceChangeAfterInput;
+  "workspace.change.before": WorkspaceChangeBeforeInput;
+}
+const INPUT_PATHS: Record<
+  keyof EventInputs,
+  Record<string, readonly string[]>
+> = {
+  "config.change.after": {
+    change: ["change"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+  },
+  "config.change.before": {
+    change: ["change"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+  },
+  "context.compact.after": {
+    execution: ["execution"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    removed: ["removed"],
+    session: ["session"],
+    summary: ["summary"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    tokenCounts: ["tokenCounts"],
+    turn: ["turn"],
+  },
+  "context.compact.before": {
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    instructions: ["instructions"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    tokenCounts: ["tokenCounts"],
+    trigger: ["trigger"],
+    turn: ["turn"],
+  },
+  "file.changed": {
+    changes: ["changes"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+  },
+  "hook.failure": {
+    extensions: ["extensions"],
+    failure: ["failure"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+  },
+  "model.error": {
+    attempt: ["attempt"],
+    error: ["error"],
+    execution: ["execution"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    latencyMs: ["latencyMs"],
+    model: ["model"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    recovery: ["recovery"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+    usage: ["usage"],
+  },
+  "model.request.before": {
+    attempt: ["attempt"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    model: ["model"],
+    native: ["native"],
+    params: ["params"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+  },
+  "model.response.after": {
+    attempt: ["attempt"],
+    execution: ["execution"],
+    extensions: ["extensions"],
+    finishReason: ["finishReason"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    latencyMs: ["latencyMs"],
+    model: ["model"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+    usage: ["usage"],
+  },
+  "model.switch.after": {
+    current: ["current"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    previous: ["previous"],
+    reason: ["reason"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+  },
+  "model.switch.before": {
+    current: ["current"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    pricing: ["pricing"],
+    proposed: ["proposed"],
+    reason: ["reason"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+  },
+  "session.end": {
+    counters: ["counters"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    outcome: ["outcome"],
+    parentEventId: ["parentEventId"],
+    reason: ["reason"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+  },
+  "session.start": {
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    harness: ["harness"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    permissionMode: ["permissionMode"],
+    resumedFrom: ["resumedFrom"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    trigger: ["trigger"],
+    turn: ["turn"],
+  },
+  "task.change.after": {
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    task: ["task"],
+    time: ["time"],
+    turn: ["turn"],
+  },
+  "task.change.before": {
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    task: ["task"],
+    time: ["time"],
+    turn: ["turn"],
+  },
+  "tool.after": {
+    batch: ["batch"],
+    callId: ["call", "id"],
+    callSynthesized: ["call", "synthesized"],
+    durationMs: ["durationMs"],
+    error: ["error"],
+    execution: ["execution"],
+    extensions: ["extensions"],
+    fileChanges: ["fileChanges"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    outcome: ["outcome"],
+    parentEventId: ["parentEventId"],
+    path: ["path"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    input: ["tool", "input"],
+    toolKind: ["tool", "kind"],
+    toolMcp: ["tool", "mcp"],
+    name: ["tool", "name"],
+    origin: ["tool", "origin"],
+    turn: ["turn"],
+  },
+  "tool.batch.after": {
+    batch: ["batch"],
+    calls: ["calls"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+  },
+  "tool.before": {
+    batch: ["batch"],
+    callId: ["call", "id"],
+    callSynthesized: ["call", "synthesized"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    path: ["path"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    input: ["tool", "input"],
+    toolKind: ["tool", "kind"],
+    toolMcp: ["tool", "mcp"],
+    name: ["tool", "name"],
+    origin: ["tool", "origin"],
+    turn: ["turn"],
+  },
+  "tool.permission.request": {
+    batch: ["batch"],
+    callId: ["call", "id"],
+    callSynthesized: ["call", "synthesized"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    path: ["path"],
+    sandboxBypass: ["sandboxBypass"],
+    session: ["session"],
+    suggestions: ["suggestions"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    input: ["tool", "input"],
+    toolKind: ["tool", "kind"],
+    toolMcp: ["tool", "mcp"],
+    name: ["tool", "name"],
+    origin: ["tool", "origin"],
+    turn: ["turn"],
+  },
+  "tool.permission.resolved": {
+    batch: ["batch"],
+    callId: ["call", "id"],
+    callSynthesized: ["call", "synthesized"],
+    decidedBy: ["decidedBy"],
+    decision: ["decision"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    path: ["path"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    input: ["tool", "input"],
+    toolKind: ["tool", "kind"],
+    toolMcp: ["tool", "mcp"],
+    name: ["tool", "name"],
+    origin: ["tool", "origin"],
+    turn: ["turn"],
+  },
+  "tool.progress": {
+    backgrounded: ["backgrounded"],
+    batch: ["batch"],
+    callId: ["call", "id"],
+    callSynthesized: ["call", "synthesized"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    partialOutput: ["partialOutput"],
+    path: ["path"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    input: ["tool", "input"],
+    toolKind: ["tool", "kind"],
+    toolMcp: ["tool", "mcp"],
+    name: ["tool", "name"],
+    origin: ["tool", "origin"],
+    turn: ["turn"],
+  },
+  "turn.end": {
+    continuationCount: ["continuationCount"],
+    error: ["error"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    lastAssistantItem: ["lastAssistantItem"],
+    native: ["native"],
+    outcome: ["outcome"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+    usage: ["usage"],
+  },
+  "turn.finish.before": {
+    continuationCount: ["continuationCount"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    lastAssistantItem: ["lastAssistantItem"],
+    native: ["native"],
+    outcome: ["outcome"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+    usage: ["usage"],
+  },
+  "turn.progress": {
+    delta: ["delta"],
+    extensions: ["extensions"],
+    final: ["final"],
+    gaps: ["gaps"],
+    id: ["id"],
+    item: ["item"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+  },
+  "turn.start": {
+    expandedFrom: ["expandedFrom"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    trigger: ["trigger"],
+    turn: ["turn"],
+  },
+  "user.attention": {
+    attention: ["attention"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+  },
+  "user.elicitation.request": {
+    elicitation: ["elicitation"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+  },
+  "user.elicitation.result": {
+    elicitation: ["elicitation"],
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+  },
+  "user.message.inbound": {
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    message: ["message"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+  },
+  "user.message.outbound": {
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    message: ["message"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+  },
+  "workspace.change.after": {
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+    workspace: ["workspace"],
+  },
+  "workspace.change.before": {
+    extensions: ["extensions"],
+    gaps: ["gaps"],
+    id: ["id"],
+    items: ["items"],
+    native: ["native"],
+    parentEventId: ["parentEventId"],
+    session: ["session"],
+    synthesized: ["synthesized"],
+    time: ["time"],
+    turn: ["turn"],
+    workspace: ["workspace"],
+  },
+};
+/** Project host facts only. The runtime supplies source, IDs, time, and manifest and validates the assembled request. */
+export function toEventInput<K extends keyof EventInputs>(
+  type: K,
+  input: EventInputs[K],
+): Record<string, JsonValue> {
+  const result: Record<string, JsonValue> = { type };
+  for (const [field, path] of Object.entries(INPUT_PATHS[type])) {
+    const value = (input as unknown as Record<string, JsonValue | undefined>)[
+      field
+    ];
+    if (value === undefined) continue;
+    let target = result;
+    for (const key of path.slice(0, -1)) {
+      if (target[key] === undefined) target[key] = {};
+      target = target[key] as Record<string, JsonValue>;
+    }
+    const leaf = path[path.length - 1];
+    if (leaf === undefined) throw new TypeError("empty generated input path");
+    target[leaf] = value;
+  }
+  return result;
+}
+
+export type EventType = keyof EventInputs;
+export const events = {
+  configChangeAfter: "config.change.after",
+  configChangeBefore: "config.change.before",
+  contextCompactAfter: "context.compact.after",
+  contextCompactBefore: "context.compact.before",
+  fileChanged: "file.changed",
+  hookFailure: "hook.failure",
+  modelError: "model.error",
+  modelRequestBefore: "model.request.before",
+  modelResponseAfter: "model.response.after",
+  modelSwitchAfter: "model.switch.after",
+  modelSwitchBefore: "model.switch.before",
+  sessionEnd: "session.end",
+  sessionStart: "session.start",
+  taskChangeAfter: "task.change.after",
+  taskChangeBefore: "task.change.before",
+  toolAfter: "tool.after",
+  toolBatchAfter: "tool.batch.after",
+  toolBefore: "tool.before",
+  toolPermissionRequest: "tool.permission.request",
+  toolPermissionResolved: "tool.permission.resolved",
+  toolProgress: "tool.progress",
+  turnEnd: "turn.end",
+  turnFinishBefore: "turn.finish.before",
+  turnProgress: "turn.progress",
+  turnStart: "turn.start",
+  userAttention: "user.attention",
+  userElicitationRequest: "user.elicitation.request",
+  userElicitationResult: "user.elicitation.result",
+  userMessageInbound: "user.message.inbound",
+  userMessageOutbound: "user.message.outbound",
+  workspaceChangeAfter: "workspace.change.after",
+  workspaceChangeBefore: "workspace.change.before",
+} as const;
+
+/** Named out-of-band content bindings. Streams are never inserted into wire models. */
+export interface ContentSourceBinding<S> {
+  readonly path: readonly (string | number)[];
+  readonly source: S;
+}
+export const contentSlots = {
+  "config.change.after": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "config.change.before": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "context.compact.after": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+    summary<S>(source: S): ContentSourceBinding<S> {
+      return { path: ["summary"], source };
+    },
+  },
+  "context.compact.before": {
+    instructions<S>(source: S): ContentSourceBinding<S> {
+      return { path: ["instructions"], source };
+    },
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "file.changed": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "hook.failure": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "model.error": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "model.request.before": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "model.response.after": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "model.switch.after": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "model.switch.before": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "session.end": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "session.start": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "task.change.after": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "task.change.before": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "tool.after": {
+    fileChangesAfter<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["fileChanges", index, "after"], source };
+    },
+    fileChangesBefore<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["fileChanges", index, "before"], source };
+    },
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "tool.batch.after": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "tool.before": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "tool.permission.request": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "tool.permission.resolved": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "tool.progress": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+    partialOutput<S>(source: S): ContentSourceBinding<S> {
+      return { path: ["partialOutput"], source };
+    },
+  },
+  "turn.end": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "turn.finish.before": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "turn.progress": {
+    delta<S>(source: S): ContentSourceBinding<S> {
+      return { path: ["delta"], source };
+    },
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "turn.start": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "user.attention": {
+    attentionMessage<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["attention", "message", index], source };
+    },
+    attentionTitle<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["attention", "title", index], source };
+    },
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "user.elicitation.request": {
+    elicitationRequest<S>(source: S): ContentSourceBinding<S> {
+      return { path: ["elicitation", "request"], source };
+    },
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "user.elicitation.result": {
+    elicitationResult<S>(source: S): ContentSourceBinding<S> {
+      return { path: ["elicitation", "result"], source };
+    },
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "user.message.inbound": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+    messageText<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["message", "text", index], source };
+    },
+  },
+  "user.message.outbound": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+    messagePayload<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["message", "payload", index], source };
+    },
+  },
+  "workspace.change.after": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+  "workspace.change.before": {
+    items<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["items", index], source };
+    },
+  },
+} as const;
+export enum Permission {
+  None = "none",
+  Allow = "allow",
+  Ask = "ask",
+  Deny = "deny",
+}
+
+export type InitialState = NonNullable<InterceptRequest["params"]["state"]>;
+export type StateCandidate = NonNullable<InitialState["candidate"]>;
+export const state = {
+  candidate(
+    value: JsonValue,
+    provenance?: Record<string, JsonValue>,
+  ): StateCandidate {
+    return provenance === undefined ? { value } : { value, provenance };
+  },
+  initial(
+    permission: Permission,
+    options: Partial<InitialState> = {},
+  ): InitialState {
+    return { ...options, candidate: options.candidate ?? null, permission };
+  },
+} as const;
+
+/** Canonical effect constructors; grants and admission remain runtime checks. */
+export const effects = {
+  deny(reason: string): Effect {
+    return { reason, type: "deny" };
+  },
+  allow(): Effect {
+    return { type: "allow" };
+  },
+  ask(): Effect {
+    return { type: "ask" };
+  },
+  modify(
+    operation: OpenString<"replace" | "merge">,
+    target: OpenString<
+      | "input"
+      | "output"
+      | "prompt"
+      | "request"
+      | "response"
+      | "content"
+      | "instructions"
+      | "summary"
+      | "workspace"
+    >,
+    value: JsonValue,
+  ): Effect {
+    return { operation, target, type: "modify", value };
+  },
+  message(text: string): Effect {
+    return { text, type: "message" };
+  },
+  return(value: JsonValue): Effect {
+    return { type: "return", value };
+  },
+  flow_stop(reason: string): Effect {
+    return { operation: "stop", reason, type: "flow" };
+  },
+  flow_continue(): Effect {
+    return { operation: "continue", type: "flow" };
+  },
+  inject_append(
+    deliverAt: OpenString<"now" | "next_turn">,
+    value: JsonValue,
+  ): Effect {
+    return {
+      deliverAt,
+      operation: "append",
+      target: "context",
+      type: "inject",
+      value,
+    };
+  },
+  modify_input: {
+    replace(value: JsonValue): Effect {
+      return { type: "modify", target: "input", operation: "replace", value };
+    },
+    merge(value: JsonValue): Effect {
+      return { type: "modify", target: "input", operation: "merge", value };
+    },
+  },
+  modify_output: {
+    replace(value: JsonValue): Effect {
+      return { type: "modify", target: "output", operation: "replace", value };
+    },
+    merge(value: JsonValue): Effect {
+      return { type: "modify", target: "output", operation: "merge", value };
+    },
+  },
+  modify_prompt: {
+    replace(value: JsonValue): Effect {
+      return { type: "modify", target: "prompt", operation: "replace", value };
+    },
+    merge(value: JsonValue): Effect {
+      return { type: "modify", target: "prompt", operation: "merge", value };
+    },
+  },
+  modify_request: {
+    replace(value: JsonValue): Effect {
+      return { type: "modify", target: "request", operation: "replace", value };
+    },
+    merge(value: JsonValue): Effect {
+      return { type: "modify", target: "request", operation: "merge", value };
+    },
+  },
+  modify_response: {
+    replace(value: JsonValue): Effect {
+      return {
+        type: "modify",
+        target: "response",
+        operation: "replace",
+        value,
+      };
+    },
+    merge(value: JsonValue): Effect {
+      return { type: "modify", target: "response", operation: "merge", value };
+    },
+  },
+  modify_content: {
+    replace(value: JsonValue): Effect {
+      return { type: "modify", target: "content", operation: "replace", value };
+    },
+    merge(value: JsonValue): Effect {
+      return { type: "modify", target: "content", operation: "merge", value };
+    },
+  },
+  modify_instructions: {
+    replace(value: JsonValue): Effect {
+      return {
+        type: "modify",
+        target: "instructions",
+        operation: "replace",
+        value,
+      };
+    },
+    merge(value: JsonValue): Effect {
+      return {
+        type: "modify",
+        target: "instructions",
+        operation: "merge",
+        value,
+      };
+    },
+  },
+  modify_summary: {
+    replace(value: JsonValue): Effect {
+      return { type: "modify", target: "summary", operation: "replace", value };
+    },
+    merge(value: JsonValue): Effect {
+      return { type: "modify", target: "summary", operation: "merge", value };
+    },
+  },
+  modify_workspace: {
+    replace(value: JsonValue): Effect {
+      return {
+        type: "modify",
+        target: "workspace",
+        operation: "replace",
+        value,
+      };
+    },
+    merge(value: JsonValue): Effect {
+      return { type: "modify", target: "workspace", operation: "merge", value };
+    },
+  },
+} as const;
+
+/** Declaration convenience only. Event admission and per-call narrowing are runtime-owned. */
+export type CapabilityDeclaration = {
+  modes: ("intercept" | "observe")[];
+  capabilities: Capabilities;
+};
+export type CapabilityObservation = { modes: ["observe"] };
+function capabilityNonempty(
+  values: readonly string[],
+  allowed: readonly string[],
+): void {
+  if (
+    !Array.isArray(values) ||
+    !values.length ||
+    values.some((v) => !allowed.includes(v))
+  )
+    throw new TypeError("nonempty valid operations required");
+}
+function capabilityMerge(a: any, b: any): any {
+  const result = { ...a };
+  for (const [k, v] of Object.entries(b)) {
+    if (Array.isArray(v)) result[k] = [...new Set([...(a[k] ?? []), ...v])];
+    else if (typeof v === "object" && v !== null)
+      result[k] = capabilityMerge(a[k] ?? {}, v);
+    else result[k] = typeof v === "boolean" ? a[k] === true || v : v;
+  }
+  return result;
+}
+export type CapabilityModifyOperations = { merge?: boolean; replace?: boolean };
+export type CapabilityFlowOperation = "continue" | "stop";
+export type CapabilityDelivery = "next_turn" | "now";
+
+export class CapabilityBuilder {
+  readonly #value: Capabilities;
+  private constructor(value: Capabilities) {
+    this.#value = value;
+    Object.freeze(this);
+  }
+  static intercept(): CapabilityBuilder {
+    return new CapabilityBuilder({ effects: [] });
+  }
+  private add(effect?: string, grant: object = {}): CapabilityBuilder {
+    return new CapabilityBuilder(
+      capabilityMerge(this.#value, {
+        ...grant,
+        effects: effect ? [effect] : [],
+      }),
+    );
+  }
+  build(): CapabilityDeclaration {
+    if (
+      this.#value.effects.length === 0 &&
+      !Object.keys((this.#value as any).elicitation ?? {}).length
+    )
+      throw new TypeError("empty interception declaration");
+    return {
+      modes: ["intercept", "observe"],
+      capabilities: JSON.parse(JSON.stringify(this.#value)),
+    };
+  }
+  get modes(): ("intercept" | "observe")[] {
+    return ["intercept", "observe"];
+  }
+  get capabilities(): Capabilities {
+    return this.build().capabilities;
+  }
+  toJSON(): CapabilityDeclaration {
+    return this.build();
+  }
+  allow(): CapabilityBuilder {
+    return this.add("allow");
+  }
+  ask(): CapabilityBuilder {
+    return this.add("ask");
+  }
+  deny(): CapabilityBuilder {
+    return this.add("deny");
+  }
+  message(): CapabilityBuilder {
+    return this.add("message");
+  }
+  return(): CapabilityBuilder {
+    return this.add("return");
+  }
+  modifyContent(operations: CapabilityModifyOperations): CapabilityBuilder {
+    const allowed = ["merge", "replace"] as readonly string[];
+    if (
+      operations === null ||
+      typeof operations !== "object" ||
+      Object.entries(operations).some(
+        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
+      ) ||
+      !Object.values(operations).some((v) => v === true)
+    )
+      throw new TypeError("nonempty modify operations required");
+    const grant = Object.fromEntries(
+      allowed.map((k) => [
+        k,
+        (operations as Record<string, boolean>)[k] === true,
+      ]),
+    );
+    return this.add("modify", { modify: { content: grant } });
+  }
+  modifyInput(operations: CapabilityModifyOperations): CapabilityBuilder {
+    const allowed = ["merge", "replace"] as readonly string[];
+    if (
+      operations === null ||
+      typeof operations !== "object" ||
+      Object.entries(operations).some(
+        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
+      ) ||
+      !Object.values(operations).some((v) => v === true)
+    )
+      throw new TypeError("nonempty modify operations required");
+    const grant = Object.fromEntries(
+      allowed.map((k) => [
+        k,
+        (operations as Record<string, boolean>)[k] === true,
+      ]),
+    );
+    return this.add("modify", { modify: { input: grant } });
+  }
+  modifyInstructions(
+    operations: CapabilityModifyOperations,
+  ): CapabilityBuilder {
+    const allowed = ["merge", "replace"] as readonly string[];
+    if (
+      operations === null ||
+      typeof operations !== "object" ||
+      Object.entries(operations).some(
+        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
+      ) ||
+      !Object.values(operations).some((v) => v === true)
+    )
+      throw new TypeError("nonempty modify operations required");
+    const grant = Object.fromEntries(
+      allowed.map((k) => [
+        k,
+        (operations as Record<string, boolean>)[k] === true,
+      ]),
+    );
+    return this.add("modify", { modify: { instructions: grant } });
+  }
+  modifyOutput(operations: CapabilityModifyOperations): CapabilityBuilder {
+    const allowed = ["merge", "replace"] as readonly string[];
+    if (
+      operations === null ||
+      typeof operations !== "object" ||
+      Object.entries(operations).some(
+        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
+      ) ||
+      !Object.values(operations).some((v) => v === true)
+    )
+      throw new TypeError("nonempty modify operations required");
+    const grant = Object.fromEntries(
+      allowed.map((k) => [
+        k,
+        (operations as Record<string, boolean>)[k] === true,
+      ]),
+    );
+    return this.add("modify", { modify: { output: grant } });
+  }
+  modifyPrompt(operations: CapabilityModifyOperations): CapabilityBuilder {
+    const allowed = ["merge", "replace"] as readonly string[];
+    if (
+      operations === null ||
+      typeof operations !== "object" ||
+      Object.entries(operations).some(
+        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
+      ) ||
+      !Object.values(operations).some((v) => v === true)
+    )
+      throw new TypeError("nonempty modify operations required");
+    const grant = Object.fromEntries(
+      allowed.map((k) => [
+        k,
+        (operations as Record<string, boolean>)[k] === true,
+      ]),
+    );
+    return this.add("modify", { modify: { prompt: grant } });
+  }
+  modifyRequest(operations: CapabilityModifyOperations): CapabilityBuilder {
+    const allowed = ["merge", "replace"] as readonly string[];
+    if (
+      operations === null ||
+      typeof operations !== "object" ||
+      Object.entries(operations).some(
+        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
+      ) ||
+      !Object.values(operations).some((v) => v === true)
+    )
+      throw new TypeError("nonempty modify operations required");
+    const grant = Object.fromEntries(
+      allowed.map((k) => [
+        k,
+        (operations as Record<string, boolean>)[k] === true,
+      ]),
+    );
+    return this.add("modify", { modify: { request: grant } });
+  }
+  modifyResponse(operations: CapabilityModifyOperations): CapabilityBuilder {
+    const allowed = ["merge", "replace"] as readonly string[];
+    if (
+      operations === null ||
+      typeof operations !== "object" ||
+      Object.entries(operations).some(
+        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
+      ) ||
+      !Object.values(operations).some((v) => v === true)
+    )
+      throw new TypeError("nonempty modify operations required");
+    const grant = Object.fromEntries(
+      allowed.map((k) => [
+        k,
+        (operations as Record<string, boolean>)[k] === true,
+      ]),
+    );
+    return this.add("modify", { modify: { response: grant } });
+  }
+  modifySummary(operations: CapabilityModifyOperations): CapabilityBuilder {
+    const allowed = ["merge", "replace"] as readonly string[];
+    if (
+      operations === null ||
+      typeof operations !== "object" ||
+      Object.entries(operations).some(
+        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
+      ) ||
+      !Object.values(operations).some((v) => v === true)
+    )
+      throw new TypeError("nonempty modify operations required");
+    const grant = Object.fromEntries(
+      allowed.map((k) => [
+        k,
+        (operations as Record<string, boolean>)[k] === true,
+      ]),
+    );
+    return this.add("modify", { modify: { summary: grant } });
+  }
+  modifyWorkspace(operations: CapabilityModifyOperations): CapabilityBuilder {
+    const allowed = ["merge", "replace"] as readonly string[];
+    if (
+      operations === null ||
+      typeof operations !== "object" ||
+      Object.entries(operations).some(
+        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
+      ) ||
+      !Object.values(operations).some((v) => v === true)
+    )
+      throw new TypeError("nonempty modify operations required");
+    const grant = Object.fromEntries(
+      allowed.map((k) => [
+        k,
+        (operations as Record<string, boolean>)[k] === true,
+      ]),
+    );
+    return this.add("modify", { modify: { workspace: grant } });
+  }
+  elicitationForm(): CapabilityBuilder {
+    return this.add(undefined, { elicitation: { form: {} } });
+  }
+  elicitationUrl(): CapabilityBuilder {
+    return this.add(undefined, { elicitation: { url: {} } });
+  }
+  flow(
+    operations: readonly CapabilityFlowOperation[],
+    counts: {
+      remainingContinuations?: number;
+      continuationCount?: number;
+      maxContinuations?: number;
+    } = {},
+  ): CapabilityBuilder {
+    capabilityNonempty(operations, ["continue", "stop"]);
+    if (
+      Object.entries(counts).some(
+        ([k, v]) =>
+          ![
+            "remainingContinuations",
+            "continuationCount",
+            "maxContinuations",
+          ].includes(k) ||
+          !Number.isSafeInteger(v) ||
+          v! < 0,
+      )
+    )
+      throw new TypeError("invalid continuation count");
+    if (
+      operations.includes("continue") &&
+      (counts.remainingContinuations === undefined ||
+        counts.continuationCount === undefined)
+    )
+      throw new TypeError("continue requires counts");
+    return this.add("flow", {
+      flow: { operations: [...new Set(operations)], ...counts },
+    });
+  }
+  injectContext(deliverAt: readonly CapabilityDelivery[]): CapabilityBuilder {
+    capabilityNonempty(deliverAt, ["next_turn", "now"]);
+    return this.add("inject", {
+      inject: { context: { append: true, deliverAt: [...new Set(deliverAt)] } },
+    });
+  }
+}
+/** intercept includes observe; declarations do not prove host execution. */
+export const capabilities = Object.freeze({
+  intercept: () => CapabilityBuilder.intercept(),
+  observe: (): CapabilityObservation => ({ modes: ["observe"] }),
+});

@@ -41,6 +41,15 @@ const central = JSON.parse(
     "utf8",
   ),
 ).scenarios;
+// Local compatibility with the old pinned central schedule: §9 makes
+// observations operation-owned, so cancellation starts no new observer work.
+// Keep the adversarial intercept/cancellation schedule unchanged; only the
+// obsolete expected observations differ until the central fixture is updated.
+const interruptedChain = central.find(
+  (row) => row.id === "observation-chain-interrupt",
+);
+assert.ok(interruptedChain?.chain.interrupt);
+interruptedChain.expected.observations = [];
 // Only these named duplicate-response probes use raw replay. Repeated IDs in
 // any other scenario must still exercise the public client, not bypass it.
 const replayProbes = new Set([
@@ -401,6 +410,23 @@ for (const transport of ["stdio", "http"])
       transport,
     );
     const entries = report.receipts.entries;
+    const cancelledId = interruptedChain.requests.a.params.event.id;
+    assert.ok(
+      entries.some(
+        (entry) => entry.kind === "received" && entry.id === cancelledId,
+      ),
+    );
+    assert.ok(
+      entries.some(
+        (entry) => entry.kind === "cancelled" && entry.id === cancelledId,
+      ),
+    );
+    assert.equal(
+      entries.some(
+        (entry) => entry.kind === "observed" && entry.eventId === cancelledId,
+      ),
+      false,
+    );
     for (const row of central.filter((row) => replayProbes.has(row.id))) {
       const id = row.requests.a.id;
       const result = report.results.find((result) => result.id === row.id);
@@ -760,3 +786,43 @@ test("unexpected foreign observer response remains fatal", async () => {
     /Lifecycle client failed/,
   );
 });
+
+for (const transport of ["http", "stdio"])
+  test(`held short-circuit observers release within their operation: ${transport}`, async () => {
+    const row = structuredClone(
+      central.find((row) => row.id === "observation-chain-deny"),
+    );
+    row.chain.holdObservers = true;
+    const report = await run([row], transport);
+    const entries = report.receipts.entries;
+    const id = row.requests.a.params.event.id;
+    const releaseIndex = entries.findIndex(
+      (entry) => entry.kind === "observers-released" && entry.id === id,
+    );
+    const settledIndex = entries.findIndex(
+      (entry) => entry.kind === "chain-settled" && entry.id === id,
+    );
+    assert.ok(releaseIndex >= 0);
+    assert.ok(
+      entries.some(
+        (entry) => entry.kind === "observer-blocked" && entry.id === id,
+      ),
+    );
+    assert.equal(
+      entries.filter(
+        (entry) => entry.kind === "observed" && entry.eventId === id,
+      ).length,
+      row.expected.observations.length,
+    );
+    if (transport === "http") {
+      assert.ok(settledIndex > releaseIndex);
+      assert.ok(
+        entries.every(
+          (entry, index) =>
+            entry.kind !== "observed" ||
+            entry.eventId !== id ||
+            index < settledIndex,
+        ),
+      );
+    }
+  });

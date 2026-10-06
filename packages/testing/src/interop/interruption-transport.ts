@@ -99,7 +99,8 @@ export async function openInterruptionTransport(
         },
       }));
       const controller = new AbortController();
-      const response = client.toolBefore(
+      const response = client.dispatch(
+        "tool.before",
         {
           id,
           time: "2026-01-01T00:00:00Z",

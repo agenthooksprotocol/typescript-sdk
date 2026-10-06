@@ -163,7 +163,7 @@ test("HTTP authorization is independent of JSON-RPC correlation and event identi
       },
     );
     try {
-      const result = await hooks.userMessageInbound({
+      const result = await hooks.dispatch("user.message.inbound", {
         message: {
           channel: "chat",
           sender: "user",

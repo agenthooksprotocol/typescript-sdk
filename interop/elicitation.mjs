@@ -420,7 +420,7 @@ if (process.argv[2] === "client") {
               ),
             );
             try {
-              const result = await client.userElicitationRequest({
+              const result = await client.dispatch("user.elicitation.request", {
                 session: { id: "capability" },
                 elicitation: { mode: c.mode, server: "fixture" },
               });

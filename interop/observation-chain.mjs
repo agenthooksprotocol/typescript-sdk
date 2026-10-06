@@ -58,6 +58,7 @@ export async function runChain(row, options) {
   );
   let settled = false;
   let calledCount = 0;
+  let observersReleased = false;
   try {
     const boundary = hooks.dispatch(type, input, {
       signal: controller.signal,
@@ -96,6 +97,24 @@ export async function runChain(row, options) {
           controller.abort();
         } else await options.control("/release", { id });
       }
+      // HTTP observation completion is part of the boundary. Release a held
+      // receiver while that boundary is pending, not after awaiting its return.
+      if (
+        row.chain.holdObservers &&
+        !row.chain.interrupt &&
+        !observersReleased &&
+        receipts.entries.some(
+          (entry) => entry.kind === "observer-blocked" && entry.id === id,
+        )
+      ) {
+        await options.control("/mark", {
+          scenario: row.id,
+          kind: "observers-released",
+          id,
+        });
+        await options.control("/release", { id: id + ":observers" });
+        observersReleased = true;
+      }
       if (!settled) await delay(1);
     }
     const result = await boundary;
@@ -119,14 +138,36 @@ export async function runChain(row, options) {
     });
     if (row.chain.interrupt) await options.control("/release", { id });
     const called = interceptors.slice(0, calledCount).map((sub) => sub.id);
-    const remaining = subs.filter((sub) => !called.includes(sub.id));
+    // Cancellation retires the original operation, including unstarted
+    // observations. Explicit observe steps elsewhere are separate operations.
+    const remaining = result.interrupted
+      ? []
+      : subs.filter((sub) => !called.includes(sub.id));
+    if (
+      result.interrupted &&
+      finalReceipts.entries.some(
+        (entry) => entry.kind === "observed" && entry.eventId === id,
+      )
+    )
+      throw Error("Cancelled chain started an observation");
+    // Stdio completes on frame write. Release after the first actual receipt,
+    // before waiting for later notifications serialized behind that handler.
+    if (row.chain.holdObservers && !observersReleased) {
+      if (remaining.length) {
+        await options.control("/wait-observed", { eventId: id, count: 1 });
+        await options.control("/mark", {
+          scenario: row.id,
+          kind: "observers-released",
+          id,
+        });
+      }
+      await options.control("/release", { id: id + ":observers" });
+    }
     if (remaining.length)
       await options.control("/wait-observed", {
         eventId: id,
         count: remaining.length,
       });
-    if (row.chain.holdObservers)
-      await options.control("/release", { id: id + ":observers" });
     await result.observations;
     return {
       called,

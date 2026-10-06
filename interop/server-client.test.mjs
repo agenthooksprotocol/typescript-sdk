@@ -136,7 +136,7 @@ test(
       },
     );
     try {
-      const result = await client.toolBefore({
+      const result = await client.dispatch("tool.before", {
         call: { id: "c" },
         path: "native",
         tool: { name: "read", origin: "native", input: { path: "a" } },

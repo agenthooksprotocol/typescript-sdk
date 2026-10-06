@@ -136,7 +136,7 @@ test("effective observation payload and offline composition use public SDK respo
       };
     },
   );
-  const result = await client.toolBefore(toolInput);
+  const result = await client.dispatch("tool.before", toolInput);
   assert.deepEqual(result.errors, []);
   await result.observations;
   assert.equal(result.event.tool.input.x, 2);
@@ -238,7 +238,7 @@ test("task lineage receives canonical SDK events and rejects malformed explicit 
   );
   assert.deepEqual(
     await (
-      await other.taskChangeBefore({ id: "before", task })
+      await other.dispatch("task.change.before", { id: "before", task })
     ).observations,
     [],
   );
@@ -272,7 +272,7 @@ test("typed task/workspace controls use public SDK and reject malformed offline 
       return { effects };
     },
   );
-  const task = await client.taskChangeBefore({
+  const task = await client.dispatch("task.change.before", {
     id: "task-before",
     task: {
       id: "durable-task",
@@ -311,7 +311,7 @@ test("typed task/workspace controls use public SDK and reject malformed offline 
     id: "workspace-before",
     workspace: { kind: "cwd", change: { cwd: "/old" } },
   };
-  const modified = await client.workspaceChangeBefore(input);
+  const modified = await client.dispatch("workspace.change.before", input);
   assert.deepEqual(modified.errors, []);
   assert.equal(modified.event.workspace.change.cwd, "/new");
   // Deliberately bypass hooks.handle, which would reject an unsupported effect.
@@ -329,7 +329,7 @@ test("typed task/workspace controls use public SDK and reject malformed offline 
     ),
   );
   effects = [{ type: "deny", reason: "policy" }];
-  const denied = await client.workspaceChangeBefore({
+  const denied = await client.dispatch("workspace.change.before", {
     ...input,
     id: "workspace-denied",
   });
@@ -337,7 +337,7 @@ test("typed task/workspace controls use public SDK and reject malformed offline 
   assert.equal(denied.response.result.effects[0].type, "deny");
 });
 
-test("short-circuit downgrades only uncalled interceptors without waiting for observers", async (t) => {
+test("short-circuit downgrades only uncalled interceptors and awaits observers", async (t) => {
   const received = [];
   let release = () => {};
   const blocked = new Promise((resolve) => {
@@ -377,18 +377,17 @@ test("short-circuit downgrades only uncalled interceptors without waiting for ob
       await blocked;
     },
   );
-  const result = await client.toolBefore(toolInput);
-  assert.deepEqual(result.errors, []);
-  assert.equal(result.event.tool.input.x, 2);
-  let drained = false;
-  result.observations.then(() => {
-    drained = true;
+  let settled = false;
+  const work = client.dispatch("tool.before", toolInput).then((result) => {
+    settled = true;
+    return result;
   });
-  // Wait for receipt, not for observer processing completion.
+  // Both observation callbacks must start, but the boundary must remain pending
+  // until their processing completes.
   const deadline = Date.now() + 1000;
   while (received.length < 3 && Date.now() < deadline)
     await new Promise((resolve) => setTimeout(resolve, 5));
-  assert.equal(drained, false);
+  assert.equal(settled, false);
   assert.deepEqual(
     received
       .filter((x) => x.message.method === "hooks/intercept")
@@ -410,6 +409,10 @@ test("short-circuit downgrades only uncalled interceptors without waiting for ob
     assert.equal(Object.hasOwn(note, "id"), false);
   }
   release();
+  const result = await work;
+  assert.equal(settled, true);
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.event.tool.input.x, 2);
   assert.deepEqual(await result.observations, []);
 });
 

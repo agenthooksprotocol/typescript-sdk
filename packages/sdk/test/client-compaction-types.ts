@@ -19,7 +19,7 @@ for (const trigger of ["auto", "manual", "hook"] as const) {
     },
     tokenCounts: { before: 100 },
   };
-  void hooks.contextCompactBefore(input);
+  void hooks.dispatch("context.compact.before", input);
   void hooks.dispatch("context.compact.before", input);
 }
 const minimal: BoundaryInput<"context.compact.before"> = {

@@ -115,7 +115,7 @@ export async function uploadBytes(
         auth: auth({ resolveEnvironmentVariable: (name) => env[name] }),
       },
     );
-    const result = await client.toolBefore({
+    const result = await client.dispatch("tool.before", {
       call: { id: "upload" },
       path: "native",
       tool: { name: "upload", origin: "native", input: {} },

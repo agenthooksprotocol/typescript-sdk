@@ -179,7 +179,8 @@ export async function runAtomicInterop(): Promise<AtomicRow[]> {
             throw new Error(
               "Fixture needs heterogeneous per-route capabilities",
             );
-        const result = await hooks.toolBefore(
+        const result = await hooks.dispatch(
+          "tool.before",
           {
             id: occurrence,
             time: "2026-01-01T00:00:00Z",

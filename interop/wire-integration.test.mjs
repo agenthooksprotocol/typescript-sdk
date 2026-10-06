@@ -431,7 +431,8 @@ for (const [transport, mode, authenticatedUpload] of [
               },
             ],
           };
-          const result = await client.toolBefore(
+          const result = await client.dispatch(
+            "tool.before",
             input,
             status === "interrupted" ? { signal: controller.signal } : {},
           );
@@ -458,6 +459,20 @@ for (const [transport, mode, authenticatedUpload] of [
               status === "stopped",
             );
           }
+          if (status === "interrupted") {
+            // Cancellation retires this operation: no new observer upload or
+            // notification may start, even for skipped interceptors.
+            assert.equal(
+              observed.some((note) => note.params.event.id === status),
+              false,
+            );
+            continue;
+          }
+          if (transport !== "stdio")
+            assert.ok(
+              observed.some((note) => note.params.event.id === status),
+              "HTTP observers complete before the boundary returns",
+            );
           // stdio observation completion means frame write; wait for application receipt.
           for (
             let attempt = 0;
@@ -468,10 +483,7 @@ for (const [transport, mode, authenticatedUpload] of [
             await delay(10);
           const note = observed.find((note) => note.params.event.id === status);
           assert.ok(note);
-          assert.equal(
-            note.params.event.tool.input.task,
-            status === "interrupted" ? 1 : 2,
-          );
+          assert.equal(note.params.event.tool.input.task, 2);
           assert.ok(uploads.includes(note.params.event.items[0].body.ref));
           assert.notEqual(
             note.params.event.items[0].body.ref,
@@ -480,12 +492,13 @@ for (const [transport, mode, authenticatedUpload] of [
           );
         }
         assert.equal(received.length, 4);
-        // Interruption cancels decisions, not bounded best-effort settlement delivery.
+        // Normal and short-circuited operations own observer completion;
+        // interruption does not launch fresh best-effort work.
         assert.deepEqual(
           observed.map((note) => note.params.event.id),
-          ["normal", "denied", "stopped", "interrupted"],
+          ["normal", "denied", "stopped"],
         );
-        assert.equal(stored.size, 8);
+        assert.equal(stored.size, 7);
         if (mode === "oauth") assert.ok(tokenRequests > 0);
       } finally {
         await client?.close();

@@ -41,8 +41,10 @@ const minimalTool: BoundaryInput<"tool.before"> = {
   path: "native",
   tool: { name: "read_file", origin: "native", input: { path: "README.md" } },
 };
-const pending: Promise<BoundaryResult<"tool.before">> =
-  hooks.toolBefore(minimalTool);
+const pending: Promise<BoundaryResult<"tool.before">> = hooks.dispatch(
+  "tool.before",
+  minimalTool,
+);
 void pending;
 
 function inspectTool(result: BoundaryResult<"tool.before">): void {
@@ -75,8 +77,8 @@ const rawMessage: BoundaryInput<"user.message.inbound"> = {
     ],
   },
 };
-void hooks.userMessageInbound(rawMessage);
-void hooks.modelRequestBefore({
+void hooks.dispatch("user.message.inbound", rawMessage);
+void hooks.dispatch("model.request.before", {
   model: { id: "model", provider: "provider" },
   attempt: { id: "attempt", number: 1 },
   params: {},
@@ -90,14 +92,15 @@ void hooks.modelRequestBefore({
     },
   ],
 });
-void hooks.sessionStart({
+void hooks.dispatch("session.start", {
   session: { id: "session-1" },
   harness: { name: "consumer", version: "1" },
   permissionMode: "default",
   trigger: "startup",
   items: [],
 });
-void hooks.toolBefore(
+void hooks.dispatch(
+  "tool.before",
   { ...minimalTool, id: "occurrence", time: "2026-01-01T00:00:00Z" },
   {
     signal: new AbortController().signal,
@@ -106,7 +109,7 @@ void hooks.toolBefore(
   },
 );
 
-void hooks.toolBefore(minimalTool, {
+void hooks.dispatch("tool.before", minimalTool, {
   // @ts-expect-error The boundary option is initialState, not the wire state field.
   state: { permission: "none", candidate: null },
 });
@@ -123,17 +126,20 @@ void knownEvent;
 // @ts-expect-error Canonical event names are a closed public method catalogue.
 const unknownEvent: EventType = "tool.typo";
 // @ts-expect-error tool.before needs tool, path, and call.
-void hooks.toolBefore({});
-void hooks.toolBefore({
+void hooks.dispatch("tool.before", {});
+void hooks.dispatch("tool.before", {
   ...minimalTool,
   // @ts-expect-error Tool input is not a substitute for the required tool name.
   tool: { input: {}, origin: "native" },
 });
-// @ts-expect-error Envelope source is generated from HooksOptions.
-void hooks.toolBefore({ ...minimalTool, source: "urn:forged:source" });
+void hooks.dispatch("tool.before", {
+  ...minimalTool,
+  // @ts-expect-error Envelope source is generated from HooksOptions.
+  source: "urn:forged:source",
+});
 // @ts-expect-error The method owns the canonical type discriminator.
-void hooks.toolBefore({ ...minimalTool, type: "tool.after" });
-void hooks.userMessageInbound({
+void hooks.dispatch("tool.before", { ...minimalTool, type: "tool.after" });
+void hooks.dispatch("user.message.inbound", {
   message: {
     channel: "chat",
     sender: "user",
@@ -148,7 +154,7 @@ void hooks.userMessageInbound({
     ],
   },
 });
-void hooks.userMessageInbound({
+void hooks.dispatch("user.message.inbound", {
   message: {
     channel: "chat",
     sender: "user",
@@ -164,5 +170,78 @@ void hooks.userMessageInbound({
   },
 });
 // @ts-expect-error Boundary cancellation requires an AbortSignal.
-void hooks.toolBefore(minimalTool, { signal: "cancel" });
+void hooks.dispatch("tool.before", minimalTool, { signal: "cancel" });
 void unknownEvent;
+
+// Generated ergonomic host inputs are distinct from canonical dispatch inputs.
+import {
+  Permission,
+  state,
+  effects,
+  ContentSource,
+  type EventInput,
+  type ToolBeforeInput,
+  type DeliveryDiagnosticCode,
+  type DeliveryAuthProvider,
+} from "@agenthooksprotocol/sdk/client";
+const generatedFacts: ToolBeforeInput = {
+  callId: "call",
+  name: "read_file",
+  input: { path: "README.md" },
+  path: "native",
+  origin: "native",
+};
+void hooks.toolBefore(generatedFacts, {
+  initialState: state.initial(Permission.Allow, {
+    candidate: state.candidate(null),
+  }),
+});
+const lazyFacts: EventInput<"tool.before"> = {
+  ...generatedFacts,
+  items: [
+    {
+      id: "body",
+      kind: "text",
+      mediaType: "text/plain",
+      body: new ContentSource(new ReadableStream<Uint8Array>()),
+    },
+  ],
+};
+void hooks.toolBefore(lazyFacts);
+// @ts-expect-error Named methods require generated flattened facts, not canonical wrappers.
+void hooks.toolBefore(minimalTool);
+// @ts-expect-error Origin and path are distinct required host facts.
+void hooks.toolBefore({
+  callId: "call",
+  name: "read_file",
+  input: {},
+  path: "native",
+});
+// @ts-expect-error A replacement payload is required.
+void effects.modify_input.replace();
+const credentialProvider: DeliveryAuthProvider = {
+  credential(context) {
+    return context.authentication
+      ? { type: "bearer", token: "host-selected", attempt: { version: 1 } }
+      : undefined;
+  },
+  challenge(context) {
+    void [
+      context.backendId,
+      context.purpose,
+      context.response,
+      context.credential?.attempt,
+    ];
+  },
+};
+void credentialProvider;
+function inspectErgonomicResult(result: BoundaryResult<"tool.before">) {
+  const accepted: unknown = result.input;
+  const permission: "none" | "allow" | "ask" | "deny" = result.permission;
+  const cause: DeliveryDiagnosticCode = result.diagnostics[0]!.code;
+  void [accepted, permission, cause];
+  // @ts-expect-error Hook-modified JSON is not application-validated input.
+  const validated: { path: string } = result.input;
+  void validated;
+}
+void inspectErgonomicResult;

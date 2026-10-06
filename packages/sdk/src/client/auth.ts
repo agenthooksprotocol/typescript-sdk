@@ -9,8 +9,10 @@ export interface Credential {
 }
 export type AuthCredential = Credential;
 
-/** Create one context (and cache) per client endpoint, never globally. */
+/** Context for a selected delivery binding, or an optional standalone auth helper. */
 export interface AuthContext {
+  /** Selected registration backend. Omitted for standalone authentication calls. */
+  backendId?: string;
   /** Independent delivery binding. Omitted for standalone authentication calls. */
   purpose?: "event" | "upload";
   authentication?: Authentication;
@@ -29,6 +31,44 @@ export interface AuthContext {
   provider?: AuthProvider;
   authOptions?: AuthOptions;
 }
+/** The delivery mechanisms currently supported by AHP all use bearer tokens. */
+export interface DeliveryCredential {
+  type: "bearer";
+  token: string;
+  /** Provider-owned identity, returned unchanged on rejection; never log it. */
+  attempt?: unknown;
+}
+
+/** Hooks always supplies backend identity and the independently selected binding. */
+export interface DeliveryAuthContext extends AuthContext {
+  backendId: string;
+  purpose: "event" | "upload";
+}
+
+export interface AuthChallengeContext extends DeliveryAuthContext {
+  /** Actual endpoint response, including status and WWW-Authenticate headers. */
+  response: Response;
+  /** Exact credential used for this attempt, including its opaque attempt identity. */
+  credential: DeliveryCredential | undefined;
+}
+
+/**
+ * Caller-owned authentication infrastructure. Hooks neither closes this provider
+ * nor manages its token lifecycle. Both callbacks must honor the operation signal.
+ * Credentials and attempt identities must not be included in diagnostics.
+ */
+export interface DeliveryAuthProvider {
+  /** Undefined means no credential; configured authentication must fail closed. */
+  credential(
+    context: DeliveryAuthContext,
+  ): DeliveryCredential | undefined | Promise<DeliveryCredential | undefined>;
+  /**
+   * Record a rejection before credentials are requested again. This does not
+   * authorize replay: Hooks decides whether a bounded retry is protocol-safe.
+   */
+  challenge(context: AuthChallengeContext): void | Promise<void>;
+}
+
 export interface OAuthClient {
   issuer: string;
   resource: string;

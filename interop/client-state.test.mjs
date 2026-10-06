@@ -55,7 +55,10 @@ function setup(
       ...extra,
       source: "urn:test:state",
       capabilities: {
-        "tool.before": { modes: ["intercept", "observe"], capabilities: staticCaps },
+        "tool.before": {
+          modes: ["intercept", "observe"],
+          capabilities: staticCaps,
+        },
       },
       fetch: async (url, init) =>
         hooks.handle(new Request(url, init), (message) => {
@@ -96,7 +99,7 @@ test("event-map delivery modes never infer elicitation answer grants", async () 
     },
   );
   try {
-    const start = await client.sessionStart({
+    const start = await client.dispatch("session.start", {
       session: { id: "session" },
       harness: { name: "test", version: "1" },
       permissionMode: "default",
@@ -110,7 +113,8 @@ test("event-map delivery modes never infer elicitation answer grants", async () 
     assert.deepEqual(event.capabilities, { effects: ["deny"] });
     assert.equal(Object.hasOwn(event.capabilities, "elicitation"), false);
     await assert.rejects(
-      client.userElicitationRequest(
+      client.dispatch(
+        "user.elicitation.request",
         {
           elicitation: { mode: "form", server: "test" },
         },
@@ -133,7 +137,7 @@ test("public Hooks sends exact initial state and complete narrowed capabilities"
   const state = seed();
   const narrowed = { effects: ["deny"] };
   try {
-    const result = await client.toolBefore(tool(), {
+    const result = await client.dispatch("tool.before", tool(), {
       initialState: state,
       capabilities: narrowed,
     });
@@ -157,7 +161,9 @@ test("changed input invalidates preseeded candidate/provenance and allow atomica
     [],
   ]);
   try {
-    const result = await client.toolBefore(tool(), { initialState: seed() });
+    const result = await client.dispatch("tool.before", tool(), {
+      initialState: seed(),
+    });
     assert.deepEqual(result.errors, []);
     assert.equal(seen[1].params.state.candidate, null);
     assert.equal(seen[1].params.state.permission, "none");
@@ -175,7 +181,9 @@ test("rejected compound preserves preseeded state and effective input", async ()
     [],
   ]);
   try {
-    const result = await client.toolBefore(tool(), { initialState: seed() });
+    const result = await client.dispatch("tool.before", tool(), {
+      initialState: seed(),
+    });
     assert.equal(result.errors.length, 1);
     assert.deepEqual(seen[1].params.state, seed());
     assert.equal(seen[1].params.event.tool.input.x, 1);
@@ -189,7 +197,7 @@ test("later return replaces provenance; ask survives later allow", async () => {
     [],
   ]);
   try {
-    const result = await client.toolBefore(tool(), {
+    const result = await client.dispatch("tool.before", tool(), {
       initialState: { ...seed(), permission: "ask" },
     });
     assert.deepEqual(result.errors, []);
@@ -204,15 +212,19 @@ test("invalid state and widening fail before delivery", async () => {
   const { client, seen } = setup([[]]);
   try {
     await assert.rejects(
-      client.toolBefore(tool(), { initialState: { permission: "allow" } }),
+      client.dispatch("tool.before", tool(), {
+        initialState: { permission: "allow" },
+      }),
       ConfigurationError,
     );
     await assert.rejects(
-      client.toolBefore(tool(), { capabilities: { effects: ["inject"] } }),
+      client.dispatch("tool.before", tool(), {
+        capabilities: { effects: ["inject"] },
+      }),
       ConfigurationError,
     );
     await assert.rejects(
-      client.toolBefore(tool(), {
+      client.dispatch("tool.before", tool(), {
         capabilities: {
           effects: ["modify"],
           modify: { output: { replace: true } },
@@ -238,7 +250,9 @@ test("preseeded terminal state reaches the first receiver and settles after acce
     ]) {
       const { client, seen } = setup([response, []]);
       try {
-        const result = await client.toolBefore(tool(), { initialState: state });
+        const result = await client.dispatch("tool.before", tool(), {
+          initialState: state,
+        });
         await result.observations;
         assert.deepEqual(result.errors, []);
         assert.deepEqual(
@@ -275,7 +289,9 @@ test("complete narrowing validates controls and continuation budgets without mer
       effects: ["flow"],
       flow: { operations: ["stop"], futureHint: { opaque: true } },
     };
-    const result = await client.toolBefore(tool(), { capabilities: narrowed });
+    const result = await client.dispatch("tool.before", tool(), {
+      capabilities: narrowed,
+    });
     assert.deepEqual(result.errors, []);
     assert.deepEqual(seen[0].params.capabilities, narrowed);
     for (const flow of [
@@ -285,7 +301,7 @@ test("complete narrowing validates controls and continuation budgets without mer
       { operations: ["stop"], continuationCount: 0 },
     ])
       await assert.rejects(
-        client.toolBefore(tool(), {
+        client.dispatch("tool.before", tool(), {
           capabilities: { effects: ["flow"], flow },
         }),
         ConfigurationError,
@@ -361,7 +377,7 @@ test("host input validation follows SDK acceptance, without atomic protocol reje
     try {
       const input = tool();
       input.tool.input = { task: 1 };
-      const result = await client.toolBefore(input);
+      const result = await client.dispatch("tool.before", input);
       assert.deepEqual(result.errors, []);
       assert.equal(result.event.tool.input.task, 0);
       assert.equal(seen[1].params.event.tool.input.task, 0);
@@ -387,7 +403,7 @@ test("initial host input rejection happens in userland before calling Hooks", as
     input.tool.input = { task: 0 };
     const hostAccepted =
       Number.isInteger(input.tool.input.task) && input.tool.input.task > 0;
-    if (hostAccepted) await client.toolBefore(input);
+    if (hostAccepted) await client.dispatch("tool.before", input);
     assert.equal(hostAccepted, false);
     assert.equal(seen.length, 0);
   } finally {
@@ -407,7 +423,9 @@ test("pending state omits unrelated neutral fields but preserves explicit fields
   ]) {
     const { client, seen } = setup([[], []]);
     try {
-      const result = await client.toolBefore(tool(), { initialState: state });
+      const result = await client.dispatch("tool.before", tool(), {
+        initialState: state,
+      });
       assert.deepEqual(result.errors, []);
       assert.deepEqual(seen[1].params.state, state);
     } finally {
@@ -445,7 +463,7 @@ test("immediate abort returns an interrupted result without auth, delivery or co
         ),
       },
     ];
-    const result = await client.toolBefore(input, {
+    const result = await client.dispatch("tool.before", input, {
       signal: controller.signal,
     });
     assert.equal(result.interrupted, true);
@@ -492,7 +510,7 @@ test("host validation can inspect effective input without reading content stream
         ),
       },
     ];
-    const result = await client.toolBefore(input);
+    const result = await client.dispatch("tool.before", input);
     assert.deepEqual(result.errors, []);
     assert.equal(result.event.tool.input.x > 0, true);
     assert.equal(pulls, 0);
@@ -563,7 +581,10 @@ test("explicit subscriptions require advertised event and mode; wildcards inters
     const { client, seen } = create([subscription]);
     try {
       await assert.rejects(client.initialized, ConfigurationError);
-      await assert.rejects(client.toolBefore(tool()), ConfigurationError);
+      await assert.rejects(
+        client.dispatch("tool.before", tool()),
+        ConfigurationError,
+      );
       assert.deepEqual(seen, []);
     } finally {
       await client.close();
@@ -575,7 +596,7 @@ test("explicit subscriptions require advertised event and mode; wildcards inters
   ]);
   try {
     await client.initialized;
-    const result = await client.toolBefore(tool());
+    const result = await client.dispatch("tool.before", tool());
     await result.observations;
     assert.deepEqual(result.errors, []);
     assert.deepEqual(seen, ["hooks/intercept"]);
@@ -589,7 +610,7 @@ test("explicit subscriptions require advertised event and mode; wildcards inters
   ]);
   try {
     await observeOnly.client.initialized;
-    const result = await observeOnly.client.toolBefore(tool());
+    const result = await observeOnly.client.dispatch("tool.before", tool());
     await result.observations;
     assert.deepEqual(result.errors, []);
     assert.deepEqual(observeOnly.seen, ["hooks/observe"]);

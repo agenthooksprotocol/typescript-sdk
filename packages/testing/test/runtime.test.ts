@@ -255,7 +255,7 @@ test("public boundaries settle intercepts before observers with one occurrence i
     },
   );
   try {
-    const result = await client.toolBefore({
+    const result = await client.dispatch("tool.before", {
       id: "event-1",
       call: { id: "call-1" },
       path: "native",
