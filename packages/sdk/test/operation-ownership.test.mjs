@@ -387,7 +387,7 @@ test(
     const { join } = await import("node:path");
     const dir = await mkdtemp(join(tmpdir(), "ahp-owned-child-"));
     const receipt = join(dir, "receipt.json");
-    const source = `const fs=require('node:fs'); process.stdin.on('data', b=>fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({pid:process.pid,wire:b.toString()})));`;
+    const source = `const fs=require('node:fs'); const child=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:['ignore',process.stdout,process.stderr]}); process.stdin.on('data', b=>fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({pid:process.pid,descendant:child.pid,wire:b.toString()})));`;
     const hooks = new Hooks(
       {
         protocolVersion: "draft",
@@ -411,6 +411,7 @@ test(
     );
     const active = new AbortController(),
       queued = new AbortController();
+    let descendant;
     try {
       const first = hooks.dispatch(
         "tool.before",
@@ -426,6 +427,7 @@ test(
         await new Promise((resolve) => setTimeout(resolve, 5));
       }
       assert.ok(evidence, "child accepted active request");
+      descendant = evidence.descendant;
       const second = hooks.dispatch(
         "tool.before",
         { ...input(), id: "queued" },
@@ -447,6 +449,12 @@ test(
       active.abort();
       queued.abort();
       await hooks.close();
+      // The fixture owns its descendant; Hooks owns only its directly spawned child.
+      if (descendant) {
+        try {
+          process.kill(descendant, "SIGKILL");
+        } catch {}
+      }
       await rm(dir, { recursive: true, force: true });
     }
   },

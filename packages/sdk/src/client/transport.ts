@@ -328,6 +328,11 @@ export class BackendTransport {
       state.stopped = true;
       // Do not let an uncooperative backend retain owned processes after cancellation.
       state.child.kill("SIGKILL");
+      // Descendants can inherit these pipes even after the SDK child exits.
+      // Retire our handles so reaping does not wait for external descendants.
+      state.child.stdin.destroy();
+      state.child.stdout.destroy();
+      state.child.stderr.destroy();
     }
   }
 
