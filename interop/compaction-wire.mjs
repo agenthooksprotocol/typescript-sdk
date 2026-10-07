@@ -11,13 +11,13 @@ import { runCompaction, contentItem, port } from "./compaction.mjs";
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
-/** @type {typeof import("@agenthooksprotocol/sdk/client")} */
+/** @type {typeof import("agenthooksprotocol/client")} */
 const { Hooks, auth } = await import(
-  require.resolve("@agenthooksprotocol/sdk/client")
+  require.resolve("agenthooksprotocol/client")
 );
-/** @type {typeof import("@agenthooksprotocol/sdk/server")} */
+/** @type {typeof import("agenthooksprotocol/server")} */
 const { hooks } = await import(
-  require.resolve("@agenthooksprotocol/sdk/server")
+  require.resolve("agenthooksprotocol/server")
 );
 const digest = (b) => createHash("sha256").update(b).digest("hex");
 const location = (store, sub, ref) =>
@@ -122,7 +122,7 @@ async function exchange(plan, sub, name, snapshot) {
     time: "2026-09-15T12:00:00Z",
     session: { id: name },
   };
-  /** @type {import("@agenthooksprotocol/sdk/client").BoundaryInput<"context.compact.before" | "context.compact.after">} */
+  /** @type {import("agenthooksprotocol/client").BoundaryInput<"context.compact.before" | "context.compact.after">} */
   const event =
     snapshot.boundary === "before"
       ? {

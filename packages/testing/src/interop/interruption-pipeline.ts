@@ -1,7 +1,7 @@
 import type {
   BoundaryInput,
   BoundaryResult,
-} from "@agenthooksprotocol/sdk/client";
+} from "agenthooksprotocol/client";
 
 export interface HostState {
   input: BoundaryInput<"tool.before">["tool"]["input"];

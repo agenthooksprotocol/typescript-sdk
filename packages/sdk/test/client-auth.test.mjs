@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { auth } from "@agenthooksprotocol/sdk/client";
+import { auth } from "agenthooksprotocol/client";
 import { createServer } from "node:http";
 
 // Default delegation uses context composition, not JavaScript call-site `this`.

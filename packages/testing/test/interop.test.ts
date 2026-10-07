@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import process from "node:process";
-import { Hooks } from "@agenthooksprotocol/sdk/client";
+import { Hooks } from "agenthooksprotocol/client";
 import { createAuth, clientAuth } from "../src/interop/auth.js";
 import { atomicScenarios } from "../src/interop/atomic-client.js";
 import {

@@ -8,7 +8,7 @@ import {
   type BoundaryInput,
   type Capabilities,
   type Effect,
-} from "@agenthooksprotocol/sdk/client";
+} from "agenthooksprotocol/client";
 import { openBackend } from "./interruption-server.js";
 
 export interface InterruptionOperation {

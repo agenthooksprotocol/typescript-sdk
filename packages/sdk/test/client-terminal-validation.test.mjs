@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { Hooks } from "@agenthooksprotocol/sdk/client";
+import { Hooks } from "agenthooksprotocol/client";
 
 const returned = { type: "return", value: { action: "decline" } };
 const denied = { type: "deny", reason: "Policy" };

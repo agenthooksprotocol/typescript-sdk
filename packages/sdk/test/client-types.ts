@@ -7,7 +7,7 @@ import {
   type HarnessEvent,
   type HooksOptions,
   type StaticCapabilityManifest,
-} from "@agenthooksprotocol/sdk/client";
+} from "agenthooksprotocol/client";
 
 const options: HooksOptions = {
   source: "urn:test:harness",
@@ -183,7 +183,7 @@ import {
   type ToolBeforeInput,
   type DeliveryDiagnosticCode,
   type DeliveryAuthProvider,
-} from "@agenthooksprotocol/sdk/client";
+} from "agenthooksprotocol/client";
 const generatedFacts: ToolBeforeInput = {
   callId: "call",
   name: "read_file",

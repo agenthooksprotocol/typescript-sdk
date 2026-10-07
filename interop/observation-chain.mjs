@@ -4,16 +4,16 @@ import { setTimeout as delay } from "node:timers/promises";
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
-/** @type {typeof import("@agenthooksprotocol/sdk/client")} */
+/** @type {typeof import("agenthooksprotocol/client")} */
 const { Hooks, auth } = await import(
-  require.resolve("@agenthooksprotocol/sdk/client")
+  require.resolve("agenthooksprotocol/client")
 );
 
 /**
  * The controller only schedules external fixture releases. The public client
  * owns all event construction, real transport, composition and observations.
- * @param {{id: string, requests: {a: {params: {event: Extract<import("@agenthooksprotocol/sdk/client").Event, {type: "tool.before"}>, capabilities: import("@agenthooksprotocol/sdk/client").Capabilities, state?: import("@agenthooksprotocol/sdk/client").BoundaryOptions["initialState"]}}}, chain: {subscriptions: {id: string, mode: 'intercept'|'observe', content: 'metadata'|'omit', failurePolicy: 'fail-open'|'fail-closed'}[], interrupt?: boolean, holdObservers?: boolean}}} row
- * @param {{transport: import("@agenthooksprotocol/sdk/client").Registration["hooks"][number]["transport"], authentication?: import("@agenthooksprotocol/sdk/client").Authentication, auth?: import("@agenthooksprotocol/sdk/client").AuthProvider, fetch?: typeof globalThis.fetch, control: (path: string, value?: object) => Promise<unknown>}} options
+ * @param {{id: string, requests: {a: {params: {event: Extract<import("agenthooksprotocol/client").Event, {type: "tool.before"}>, capabilities: import("agenthooksprotocol/client").Capabilities, state?: import("agenthooksprotocol/client").BoundaryOptions["initialState"]}}}, chain: {subscriptions: {id: string, mode: 'intercept'|'observe', content: 'metadata'|'omit', failurePolicy: 'fail-open'|'fail-closed'}[], interrupt?: boolean, holdObservers?: boolean}}} row
+ * @param {{transport: import("agenthooksprotocol/client").Registration["hooks"][number]["transport"], authentication?: import("agenthooksprotocol/client").Authentication, auth?: import("agenthooksprotocol/client").AuthProvider, fetch?: typeof globalThis.fetch, control: (path: string, value?: object) => Promise<unknown>}} options
  */
 export async function runChain(row, options) {
   const original = structuredClone(row.requests.a);

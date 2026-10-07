@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Hooks, ContentSource } from "@agenthooksprotocol/sdk/client";
+import { Hooks, ContentSource } from "agenthooksprotocol/client";
 
 const input = () => ({
   call: { id: "call" },

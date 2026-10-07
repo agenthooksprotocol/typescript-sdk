@@ -4,12 +4,12 @@ This private, non-normative API follows the canonical
 [working draft](../../../agent-hooks-protocol/spec/draft/index.md) and
 [schema catalogue](../../../agent-hooks-protocol/schema/draft/manifest.json).
 Generated models cover the full draft catalogue; runtime helpers are reference
-slices, not a complete host adapter. The root `@agenthooksprotocol/sdk` entrypoint
+slices, not a complete host adapter. The root `agenthooksprotocol` entrypoint
 and `ToolBeforeRunner` remain a narrower deny/no-effect `tool.before` stdio runner.
 
 ## Validation and wire identity
 
-Import from `@agenthooksprotocol/sdk/draft`:
+Import from `agenthooksprotocol/draft`:
 
 - `parseInterceptRequest` and `parseInterceptResponse` accept JSON text.
 - `validateInterceptRequest` and `validateInterceptResponse` accept unknown values.

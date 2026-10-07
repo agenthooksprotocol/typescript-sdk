@@ -6,25 +6,22 @@ The generated schema API follows the current AHP `draft` snapshot. The `/client`
 
 ## Installation
 
-The packages are not yet published to npm. Clone the workspace to use the current draft:
-
 ```sh
-git clone https://github.com/agenthooksprotocol/typescript-sdk.git
-cd typescript-sdk
-corepack enable
-pnpm install
-pnpm build
+npm install agenthooksprotocol
 ```
+
+Only the SDK is published. The testing and conformance packages remain private
+workspace tools. See [RELEASE.md](RELEASE.md) for release setup and maintenance.
 
 ## Parse and encode protocol messages
 
-Schema-derived APIs are exposed through `@agenthooksprotocol/sdk/generated` so they do not collide with the higher-level runtime API.
+Schema-derived APIs are exposed through `agenthooksprotocol/generated` so they do not collide with the higher-level runtime API.
 
 ```ts
 import {
   encodeCapabilities,
   parseCapabilities,
-} from "@agenthooksprotocol/sdk/generated";
+} from "agenthooksprotocol/generated";
 
 const result = parseCapabilities(
   '{"effects":["deny"],"com.example.preview":true}',
@@ -42,7 +39,7 @@ Every public AHP schema has a generated TypeScript type plus `parse<Type>` and `
 
 ## Intercept a tool call with `Hooks`
 
-Use `@agenthooksprotocol/sdk/client` for new harness integrations. Store a registration
+Use `agenthooksprotocol/client` for new harness integrations. Store a registration
 in `hooks.json` (replace the URL with your hook backend):
 
 ```json
@@ -79,7 +76,7 @@ import {
   state,
   Permission,
   type EventCapabilities,
-} from "@agenthooksprotocol/sdk/client";
+} from "agenthooksprotocol/client";
 
 // Hooks validates registration; JSON.parse alone does not validate it.
 const config: unknown = JSON.parse(await readFile("hooks.json", "utf8"));
@@ -223,7 +220,7 @@ for tool-specific runtime validation and for enacting any other granted effects.
 ## Legacy `ToolBeforeRunner`
 
 ```ts
-import { ToolBeforeRunner } from "@agenthooksprotocol/sdk";
+import { ToolBeforeRunner } from "agenthooksprotocol";
 
 const runner = new ToolBeforeRunner();
 const unregister = runner.register({
@@ -258,8 +255,8 @@ Backends use UTF-8 NDJSON over stdin and stdout. Commands and argument arrays ar
 Keep the same Web `Request`/`Response` handler for HTTP and stdio:
 
 ```ts
-import { hooks } from "@agenthooksprotocol/sdk/server";
-import { serveStdio } from "@agenthooksprotocol/sdk/server/stdio";
+import { hooks } from "agenthooksprotocol/server";
+import { serveStdio } from "agenthooksprotocol/server/stdio";
 
 await serveStdio((request) =>
   hooks.handle(request, (message) => {
@@ -290,10 +287,10 @@ Web server entrypoint.
 
 ## Packages
 
-- `@agenthooksprotocol/sdk/client` — configuration-driven harness client, typed event boundaries, and HTTP/stdio delivery
-- `@agenthooksprotocol/sdk` — legacy hook runner, stdio transport, runtime types, and operational errors
-- `@agenthooksprotocol/sdk/generated` — schema-derived models and structural codecs
-- `@agenthooksprotocol/sdk/draft` — canonical draft validators, generated models, and reference boundary helpers
+- `agenthooksprotocol/client` — configuration-driven harness client, typed event boundaries, and HTTP/stdio delivery
+- `agenthooksprotocol` — legacy hook runner, stdio transport, runtime types, and operational errors
+- `agenthooksprotocol/generated` — schema-derived models and structural codecs
+- `agenthooksprotocol/draft` — canonical draft validators, generated models, and reference boundary helpers
 - `@agenthooksprotocol/testing` — configurable fake backend for integration tests
 - `@agenthooksprotocol/conformance` — black-box conformance runner and CLI
 
@@ -319,7 +316,7 @@ Generated code lives in `packages/sdk/src/generated.ts`. Its provenance is recor
 
 ## Draft API
 
-`@agenthooksprotocol/sdk/draft` exposes generated models and codecs for the full
+`agenthooksprotocol/draft` exposes generated models and codecs for the full
 canonical draft catalogue, schema-backed validators, content-upload helpers, and
 synthetic boundary evaluators. This does **not** expand `ToolBeforeRunner` beyond
 its deny/no-effect `tool.before` slice or provide a complete production adapter.

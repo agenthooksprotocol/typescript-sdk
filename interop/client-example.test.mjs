@@ -34,8 +34,8 @@ test("documented Hooks example loads JSON, preserves typed original arguments, a
       },
     })
     .outputText.replace(
-      "@agenthooksprotocol/sdk/client",
-      pathToFileURL(require.resolve("@agenthooksprotocol/sdk/client")).href,
+      "agenthooksprotocol/client",
+      pathToFileURL(require.resolve("agenthooksprotocol/client")).href,
     );
   const directory = await mkdtemp(join(tmpdir(), "ahp-client-example-"));
   let denied = false;

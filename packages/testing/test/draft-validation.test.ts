@@ -9,11 +9,11 @@ import {
   validateInterceptRequest,
   draftCodecs,
   stageResponse,
-} from "@agenthooksprotocol/sdk/draft";
+} from "agenthooksprotocol/draft";
 import {
   parseInterceptResponse as parseRootResponse,
   validateElicitationMode,
-} from "@agenthooksprotocol/sdk";
+} from "agenthooksprotocol";
 import { atomicScenarios } from "../src/interop/atomic-client.js";
 
 const response = (effects: unknown[]) => ({

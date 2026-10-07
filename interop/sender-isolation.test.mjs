@@ -8,10 +8,10 @@ const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
 const { Hooks, auth } = await import(
-  require.resolve("@agenthooksprotocol/sdk/client")
+  require.resolve("agenthooksprotocol/client")
 );
 const { hooks, attachments } = await import(
-  require.resolve("@agenthooksprotocol/sdk/server")
+  require.resolve("agenthooksprotocol/server")
 );
 
 test("public sender never inherits event Authorization when upload auth is omitted", async () => {

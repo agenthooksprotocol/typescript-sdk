@@ -10,9 +10,9 @@ import {
   actualTaskChange,
   type BoundaryState,
   type BoundaryCapabilities,
-} from "@agenthooksprotocol/sdk/draft";
-import { Hooks, auth } from "@agenthooksprotocol/sdk/client";
-import { hooks } from "@agenthooksprotocol/sdk/server";
+} from "agenthooksprotocol/draft";
+import { Hooks, auth } from "agenthooksprotocol/client";
+import { hooks } from "agenthooksprotocol/server";
 
 // Remaining draft tests intentionally exercise legacy state/lineage/receiver
 // primitives (including noncanonical synthetic kinds and scheduler injection).

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import ts from "typescript";
 import { fileURLToPath } from "node:url";
-import { auth, Hooks } from "@agenthooksprotocol/sdk/client";
+import { auth, Hooks } from "agenthooksprotocol/client";
 import { createHash } from "node:crypto";
 
 test("delivery provider public types support registration context and opaque attempts", () => {

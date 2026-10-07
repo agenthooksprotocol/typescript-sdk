@@ -5,7 +5,7 @@ const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
 const { BackendTransport } = await import(
-  require.resolve("@agenthooksprotocol/sdk/client")
+  require.resolve("agenthooksprotocol/client")
 );
 
 const request = (id = 1) => ({

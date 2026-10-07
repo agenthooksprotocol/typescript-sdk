@@ -5,7 +5,7 @@ const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
 const { ContentManager } = await import(
-  require.resolve("@agenthooksprotocol/sdk/client")
+  require.resolve("agenthooksprotocol/client")
 );
 import { createHash } from "node:crypto";
 

@@ -6,7 +6,7 @@ const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
 const { attachments, UploadError } = await import(
-  require.resolve("@agenthooksprotocol/sdk/server")
+  require.resolve("agenthooksprotocol/server")
 );
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const bytes = new Uint8Array([0, 255, 128, 10]);

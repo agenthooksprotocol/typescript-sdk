@@ -56,8 +56,8 @@ contain credentials; this initial runner deliberately does not record wire trace
 Adapters in other languages may implement these test bindings and reuse the JSON,
 but this runner launches TypeScript only. No production agent, external issuer
 or LLM is involved. Positive adapter paths use the public
-`@agenthooksprotocol/sdk/client` `Hooks` and `auth` surface. Canonical successful
-server replies use `@agenthooksprotocol/sdk/server` `hooks.handle`; content
+`agenthooksprotocol/client` `Hooks` and `auth` surface. Canonical successful
+server replies use `agenthooksprotocol/server` `hooks.handle`; content
 fixtures use its `attachments.parse` and `attachments.response` helpers.
 
 Raw transport probes remain intentional for malformed envelopes, invalid

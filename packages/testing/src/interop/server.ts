@@ -3,9 +3,9 @@ import { createServer } from "node:http";
 import { createServer as createTlsServer } from "node:https";
 import { readFileSync } from "node:fs";
 import process from "node:process";
-import { NdjsonDecoder } from "@agenthooksprotocol/sdk";
-import { parseInterceptRequest as parseDraftRequest } from "@agenthooksprotocol/sdk/draft";
-import { hooks, attachments } from "@agenthooksprotocol/sdk/server";
+import { NdjsonDecoder } from "agenthooksprotocol";
+import { parseInterceptRequest as parseDraftRequest } from "agenthooksprotocol/draft";
+import { hooks, attachments } from "agenthooksprotocol/server";
 import { createAuth } from "./auth.js";
 
 const fixture = (name: string) =>

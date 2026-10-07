@@ -5,10 +5,10 @@ const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
 const { Hooks, auth } = await import(
-  require.resolve("@agenthooksprotocol/sdk/client")
+  require.resolve("agenthooksprotocol/client")
 );
 const { hooks, attachments } = await import(
-  require.resolve("@agenthooksprotocol/sdk/server")
+  require.resolve("agenthooksprotocol/server")
 );
 
 // The injected adapter changes network mechanics only. The real client and

@@ -7,7 +7,7 @@ const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
 const { hooks } = await import(
-  require.resolve("@agenthooksprotocol/sdk/server")
+  require.resolve("agenthooksprotocol/server")
 );
 const request = (message) =>
   new Request("https://receiver.test/hooks", {

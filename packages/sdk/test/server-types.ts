@@ -4,7 +4,7 @@ import {
   type Message,
   type InterceptResult,
   type CapabilitiesResult,
-} from "@agenthooksprotocol/sdk/server";
+} from "agenthooksprotocol/server";
 declare const request: Request;
 declare const user: { id: string };
 declare const policyService: {
@@ -64,7 +64,7 @@ void badOptional;
 import {
   serveStdio,
   type StdioOptions,
-} from "@agenthooksprotocol/sdk/server/stdio";
+} from "agenthooksprotocol/server/stdio";
 import type { Readable, Writable } from "node:stream";
 declare const input: Readable;
 declare const output: Writable;

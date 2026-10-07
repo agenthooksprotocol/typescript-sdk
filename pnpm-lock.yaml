@@ -14,7 +14,7 @@ importers:
 
   packages/conformance:
     dependencies:
-      '@agenthooksprotocol/sdk':
+      'agenthooksprotocol':
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
@@ -33,7 +33,7 @@ importers:
 
   packages/testing:
     dependencies:
-      '@agenthooksprotocol/sdk':
+      'agenthooksprotocol':
         specifier: workspace:*
         version: link:../sdk
 
