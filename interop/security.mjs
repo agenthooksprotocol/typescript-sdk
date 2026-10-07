@@ -1,7 +1,82 @@
+// @ts-check
+import { sdkClient } from "./common.mjs";
+const { Hooks, auth: sdkAuth, BackendTransport } = sdkClient;
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { Readable } from "node:stream";
 import { readFileSync } from "node:fs";
 import { request as http } from "node:http";
 import { request as https } from "node:https";
+/** Test-only network adapter. TLS identity is bound to exact event destinations;
+ * upload and OAuth traffic retain their separate SDK/default bindings.
+ * @param {{mode: string, caFile?: string, certFile?: string, keyFile?: string}} config
+ * @param {string | string[]} [eventEndpoints]
+ * @returns {typeof globalThis.fetch}
+ */
+export function fixtureFetch(config, eventEndpoints = []) {
+  const endpoints = new Set(
+    Array.isArray(eventEndpoints) ? eventEndpoints : [eventEndpoints],
+  );
+  return async (input, init = {}) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (config.mode !== "mtls" || !endpoints.has(url))
+      return fetch(input, init);
+    if (!config.caFile || !config.certFile || !config.keyFile)
+      throw Error("Missing TLS fixture identity");
+    if (input instanceof Request)
+      throw Error("Fixture TLS adapter expects SDK URL and init");
+    if (
+      init.body !== undefined &&
+      typeof init.body !== "string" &&
+      !(init.body instanceof Uint8Array)
+    )
+      throw Error("Unsupported fixture request body");
+    const tls = {
+      ca: readFileSync(config.caFile),
+      cert: readFileSync(config.certFile),
+      key: readFileSync(config.keyFile),
+    };
+    return new Promise((resolve, reject) => {
+      const req = https(
+        url,
+        {
+          method: init.method,
+          headers: Object.fromEntries(new Headers(init.headers)),
+          ...tls,
+          ...(init.signal ? { signal: init.signal } : {}),
+        },
+        (response) => {
+          const headers = new Headers();
+          for (let i = 0; i < response.rawHeaders.length; i += 2)
+            headers.append(response.rawHeaders[i], response.rawHeaders[i + 1]);
+          const nullBody =
+            init.method?.toUpperCase() === "HEAD" ||
+            [204, 205, 304].includes(response.statusCode ?? 0);
+          if (nullBody) {
+            // No Web body owns this stream. Consume it so Node can finish the
+            // response and release the socket; ordinary bodies stay consumer-owned.
+            response.on("error", reject);
+            response.resume();
+          }
+          resolve(
+            new Response(
+              nullBody
+                ? null
+                : /** @type {ReadableStream<Uint8Array>} */ (
+                    /** @type {unknown} */ (Readable.toWeb(response))
+                  ),
+              {
+                status: response.statusCode,
+                headers,
+              },
+            ),
+          );
+        },
+      );
+      req.on("error", reject);
+      req.end(init.body);
+    });
+  };
+}
 export function authorize(req, auth) {
   // req.headers can silently retain only the first Authorization field.
   const raw = req.rawHeaders ?? [];
@@ -28,8 +103,8 @@ export function authorize(req, auth) {
     const parts = token.split(".");
     if (parts.length !== 3) return false;
     const [h, p, s] = parts,
-      header = JSON.parse(Buffer.from(h, "base64url")),
-      claims = JSON.parse(Buffer.from(p, "base64url"));
+      header = JSON.parse(Buffer.from(h, "base64url").toString("utf8")),
+      claims = JSON.parse(Buffer.from(p, "base64url").toString("utf8"));
     if (header.alg !== "HS256") return false;
     const key =
       auth.signingKey ?? `TEST-ONLY-ahp-interop-${auth.mode}-signing-key`;
@@ -50,28 +125,68 @@ export function authorize(req, auth) {
     return false;
   }
 }
-export async function accessToken(auth) {
-  if (auth.mode === "bearer") return auth.token;
-  if (auth.mode === "workload") return auth.assertion;
-  if (auth.mode === "oauth") {
-    const res = await fetch(auth.tokenEndpoint, {
-      method: "POST",
-      redirect: "error",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "client_credentials",
-        client_id: auth.clientId,
-        client_secret: auth.clientSecret,
-        audience: auth.audience ?? "urn:ahp:interop:local-server",
-      }),
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) throw Error("Token acquisition failed");
-    const data = await res.json();
-    if (typeof data.access_token !== "string") throw Error("Missing token");
-    return data.access_token;
-  }
+/** Compose fixture credential sources with public SDK authentication defaults. */
+export function fixtureAuth(config) {
+  return sdkAuth({
+    async authenticate(context, options) {
+      // Upload bindings never inherit event bearer/workload/OAuth credentials,
+      // including an explicitly anonymous upload at the same destination.
+      if (context.purpose === "upload")
+        return sdkAuth.authenticate(context, options);
+      if (config.mode === "none" || config.mode === "mtls") return undefined;
+      if (config.mode === "oauth") {
+        const origin = new URL(config.tokenEndpoint).origin;
+        return sdkAuth.clientCredentials(
+          context,
+          {
+            client: {
+              issuer: origin,
+              resource: config.audience ?? "urn:ahp:interop:local-server",
+              clientId: config.clientId,
+              clientSecretRef: "fixture-secret",
+              flow: "client_credentials",
+            },
+            metadata: {
+              issuer: origin,
+              token_endpoint: config.tokenEndpoint,
+              grant_types_supported: ["client_credentials"],
+              token_endpoint_auth_methods_supported: ["client_secret_post"],
+            },
+            parameters: new URLSearchParams({
+              audience: config.audience ?? "urn:ahp:interop:local-server",
+            }),
+          },
+          { ...options, allowedLoopbackOrigins: [origin] },
+        );
+      }
+      if (config.mode === "workload") return { token: config.assertion };
+      return sdkAuth.authenticate(
+        {
+          ...context,
+          authentication: { type: "bearer", tokenRef: "fixture-token" },
+        },
+        options,
+      );
+    },
+    resolveCredentialReference(name, context) {
+      if (context?.purpose !== "upload") {
+        if (name === "fixture-secret") return config.clientSecret;
+        if (name === "fixture-token") return config.token;
+      }
+      return sdkAuth.resolveCredentialReference(name, context);
+    },
+  });
 }
+export async function accessToken(config) {
+  const provider = fixtureAuth(config);
+  return (
+    await provider.authenticate({
+      url: config.tokenEndpoint ?? "https://fixture.invalid",
+      signal: AbortSignal.timeout(10000),
+    })
+  )?.token;
+}
+/** Raw status/duplicate-header/legacy mTLS probes and non-protocol fixture routes. */
 export function sendStatus(endpoint, path, payload, auth, token) {
   return new Promise((resolve, reject) => {
     const url = new URL(path, endpoint),
@@ -117,8 +232,82 @@ export function sendStatus(endpoint, path, payload, auth, token) {
   });
 }
 
-export async function send(endpoint, path, payload, auth, token) {
-  const response = await sendStatus(endpoint, path, payload, auth, token);
+/** Compatibility boundary bridge; the SDK owns event framing and response validation. */
+export async function send(endpoint, path, payload, config, token) {
+  if (["hooks/intercept", "hooks/observe"].includes(payload?.method)) {
+    const observe = payload.method === "hooks/observe";
+    const event = payload.params.event;
+    const client = new Hooks(
+      {
+        protocolVersion: "draft",
+        hooks: [
+          {
+            id: "interop.fixture",
+            transport: { type: "http", url: new URL(path, endpoint).href },
+            subscriptions: [
+              {
+                mode: observe ? "observe" : "intercept",
+                events: [event.type],
+                ...(!observe
+                  ? { timeoutMs: 15000, failurePolicy: "fail-closed" }
+                  : {}),
+                content: { default: "metadata" },
+              },
+            ],
+          },
+        ],
+      },
+      {
+        source: event.source,
+        capabilities: observe
+          ? { [event.type]: { modes: ["observe"] } }
+          : { [event.type]: payload.params.capabilities },
+        fetch: fixtureFetch(config, new URL(path, endpoint).href),
+        auth: token
+          ? sdkAuth({ authenticate: async () => ({ token }) })
+          : fixtureAuth(config),
+      },
+    );
+    try {
+      const { type, source, ...input } = event;
+      const result = await client.dispatch(type, input);
+      const errors = [...result.errors, ...(await result.observations)];
+      if (errors.length)
+        throw Object.assign(Error("SDK delivery failed"), { errors });
+      if (observe) return null;
+      return { jsonrpc: "2.0", id: payload.id, result: result.response };
+    } finally {
+      await client.close();
+    }
+  }
+  if (payload?.method === "hooks/capabilities") {
+    const url = new URL(path, endpoint).href;
+    const network = fixtureFetch(config, url);
+    const provider = fixtureAuth(config);
+    const transport = new BackendTransport(
+      {
+        id: "interop.discovery",
+        transport: { type: "http", url },
+        subscriptions: [],
+      },
+      async (target, init) => {
+        const credential = token
+          ? { token }
+          : await provider.authenticate({ url: target });
+        const headers = new Headers(init.headers);
+        if (credential)
+          headers.set("authorization", `Bearer ${credential.token}`);
+        return network(target, { ...init, headers });
+      },
+    );
+    try {
+      return await transport.request(payload, AbortSignal.timeout(15000));
+    } finally {
+      await transport.close();
+    }
+  }
+  // GET control routes and negative/raw protocol probes are not SDK boundaries.
+  const response = await sendStatus(endpoint, path, payload, config, token);
   if (response.status !== 200) throw Error(`HTTP failure: ${response.status}`);
   return response.value;
 }

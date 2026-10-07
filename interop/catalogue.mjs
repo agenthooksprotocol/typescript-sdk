@@ -1,6 +1,7 @@
 import { manifest as coreManifest, discovery } from "./common.mjs";
-import { validateCanonical } from "./lifecycle-common.mjs";
-import { draftCodecs } from "../packages/sdk/dist/src/draft/index.js";
+import { sdkDraft, sdkClient } from "./common.mjs";
+const { draftCodecs } = sdkDraft;
+const { Hooks, auth: hooksAuth } = sdkClient;
 export const catalogueEvents = [
   "tool.before",
   "tool.after",
@@ -50,32 +51,40 @@ export const catalogueManifest = {
     },
   ],
 };
-/** Registration feasibility uses validated discovery, never self-asserted identity. */
-export function evaluateRegistration(
+/** Hooks validates registration; host policy checks credential availability and application requirements. */
+export async function evaluateRegistration(
   registration,
   manifest,
   requirements = [],
   context = {},
 ) {
+  let hooks;
   try {
-    validateCanonical(
-      "registration",
-      registration,
-      draftCodecs.parseRegistration,
-    );
+    const parsed = draftCodecs.parseRegistration(registration);
+    if (!parsed.ok) return { accepted: false };
+    hooks = new Hooks(parsed.value, {
+      source: "urn:ahp:interop:catalogue",
+      capabilities: manifest,
+      auth: hooksAuth({
+        resolveEnvironmentVariable: (name) => context.environment?.[name],
+      }),
+    });
+    await hooks.initialized;
+    return registrationPolicy(parsed.value, manifest, requirements, context);
   } catch {
     return { accepted: false };
+  } finally {
+    await hooks?.close();
   }
+}
+/** Host requirements are separate from protocol configuration validity. */
+function registrationPolicy(registration, manifest, requirements, context) {
   const reject = () => ({ accepted: false }),
-    ids = new Set(),
     subscribed = new Set();
   const resolve = (name) =>
     typeof context.environment?.[name] === "string" &&
     context.environment[name].length > 0;
   for (const backend of registration.hooks) {
-    if (ids.has(backend.id)) return reject();
-    ids.add(backend.id);
-    if (!manifest.transports.includes(backend.transport.type)) return reject();
     const auth = backend.authentication;
     if (auth) {
       if (!manifest.authentication.includes(auth.type)) return reject();
@@ -92,7 +101,6 @@ export function evaluateRegistration(
     }
     for (const sub of backend.subscriptions) {
       const scope = sub.scope ?? "user";
-      if (!manifest.managedPolicy.scopes.includes(scope)) return reject();
       if (
         (scope === "managed" || sub.disableable === false) &&
         manifest.managedPolicy.disableable !== false
@@ -101,12 +109,6 @@ export function evaluateRegistration(
       if (sub.upload?.auth && !resolve(sub.upload.auth.tokenEnv))
         return reject();
       for (const event of sub.events) {
-        if (
-          !manifest.events.some(
-            (entry) => entry.event === event && entry.modes.includes(sub.mode),
-          )
-        )
-          return reject();
         subscribed.add(JSON.stringify([event, sub.mode]));
       }
     }

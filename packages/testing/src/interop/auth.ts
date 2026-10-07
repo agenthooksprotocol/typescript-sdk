@@ -1,4 +1,5 @@
 /** TEST ONLY. Public synthetic secrets; HS256 models local trust, not production federation. */
+import { auth } from "@agenthooksprotocol/sdk/client";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 const CLOCK = 1_893_456_000; // Fixed 2030-01-01T00:00:00Z, not wall-clock time.
@@ -151,4 +152,40 @@ export function createAuth() {
       );
     },
   };
+}
+
+/** Host-owned synthetic trust; OAuth token exchange and bearer resolution stay SDK-owned. */
+export function clientAuth(mode: string, origin: string) {
+  const fixture = createAuth();
+  return auth({
+    allowedLoopbackOrigins: [origin],
+    resolveEnvironmentVariable: (name) =>
+      name === "AHP_TEST_BEARER" ? fixture.credentials.bearer : undefined,
+    resolveCredentialReference: (reference) =>
+      reference === "bearer"
+        ? fixture.credentials.bearer
+        : reference === "client-secret"
+          ? fixture.credentials.clientSecret
+          : undefined,
+    ...(mode === "workload"
+      ? {
+          authenticate: async () => ({ token: fixture.assertion() }),
+        }
+      : {}),
+    discover: async () => ({
+      client: {
+        issuer: "https://issuer.interop.test",
+        resource: origin,
+        clientId: fixture.credentials.clientId,
+        clientSecretRef: "client-secret",
+        flow: "client_credentials" as const,
+      },
+      metadata: {
+        issuer: "https://issuer.interop.test",
+        token_endpoint: `${origin}/token`,
+        token_endpoint_auth_methods_supported: ["client_secret_post"],
+        grant_types_supported: ["client_credentials"],
+      },
+    }),
+  });
 }

@@ -23,6 +23,14 @@ language toolchains and protocol-owned fixtures.
 
 ## Protocol and local control
 
+Positive adapter delivery uses the public `@agenthooksprotocol/sdk/client`
+`Hooks` and `auth` APIs. Receivers use `@agenthooksprotocol/sdk/server`
+`hooks.handle`; application-owned upload storage consumes `attachments.parse`
+to verified EOF before publishing `attachments.response`. The fixture retains
+host execution, authorization, storage scopes, and test scheduling. Explicit
+malformed/replayed wire probes bypass normal SDK construction so that validation
+and rejection remain exercised rather than silently repaired.
+
 Core HTTP delivery uses POST `/intercept`; stdio uses canonical JSON-RPC NDJSON.
 Stdio discovery uses `hooks/capabilities` with `params.protocolVersion: "draft"`
 and a correlated `result.manifest`. The core test binding also exposes an
@@ -38,14 +46,15 @@ See [LIFECYCLE.md](LIFECYCLE.md) for lifecycle and catalogue operation.
 
 ## Authentication and content
 
-HTTP supports no authentication, bearer tokens, test OAuth acquisition, signed
-workload assertions, and mutual TLS. Stdio trusts the launched process; HTTP auth
-modes are inapplicable there. OAuth metadata discovery is not implemented; test
-OAuth acquisition requires explicit configuration. OAuth/workload verification uses **test-only** HS256
-trust, including issuer, audience, purpose, and expiry checks. OAuth redirects
-are rejected rather than forwarding client secrets. Duplicate Authorization
-fields are rejected. TLS health counters distinguish sanitized certificate
-verification failures from other handshake failures.
+HTTP fixtures support no authentication, bearer tokens, test OAuth acquisition,
+signed workload assertions, and mutual TLS. Stdio trusts the launched process;
+HTTP auth modes are inapplicable there. The fixture identity provider uses
+explicit configuration and **test-only** HS256 trust, including issuer, audience,
+purpose, and expiry checks. This fixture mechanism is independent of the SDK's
+OAuth discovery support. OAuth redirects are rejected rather than forwarding
+client secrets. Duplicate Authorization fields are rejected. TLS health counters
+distinguish sanitized certificate verification failures from other handshake
+failures.
 
 An upload has independent credentials. Event tokens, client certificates, and
 OAuth acquisition are never inherited by upload requests. Upload routing and

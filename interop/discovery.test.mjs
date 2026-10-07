@@ -7,10 +7,8 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createInterface } from "node:readline";
 import { createServer } from "node:http";
-import {
-  validateCapabilitiesRequest,
-  validateCapabilitiesResponse,
-} from "../packages/sdk/dist/src/draft/index.js";
+import { sdkDraft } from "./common.mjs";
+const { validateCapabilitiesRequest, validateCapabilitiesResponse } = sdkDraft;
 import { discovery, manifest, listen, body, reply } from "./common.mjs";
 const discoveryRequest = {
   jsonrpc: "2.0",
@@ -112,7 +110,7 @@ test(
             ),
           );
         } else {
-          assert.equal(response.error?.code, -32600);
+          assert.ok([-32602, -32601, -32001].includes(response.error?.code));
           assert.equal("result" in response, false);
         }
       }

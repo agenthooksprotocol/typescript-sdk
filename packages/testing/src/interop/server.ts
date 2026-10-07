@@ -3,8 +3,9 @@ import { createServer } from "node:http";
 import { createServer as createTlsServer } from "node:https";
 import { readFileSync } from "node:fs";
 import process from "node:process";
-import { NdjsonDecoder, PROTOCOL_VERSION } from "@agenthooksprotocol/sdk";
+import { NdjsonDecoder } from "@agenthooksprotocol/sdk";
 import { parseInterceptRequest as parseDraftRequest } from "@agenthooksprotocol/sdk/draft";
+import { hooks, attachments } from "@agenthooksprotocol/sdk/server";
 import { createAuth } from "./auth.js";
 
 const fixture = (name: string) =>
@@ -13,6 +14,7 @@ const fixture = (name: string) =>
     "utf8",
   );
 const auth = createAuth();
+const storedAttachments = new Map<string, Uint8Array>();
 // Scripts travel only over the parent/child test control plane, never AHP fields.
 let scriptedReplies: Record<string, string> = {};
 let scriptedStatuses: Record<string, number> = {};
@@ -22,7 +24,7 @@ process.on("message", (message: any) => {
   scriptedStatuses = message.statuses ?? {};
   process.send({ type: "scripts-ready" });
 });
-function intercept(body: string): string {
+async function intercept(body: string): Promise<string> {
   try {
     const decoded = parseDraftRequest(body);
     if (!decoded.ok) throw new Error("Invalid draft request");
@@ -33,12 +35,33 @@ function intercept(body: string): string {
       delete scriptedReplies[envelope.id];
       return reply;
     }
-    const request = envelope;
-    return JSON.stringify({
-      jsonrpc: "2.0",
-      id: request.id,
-      result: { protocolVersion: PROTOCOL_VERSION, effects: [] },
-    });
+    const response = await hooks.handle(
+      new Request("http://interop.test/hooks", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      }),
+      (message) => {
+        if (
+          message.method === "hooks/intercept" &&
+          message.params.event.type === "user.message.inbound"
+        ) {
+          for (const item of message.params.event.message.text ?? []) {
+            if (
+              !("body" in item) ||
+              !item.body ||
+              typeof item.body !== "object" ||
+              !("ref" in item.body) ||
+              typeof item.body.ref !== "string" ||
+              !storedAttachments.has(item.body.ref)
+            )
+              throw Error("Uncommitted attachment");
+          }
+        }
+        return { effects: [] };
+      },
+    );
+    return response.text();
   } catch {
     return JSON.stringify({
       jsonrpc: "2.0",
@@ -69,18 +92,64 @@ async function handler(req: any, res: any): Promise<void> {
     return;
   }
   if (
-    !["/none", "/bearer", "/oauth", "/workload", "/mtls", "/token"].includes(
-      path,
-    )
+    ![
+      "/none",
+      "/bearer",
+      "/oauth",
+      "/workload",
+      "/mtls",
+      "/token",
+      "/attachments",
+    ].includes(path)
   ) {
     respond(404, "{}");
     return;
   }
   if (
     path !== "/token" &&
-    !auth.authorize(path, req.headers, req.socket.authorized === true)
+    !auth.authorize(
+      path === "/attachments" ? "/bearer" : path,
+      req.headers,
+      req.socket.authorized === true,
+    )
   ) {
     respond(401, "{}");
+    return;
+  }
+  if (path === "/attachments") {
+    try {
+      const chunks: Uint8Array[] = [];
+      let length = 0;
+      for await (const chunk of req) {
+        length += chunk.length;
+        if (length > 1024 * 1024) {
+          respond(413, "{}");
+          return;
+        }
+        chunks.push(chunk);
+      }
+      const upload = attachments.parse(
+        new Request("http://interop.test/attachments", {
+          method: "POST",
+          headers: req.headers,
+          body: Buffer.concat(chunks),
+        }),
+      );
+      // Test-only immutable storage: publish only after verified EOF.
+      const bytes = new Uint8Array(
+        await new Response(upload.body).arrayBuffer(),
+      );
+      const ref = `urn:ahp:interop:sha256:${upload.sha256}`;
+      storedAttachments.set(ref, bytes);
+      const response = attachments.response({
+        ref,
+        size: upload.size,
+        sha256: upload.sha256,
+      });
+      respond(response.status, await response.text());
+    } catch {
+      respond(400, "{}");
+    }
     return;
   }
   let body = "";
@@ -104,7 +173,7 @@ async function handler(req: any, res: any): Promise<void> {
       } catch {
         /* intercept reports malformed requests */
       }
-      respond(status, intercept(body));
+      respond(status, await intercept(body));
     }
   } catch {
     respond(400, "{}");
@@ -140,10 +209,13 @@ const listen = (server: any): Promise<number> =>
   });
 const [httpPort, httpsPort] = await Promise.all([listen(http), listen(tls)]);
 const decoder = new NdjsonDecoder();
+let stdioQueue = Promise.resolve();
 process.stdin.on("data", (chunk: Uint8Array) => {
   try {
     for (const line of decoder.push(chunk))
-      process.stdout.write(intercept(line) + "\n");
+      stdioQueue = stdioQueue.then(async () => {
+        process.stdout.write((await intercept(line)) + "\n");
+      });
   } catch {
     process.exitCode = 1;
     process.stdin.destroy();
@@ -163,7 +235,7 @@ process.stdin.on("end", () => {
   } catch {
     process.exitCode = 1;
   }
-  shutdown();
+  void stdioQueue.finally(shutdown);
 });
 process.on("disconnect", () => {
   process.stdin.destroy();

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { appendFileSync } from "node:fs";
+import { hooks } from "@agenthooksprotocol/sdk/server";
 import { createInterface } from "node:readline";
 import {
   parseInterceptRequest,
@@ -120,6 +121,41 @@ async function main(): Promise<void> {
       await writeFrame("{malformed", config.chunkSize);
       continue;
     }
+    // Canonical positive fixtures use the public server evaluator. The main
+    // package compatibility runner still emits its historical tool.callId shape;
+    // keep that deliberately separate from the canonical client path below.
+    let canonical = false;
+    try {
+      const message = JSON.parse(line);
+      canonical =
+        message.method === "hooks/observe" ||
+        message.params?.event?.call !== undefined;
+    } catch {
+      // Malformed-input fixtures continue through the legacy error path.
+    }
+    if (canonical && ["no-effect", "deny", "timeout"].includes(config.mode)) {
+      const response = await hooks.handle(
+        new Request("http://stdio.fixture/hooks", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: line,
+        }),
+        (message) => {
+          if (message.method === "hooks/observe") return;
+          return {
+            effects:
+              config.mode === "deny"
+                ? [{ type: "deny", reason: config.reason }]
+                : [],
+          };
+        },
+      );
+      const frame = await response.text();
+      if (frame !== "") await writeFrame(frame, config.chunkSize);
+      continue;
+    }
+    // Fault injection intentionally bypasses server validation so callers can
+    // exercise malformed frames, unsupported effects and correlation failures.
     let request;
     try {
       request = parseInterceptRequest(line);

@@ -1,41 +1,32 @@
+// @ts-check
+import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { schemas } from "../packages/sdk/dist/src/draft/schemas.js";
-import { draftCodecs } from "../packages/sdk/dist/src/draft/index.js";
+import { isDeepStrictEqual } from "node:util";
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
-const { Ajv2020 } = require("ajv/dist/2020.js");
-const { fullFormats } = require("ajv-formats/dist/formats.js");
-const ajv = new Ajv2020({ strict: false, allErrors: true });
-ajv.addFormat("uri", fullFormats.uri);
-ajv.addFormat("date-time", fullFormats["date-time"]);
-for (const schema of schemas) ajv.addSchema(schema);
-export function validateCanonical(name, value, decoder) {
-  const validator = ajv.getSchema(
-    `https://agenthooksprotocol.org/schemas/draft/${name}.schema.json`,
-  );
-  if (!validator || !validator(value) || !decoder(value).ok)
-    throw Error(
-      `Invalid canonical ${name}: ${JSON.stringify(validator?.errors)}`,
-    );
+// Resolve the package's public exports, not its implementation modules.
+/** @type {typeof import("@agenthooksprotocol/sdk/client")} */
+export const {
+  Hooks,
+  BackendTransport,
+  auth: hooksAuth,
+} = await import(require.resolve("@agenthooksprotocol/sdk/client"));
+/** @type {typeof import("@agenthooksprotocol/sdk/server")} */
+export const { hooks: serverHooks } = await import(
+  require.resolve("@agenthooksprotocol/sdk/server")
+);
+/** @type {typeof import("@agenthooksprotocol/sdk/draft")} */
+const draft = await import(require.resolve("@agenthooksprotocol/sdk/draft"));
+// Fixture prechecks use the same public canonical validators as wire handling.
+// Generated codecs alone intentionally accept unknown/extended shapes.
+export function validateCanonical(name, value, _decoder) {
+  if (name !== "registration" || !draft.validateRegistration(value).ok)
+    throw Error(`Invalid canonical ${name}`);
 }
 export function validateObserve(value) {
-  for (const [name, item, decoder] of [
-    ["observe-notification", value, draftCodecs.parseObserveNotification],
-    ...(value.params?.event?.items ?? []).map((item) => [
-      "content-item",
-      item,
-      draftCodecs.parseContentItem,
-    ]),
-  ]) {
-    const validate = ajv.getSchema(
-      `https://agenthooksprotocol.org/schemas/draft/${name}.schema.json`,
-    );
-    if (!validate(item) || !decoder(item).ok)
-      throw Error(
-        `Invalid canonical ${name}: ${JSON.stringify(validate.errors)}`,
-      );
-  }
+  if (!draft.validateObserveNotification(value).ok)
+    throw Error("Invalid canonical observe-notification");
 }
 export async function http(endpoint, path, value) {
   const response = await fetch(new URL(path, endpoint), {
@@ -52,4 +43,204 @@ export async function control(endpoint, path, value) {
   const result = await http(endpoint, path, value);
   if (result.status >= 300) throw Error(`${path}: HTTP ${result.status}`);
   return result.value;
+}
+
+/** Build the public consumer boundary with checked registration and options.
+ * @param {{transport: import("@agenthooksprotocol/sdk/client").Registration["hooks"][number]["transport"],
+ * source: string, event: import("@agenthooksprotocol/sdk/client").EventType,
+ * mode: "intercept" | "observe", capabilities?: import("@agenthooksprotocol/sdk/client").Capabilities,
+ * bodySelected: boolean, upload?: import("@agenthooksprotocol/sdk/client").ContentUpload,
+ * auth: import("@agenthooksprotocol/sdk/client").AuthProvider, fetch?: typeof globalThis.fetch}} options
+ */
+export function lifecycleHooks(options) {
+  return new Hooks(
+    {
+      protocolVersion: "draft",
+      hooks: [
+        {
+          id: "interop.lifecycle",
+          transport: options.transport,
+          subscriptions: [
+            {
+              mode: options.mode,
+              events: [options.event],
+              ...(options.mode === "intercept"
+                ? { timeoutMs: 15000, failurePolicy: "fail-open" }
+                : {}),
+              content: { default: options.bodySelected ? "body" : "metadata" },
+              ...(options.upload ? { upload: options.upload } : {}),
+            },
+          ],
+        },
+      ],
+    },
+    {
+      source: options.source,
+      capabilities: {
+        [options.event]: {
+          modes: [options.mode],
+          ...(options.capabilities ? { capabilities: options.capabilities } : {}),
+        },
+      },
+      auth: options.auth,
+      ...(options.fetch ? { fetch: options.fetch } : {}),
+    },
+  );
+}
+/** @param {InstanceType<typeof Hooks>} client
+ * @param {{type: import("@agenthooksprotocol/sdk/client").EventType, source: string} & import("@agenthooksprotocol/sdk/client").BoundaryInput<import("@agenthooksprotocol/sdk/client").EventType>} event
+ * @param {import("@agenthooksprotocol/sdk/client").BoundaryOptions["initialState"]} [state]
+ * @param {AbortSignal} [signal]
+ */
+export function dispatchLifecycle(client, event, state, signal) {
+  const { type, source, ...input } = event;
+  return client.dispatch(type, input, {
+    ...(state === undefined ? {} : { initialState: state }),
+    ...(signal ? { signal } : {}),
+  });
+}
+
+/** Lifecycle/catalogue rows contain request maps and controller steps, unlike core rows.
+ * @param {string} path
+ */
+export async function lifecycleScenarios(path) {
+  const value = JSON.parse(await readFile(path, "utf8"));
+  if (
+    value.version !== 1 ||
+    !Array.isArray(value.scenarios) ||
+    value.scenarios.some(
+      (row) => typeof row.id !== "string" || !row.requests || !row.responses,
+    )
+  )
+    throw Error("Invalid lifecycle scenario file");
+  return value.scenarios;
+}
+
+/** Compatibility network binding: route SDK-produced messages without constructing
+ * or interpreting canonical effects. Auth headers, bytes and abort signals survive.
+ * @param {typeof globalThis.fetch} network
+ * @param {string | undefined} endpoint
+ * @returns {typeof globalThis.fetch}
+ */
+export function lifecycleFetch(network, endpoint) {
+  if (!endpoint) return network;
+  const intercept = new URL("/intercept", endpoint).href;
+  return (input, init = {}) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url === intercept && typeof init.body === "string") {
+      const message = JSON.parse(init.body);
+      if (message.method === "hooks/observe")
+        return network(new URL("/observe", endpoint).href, init);
+    }
+    return network(input, init);
+  };
+}
+
+// Transparent stdio bootstrap: the parent owns the selected foreign executable
+// and its readiness/controller. This child only carries unchanged stream bytes.
+if (process.argv[2] === "--lifecycle-bridge") {
+  const { connect } = await import("node:net");
+  const socket = connect(Number(process.argv[3]), "127.0.0.1");
+  process.stdin.pipe(socket);
+  socket.pipe(process.stdout);
+  socket.on("error", (error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+  socket.on("close", () => process.stdin.destroy());
+}
+
+/** Bounded fixture-only network rendezvous. Bytes are acquired outside the SDK;
+ * only opening this gate makes them visible to its correlation/acceptance path.
+ * The gate never validates, composes, or decides the response's effects.
+ */
+export function lifecycleWireGate(signal, timeoutMs = 15000) {
+  let acquire, rejectAcquire, open, rejectRelease;
+  let seen = false,
+    opened = false,
+    releaseReason;
+  const abort = () => release("abort");
+  const acquired = new Promise((resolve, reject) => {
+    acquire = resolve;
+    rejectAcquire = reject;
+  });
+  acquired.catch(() => {});
+  const released = new Promise((resolve, reject) => {
+    open = resolve;
+    rejectRelease = reject;
+  });
+  released.catch(() => {});
+  const timer = setTimeout(() => {
+    const error = Error("Wire acquisition watchdog");
+    opened = true;
+    releaseReason = "timeout";
+    rejectAcquire(error);
+    rejectRelease(error);
+    signal?.removeEventListener("abort", abort);
+  }, timeoutMs);
+  function release(reason = "accept") {
+    if (opened) return;
+    opened = true;
+    releaseReason = reason;
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+    open();
+  }
+  if (signal?.aborted) abort();
+  else signal?.addEventListener("abort", abort, { once: true });
+  return {
+    acquired,
+    get seen() {
+      return seen;
+    },
+    get releaseReason() {
+      return releaseReason;
+    },
+    async hold() {
+      seen = true;
+      acquire();
+      await released;
+    },
+    release,
+  };
+}
+
+// LIFECYCLE.md deliberately makes legacy foreign observers return this exact
+// unsolicited denial. Recognizing it is fixture evidence, not SDK acceptance.
+export const maliciousLifecycleObservation = {
+  jsonrpc: "2.0",
+  id: "unsolicited-observer",
+  result: {
+    protocolVersion: "draft",
+    effects: [{ type: "deny", reason: "observer must not decide" }],
+  },
+};
+export async function isMaliciousLifecycleObservation(response) {
+  if (
+    response.status !== 200 ||
+    response.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !==
+      "application/json"
+  )
+    return false;
+  const reader = response.clone().body?.getReader();
+  if (!reader) return false;
+  const chunks = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 4096) return false;
+      chunks.push(Buffer.from(value));
+    }
+    return isDeepStrictEqual(
+      JSON.parse(Buffer.concat(chunks).toString("utf8")),
+      maliciousLifecycleObservation,
+    );
+  } catch {
+    return false;
+  } finally {
+    void reader.cancel().catch(() => {});
+  }
 }

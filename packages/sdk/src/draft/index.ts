@@ -10,6 +10,8 @@ import {
   parseCapabilities as decodeCapabilities,
   parseCapabilitiesRequest as decodeCapabilitiesRequest,
   parseCapabilitiesResponse as decodeCapabilitiesResponse,
+  parseObserveNotification as decodeObserveNotification,
+  parseRegistration as decodeRegistration,
 } from "./generated.js";
 import type {
   Effect,
@@ -19,6 +21,8 @@ import type {
   CapabilitiesRequest,
   CapabilitiesResponse,
   ParseResult,
+  ObserveNotification,
+  Registration,
 } from "./generated.js";
 
 export type {
@@ -119,6 +123,24 @@ function validate<T>(
       errors: [error instanceof Error ? error.message : String(error)],
     };
   }
+}
+
+/** Strict canonical validation for transport-neutral notification consumers. */
+export function validateObserveNotification(
+  value: unknown,
+): DraftValidationResult<ObserveNotification> {
+  return validate(
+    value,
+    validator("observe-notification"),
+    decodeObserveNotification,
+  );
+}
+
+/** Schema/codec validation only; Hooks initialization resolves host capabilities. */
+export function validateRegistration(
+  value: unknown,
+): DraftValidationResult<Registration> {
+  return validate(value, validator("registration"), decodeRegistration);
 }
 
 export function validateEffect(value: unknown): DraftValidationResult<Effect> {

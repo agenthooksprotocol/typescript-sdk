@@ -1,4 +1,7 @@
 /* Minimal declarations for the dependency-free Node 20+ reference slice. */
+declare module "node:fs/promises" {
+  export function readFile(path: string, encoding: "utf8"): Promise<string>;
+}
 declare class Buffer extends Uint8Array {
   static alloc(size: number): Buffer;
   static concat(chunks: readonly Uint8Array[]): Buffer;
@@ -70,4 +73,45 @@ declare module "node:assert/strict" {
     match(value: string, regexp: RegExp): void;
   };
   export default assert;
+}
+
+// Node-only stdio serving entrypoint.
+declare module "node:stream" {
+  export interface Readable extends AsyncIterable<Uint8Array | string> {}
+  export const Writable: {
+    new (options: {
+      highWaterMark: number;
+      write(
+        chunk: Uint8Array,
+        encoding: string,
+        callback: (error?: Error | null) => void,
+      ): void;
+    }): Writable;
+  };
+  export interface Writable {
+    destroy(error?: Error): this;
+    write(
+      chunk: string | Uint8Array,
+      callback?: (error?: Error | null) => void,
+    ): boolean;
+    on(event: "error", listener: (error: Error) => void): this;
+    on(event: "close", listener: () => void): this;
+    removeListener(event: "error", listener: (error: Error) => void): this;
+    removeListener(event: "close", listener: () => void): this;
+  }
+}
+declare module "node:process" {
+  export const stdin: import("node:stream").Readable;
+  export const stdout: import("node:stream").Writable;
+}
+declare module "node:stream/promises" {
+  export function pipeline(
+    source: import("node:stream").Readable,
+    transform: (
+      source: AsyncIterable<Uint8Array | string>,
+      options: { signal: AbortSignal },
+    ) => AsyncIterable<string>,
+    destination: import("node:stream").Writable,
+    options: { signal?: AbortSignal },
+  ): Promise<void>;
 }

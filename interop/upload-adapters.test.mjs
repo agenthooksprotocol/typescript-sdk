@@ -6,7 +6,14 @@ import { once } from "node:events";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { uploadBytes } from "./content-upload.mjs";
+import { createRequire } from "node:module";
+const require = createRequire(
+  new URL("../packages/sdk/package.json", import.meta.url),
+);
+const { Hooks, auth } = await import(
+  require.resolve("@agenthooksprotocol/sdk/client")
+);
+import { uploadBytes, rawUploadBytes } from "./content-upload.mjs";
 
 for (const name of ["compaction", "elicitation"])
   test(
@@ -71,7 +78,7 @@ for (const name of ["compaction", "elicitation"])
           assert.notEqual(first.body.ref, second.body.ref);
           assert.equal(
             (
-              await uploadBytes(upload, bytes, {
+              await rawUploadBytes(upload, bytes, {
                 ...options,
                 env: { UPLOAD: "TEST-event" },
               })
@@ -79,8 +86,13 @@ for (const name of ["compaction", "elicitation"])
             401,
           );
           assert.equal(
-            (await uploadBytes({ ...upload, auth: undefined }, bytes, options))
-              .status,
+            (
+              await rawUploadBytes(
+                { ...upload, auth: undefined },
+                bytes,
+                options,
+              )
+            ).status,
             401,
           );
           const response = await fetch(
@@ -90,44 +102,65 @@ for (const name of ["compaction", "elicitation"])
           );
           assert.equal(response.status, 401);
           if (name === "compaction") {
-            const event = {
-              id: "unrelated-event",
-              source: "urn:test",
-              time: "2026-01-01T00:00:00Z",
-              type: "context.compact.before",
-              trigger: "manual",
-              items: [],
-              instructions: {
-                id: "instructions",
-                kind: "instructions",
-                role: "system",
-                mediaType: "text/plain",
-                selection: "body",
-                body: second.body,
-              },
-            };
-            const request = {
-              jsonrpc: "2.0",
-              id: event.id,
-              method: "hooks/intercept",
-              params: {
+            // Exercise the real compaction boundary: SDK uploads before dispatch.
+            const client = new Hooks(
+              {
                 protocolVersion: "draft",
-                event,
-                capabilities: { effects: [] },
+                hooks: [
+                  {
+                    id: "test.compaction",
+                    transport: {
+                      type: "http",
+                      url: endpoint + "/hooks/intercept",
+                    },
+                    subscriptions: [
+                      {
+                        mode: "intercept",
+                        events: ["context.compact.before"],
+                        timeoutMs: 3000,
+                        failurePolicy: "fail-closed",
+                        content: { default: "body" },
+                        upload: { ...upload, timeoutMs: 3000, maxBytes: 1024 },
+                      },
+                    ],
+                  },
+                ],
               },
-            };
-            const accepted = await fetch(endpoint + "/hooks/intercept", {
-              method: "POST",
-              headers: {
-                Authorization: "Bearer TEST-event",
-                "Content-Type": "application/json",
+              {
+                source: "urn:test",
+                capabilities: { "context.compact.before": { effects: [] } },
+                auth: auth({
+                  authenticate(context, options) {
+                    if (context.authentication)
+                      return auth.authenticate(context, options);
+                    return Promise.resolve({ token: "TEST-event" });
+                  },
+                  resolveEnvironmentVariable: () => "TEST-upload",
+                }),
               },
-              body: JSON.stringify(request),
-            });
-            assert.deepEqual((await accepted.json()).result, {
-              protocolVersion: "draft",
-              effects: [],
-            });
+            );
+            try {
+              const result = await client.dispatch("context.compact.before", {
+                trigger: "manual",
+                items: [],
+                instructions: {
+                  id: "instructions",
+                  kind: "instructions",
+                  role: "system",
+                  mediaType: "text/plain",
+                  body: new ReadableStream({
+                    start(controller) {
+                      controller.enqueue(Buffer.from("changed"));
+                      controller.close();
+                    },
+                  }),
+                },
+              });
+              assert.deepEqual(result.errors, []);
+              assert.deepEqual(result.response.effects ?? [], []);
+            } finally {
+              await client.close();
+            }
           }
         } finally {
           clearTimeout(timer);
