@@ -17,20 +17,20 @@ const {
   validateElicitationExchange,
   readSelectedElicitation,
   validateElicitationMode,
-} = await import(require.resolve("@agenthooksprotocol/sdk"));
+} = await import(require.resolve("agenthooksprotocol"));
 const { Hooks, auth } = await import(
-  require.resolve("@agenthooksprotocol/sdk/client")
+  require.resolve("agenthooksprotocol/client")
 );
 const { hooks } = await import(
-  require.resolve("@agenthooksprotocol/sdk/server")
+  require.resolve("agenthooksprotocol/server")
 );
 
 // Raw probes explicitly opt out of client normalization and retain arbitrary bytes.
 /**
  * @param {string} endpoint
- * @param {import("@agenthooksprotocol/sdk/client").EventType[]} events
+ * @param {import("agenthooksprotocol/client").EventType[]} events
  * @param {"body" | "metadata" | "omit"} content
- * @returns {import("@agenthooksprotocol/sdk/client").Registration}
+ * @returns {import("agenthooksprotocol/client").Registration}
  */
 const registration = (endpoint, events, content = "body") => ({
   protocolVersion: "draft",
@@ -57,10 +57,10 @@ const registration = (endpoint, events, content = "body") => ({
 });
 /**
  * @param {string} source
- * @param {import("@agenthooksprotocol/sdk/client").EventCapabilities} capabilities
+ * @param {import("agenthooksprotocol/client").EventCapabilities} capabilities
  * @param {string} token
  * @param {string} [uploadToken]
- * @returns {import("@agenthooksprotocol/sdk/client").HooksOptions}
+ * @returns {import("agenthooksprotocol/client").HooksOptions}
  */
 const clientOptions = (source, capabilities, token, uploadToken) => ({
   source,
@@ -75,8 +75,8 @@ const clientOptions = (source, capabilities, token, uploadToken) => ({
   }),
 });
 /**
- * @param {import("@agenthooksprotocol/sdk/client").Hooks} client
- * @param {{ params: { event: ({ type: import("@agenthooksprotocol/sdk/client").EventType, source: string } & import("@agenthooksprotocol/sdk/client").BoundaryInput<import("@agenthooksprotocol/sdk/client").EventType>) } }} message
+ * @param {import("agenthooksprotocol/client").Hooks} client
+ * @param {{ params: { event: ({ type: import("agenthooksprotocol/client").EventType, source: string } & import("agenthooksprotocol/client").BoundaryInput<import("agenthooksprotocol/client").EventType>) } }} message
  */
 const dispatch = async (client, message) => {
   const { type, source, ...event } = message.params.event;

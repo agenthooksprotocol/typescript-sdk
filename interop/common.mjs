@@ -4,21 +4,21 @@ const sdkRequire = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
 // Resolve package exports from the SDK workspace, never internal build paths.
-/** @type {typeof import("@agenthooksprotocol/sdk/draft")} */
+/** @type {typeof import("agenthooksprotocol/draft")} */
 export const sdkDraft = await import(
-  sdkRequire.resolve("@agenthooksprotocol/sdk/draft")
+  sdkRequire.resolve("agenthooksprotocol/draft")
 );
-/** @type {typeof import("@agenthooksprotocol/sdk/client")} */
+/** @type {typeof import("agenthooksprotocol/client")} */
 export const sdkClient = await import(
-  sdkRequire.resolve("@agenthooksprotocol/sdk/client")
+  sdkRequire.resolve("agenthooksprotocol/client")
 );
-/** @type {typeof import("@agenthooksprotocol/sdk/server")} */
+/** @type {typeof import("agenthooksprotocol/server")} */
 export const sdkServer = await import(
-  sdkRequire.resolve("@agenthooksprotocol/sdk/server")
+  sdkRequire.resolve("agenthooksprotocol/server")
 );
-/** @type {typeof import("@agenthooksprotocol/sdk/server/stdio")} */
+/** @type {typeof import("agenthooksprotocol/server/stdio")} */
 export const sdkStdio = await import(
-  sdkRequire.resolve("@agenthooksprotocol/sdk/server/stdio")
+  sdkRequire.resolve("agenthooksprotocol/server/stdio")
 );
 import { readFile, writeFile, rename } from "node:fs/promises";
 export async function config() {
@@ -34,7 +34,7 @@ export async function atomic(path, value) {
 /**
  * @typedef {object} FixtureScenario
  * @property {string} id
- * @property {import("@agenthooksprotocol/sdk/draft").InterceptRequest} request
+ * @property {import("agenthooksprotocol/draft").InterceptRequest} request
  * @property {unknown} [response] Negative fixtures deliberately permit malformed replies.
  * @property {Record<string, unknown>} [expected]
  * @property {boolean} [expectError]
@@ -163,13 +163,13 @@ export const manifest = {
  * @property {string} [endpoint]
  * @property {{mode: string}} [auth]
  * @property {import("./content-upload.mjs").ContentSource[]} [contentSources]
- * @property {Array<{id?: string, timeoutMs?: number, failurePolicy?: "fail-open" | "fail-closed", content?: import("@agenthooksprotocol/sdk/client").ContentSelection, upload?: import("@agenthooksprotocol/sdk/client").ContentUpload}>} [subscriptions]
+ * @property {Array<{id?: string, timeoutMs?: number, failurePolicy?: "fail-open" | "fail-closed", content?: import("agenthooksprotocol/client").ContentSelection, upload?: import("agenthooksprotocol/client").ContentUpload}>} [subscriptions]
  */
 /**
  * Translate fixture policy into schema-validated canonical registration.
  * @param {FixtureConfig} cfg
- * @param {Array<{request: import("@agenthooksprotocol/sdk/draft").InterceptRequest, subscription?: string}>} rows
- * @returns {import("@agenthooksprotocol/sdk/client").Registration}
+ * @param {Array<{request: import("agenthooksprotocol/draft").InterceptRequest, subscription?: string}>} rows
+ * @returns {import("agenthooksprotocol/client").Registration}
  */
 export function fixtureRegistration(cfg, rows) {
   if (
@@ -238,11 +238,11 @@ export function fixtureRegistration(cfg, rows) {
 /**
  * Union the capabilities exercised by host fixtures. Per-occurrence narrowing is
  * passed separately to Hooks; a later scenario must not replace earlier support.
- * @param {Array<{request: import("@agenthooksprotocol/sdk/draft").InterceptRequest}>} rows
- * @returns {import("@agenthooksprotocol/sdk/client").EventCapabilities}
+ * @param {Array<{request: import("agenthooksprotocol/draft").InterceptRequest}>} rows
+ * @returns {import("agenthooksprotocol/client").EventCapabilities}
  */
 export function fixtureCapabilities(rows) {
-  /** @type {import("@agenthooksprotocol/sdk/client").EventCapabilities} */
+  /** @type {import("agenthooksprotocol/client").EventCapabilities} */
   const result = {};
   for (const { request } of rows) {
     const type = request.params.event.type;

@@ -3,7 +3,7 @@ import {
   Hooks,
   type BoundaryInput,
   type HarnessEvent,
-} from "@agenthooksprotocol/sdk/client";
+} from "agenthooksprotocol/client";
 
 declare const hooks: Hooks;
 const body = new ReadableStream<Uint8Array>();

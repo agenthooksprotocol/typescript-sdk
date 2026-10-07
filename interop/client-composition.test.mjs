@@ -5,7 +5,7 @@ const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
 const { composeResponse } = await import(
-  require.resolve("@agenthooksprotocol/sdk/client")
+  require.resolve("agenthooksprotocol/client")
 );
 
 const envelope = { id: "e", source: "urn:test", time: "2026-01-01T00:00:00Z" };
@@ -252,7 +252,7 @@ test("model and workspace modifications use canonical nested event fields", () =
 });
 
 const { composeResponseAsync } = await import(
-  require.resolve("@agenthooksprotocol/sdk/client")
+  require.resolve("agenthooksprotocol/client")
 );
 const streamItem = (id, value, role = "user") => {
   const bytes = new TextEncoder().encode(

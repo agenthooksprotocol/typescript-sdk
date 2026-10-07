@@ -5,9 +5,9 @@ import {
   prepareWireContent,
   draftCodecs,
   stageBoundary,
-} from "@agenthooksprotocol/sdk/draft";
-import { Hooks, auth } from "@agenthooksprotocol/sdk/client";
-import { hooks, attachments } from "@agenthooksprotocol/sdk/server";
+} from "agenthooksprotocol/draft";
+import { Hooks, auth } from "agenthooksprotocol/client";
+import { hooks, attachments } from "agenthooksprotocol/server";
 
 // Positive deliveries use public boundaries; draft tests below retain malformed
 // wire and legacy primitive compatibility coverage.

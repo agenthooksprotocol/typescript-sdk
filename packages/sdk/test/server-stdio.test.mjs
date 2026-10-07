@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { PassThrough, Readable, Writable } from "node:stream";
 import { setImmediate } from "node:timers/promises";
-import { hooks } from "@agenthooksprotocol/sdk/server";
-import { serveStdio } from "@agenthooksprotocol/sdk/server/stdio";
+import { hooks } from "agenthooksprotocol/server";
+import { serveStdio } from "agenthooksprotocol/server/stdio";
 
 function capture(options = {}) {
   const chunks = [];

@@ -6,8 +6,8 @@ import {
   state,
   effects,
   ContentSource,
-} from "@agenthooksprotocol/sdk/client";
-import { effects as serverEffects } from "@agenthooksprotocol/sdk/server";
+} from "agenthooksprotocol/client";
+import { effects as serverEffects } from "agenthooksprotocol/server";
 
 const facts = {
   callId: "c",
@@ -171,7 +171,7 @@ import {
   capabilities,
   events,
   contentSlots,
-} from "@agenthooksprotocol/sdk/client";
+} from "agenthooksprotocol/client";
 import { createHash } from "node:crypto";
 
 test("generated declarations are immutable, explicit and boundary-compatible", async () => {

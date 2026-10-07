@@ -23,8 +23,8 @@ language toolchains and protocol-owned fixtures.
 
 ## Protocol and local control
 
-Positive adapter delivery uses the public `@agenthooksprotocol/sdk/client`
-`Hooks` and `auth` APIs. Receivers use `@agenthooksprotocol/sdk/server`
+Positive adapter delivery uses the public `agenthooksprotocol/client`
+`Hooks` and `auth` APIs. Receivers use `agenthooksprotocol/server`
 `hooks.handle`; application-owned upload storage consumes `attachments.parse`
 to verified EOF before publishing `attachments.response`. The fixture retains
 host execution, authorization, storage scopes, and test scheduling. Explicit

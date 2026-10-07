@@ -3,13 +3,13 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { readFileSync } from "node:fs";
 import process from "node:process";
-import { NdjsonDecoder } from "@agenthooksprotocol/sdk";
+import { NdjsonDecoder } from "agenthooksprotocol";
 import {
   parseInterceptRequest,
   parseInterceptResponse,
-} from "@agenthooksprotocol/sdk/draft";
+} from "agenthooksprotocol/draft";
 import { createAuth, clientAuth } from "./auth.js";
-import { Hooks, type BoundaryInput } from "@agenthooksprotocol/sdk/client";
+import { Hooks, type BoundaryInput } from "agenthooksprotocol/client";
 
 interface Scenario {
   id: string;

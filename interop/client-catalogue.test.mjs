@@ -12,12 +12,12 @@ const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
 const { Hooks, BackendTransport } = await import(
-  require.resolve("@agenthooksprotocol/sdk/client")
+  require.resolve("agenthooksprotocol/client")
 );
-const serverModule = require.resolve("@agenthooksprotocol/sdk/server");
+const serverModule = require.resolve("agenthooksprotocol/server");
 const { hooks: serverHooks } = await import(serverModule);
 const { draftCodecs } = await import(
-  require.resolve("@agenthooksprotocol/sdk/draft")
+  require.resolve("agenthooksprotocol/draft")
 );
 
 // Independent minimal canonical occurrences: no interop evaluator or SDK implementation fixtures.

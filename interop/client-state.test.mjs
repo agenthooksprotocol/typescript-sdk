@@ -5,10 +5,10 @@ const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
 const { Hooks, ConfigurationError, composeResponse } = await import(
-  require.resolve("@agenthooksprotocol/sdk/client")
+  require.resolve("agenthooksprotocol/client")
 );
 const { hooks } = await import(
-  require.resolve("@agenthooksprotocol/sdk/server")
+  require.resolve("agenthooksprotocol/server")
 );
 const caps = {
   effects: ["allow", "ask", "deny", "return", "modify", "flow"],

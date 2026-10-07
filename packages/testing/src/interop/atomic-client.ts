@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import process from "node:process";
-import { hooks as serverHooks } from "@agenthooksprotocol/sdk/server";
+import { hooks as serverHooks } from "agenthooksprotocol/server";
 import {
   Hooks,
   auth,
   type BoundaryResult,
-} from "@agenthooksprotocol/sdk/client";
+} from "agenthooksprotocol/client";
 import {
   parseInterceptResponse,
   type PendingState,
@@ -14,7 +14,7 @@ import {
   type InterceptRequest,
   type JsonValue,
   type Effect,
-} from "@agenthooksprotocol/sdk/draft";
+} from "agenthooksprotocol/draft";
 
 interface Subscriber {
   id: string;

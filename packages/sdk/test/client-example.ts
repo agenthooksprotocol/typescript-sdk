@@ -6,7 +6,7 @@ import {
   state,
   Permission,
   type EventCapabilities,
-} from "@agenthooksprotocol/sdk/client";
+} from "agenthooksprotocol/client";
 
 // Hooks validates registration; JSON.parse alone does not validate it.
 const config: unknown = JSON.parse(await readFile("hooks.json", "utf8"));

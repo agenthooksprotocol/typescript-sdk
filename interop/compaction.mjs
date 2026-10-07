@@ -10,13 +10,13 @@ import { createInterface } from "node:readline";
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
-/** @type {typeof import("@agenthooksprotocol/sdk/client")} */
+/** @type {typeof import("agenthooksprotocol/client")} */
 const { Hooks, auth } = await import(
-  require.resolve("@agenthooksprotocol/sdk/client")
+  require.resolve("agenthooksprotocol/client")
 );
-/** @type {typeof import("@agenthooksprotocol/sdk/server")} */
+/** @type {typeof import("agenthooksprotocol/server")} */
 const { hooks, attachments } = await import(
-  require.resolve("@agenthooksprotocol/sdk/server")
+  require.resolve("agenthooksprotocol/server")
 );
 /** @param {import("node:http").Server} server */
 export function port(server) {
@@ -242,7 +242,7 @@ export async function runCompaction(
   );
   /**
    * @param {"before" | "after"} boundary
-   * @param {import("@agenthooksprotocol/sdk/client").BoundaryInput<"context.compact.before" | "context.compact.after">} input
+   * @param {import("agenthooksprotocol/client").BoundaryInput<"context.compact.before" | "context.compact.after">} input
    */
   async function settle(boundary, input) {
     const result = await client.dispatch(

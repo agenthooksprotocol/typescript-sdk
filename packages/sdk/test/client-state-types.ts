@@ -3,7 +3,7 @@ import type {
   BoundaryState,
   EventCapabilities,
   EventGrant,
-} from "@agenthooksprotocol/sdk/client";
+} from "agenthooksprotocol/client";
 
 const observe: EventGrant = { modes: ["observe"] };
 const both: EventGrant = {

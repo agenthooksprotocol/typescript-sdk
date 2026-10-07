@@ -1,7 +1,7 @@
 {
-  "name": "@agenthooksprotocol/sdk",
-  "version": "0.0.0-private",
-  "private": true,
+  "name": "agenthooksprotocol",
+  "version": "0.1.0",
+  "private": false,
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -38,5 +38,27 @@
   "dependencies": {
     "ajv": "8.17.1",
     "ajv-formats": "3.0.1"
+  },
+  "description": "TypeScript SDK for the Agent Hooks Protocol",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agenthooksprotocol/typescript-sdk.git",
+    "directory": "packages/sdk"
+  },
+  "homepage": "https://github.com/agenthooksprotocol/typescript-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/agenthooksprotocol/typescript-sdk/issues"
+  },
+  "files": [
+    "dist/src",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "types": "./dist/src/index.d.ts",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }

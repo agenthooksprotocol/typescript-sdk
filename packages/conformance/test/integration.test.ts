@@ -7,7 +7,7 @@ import {
   ToolBeforeRunner,
   type HookBackend,
   type ToolBeforeInput,
-} from "@agenthooksprotocol/sdk";
+} from "agenthooksprotocol";
 import { fakeBackendEntrypoint } from "@agenthooksprotocol/testing";
 import { runConformance } from "../src/index.js";
 

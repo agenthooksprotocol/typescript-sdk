@@ -6,18 +6,18 @@ const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
 // Resolve the package's public exports, not its implementation modules.
-/** @type {typeof import("@agenthooksprotocol/sdk/client")} */
+/** @type {typeof import("agenthooksprotocol/client")} */
 export const {
   Hooks,
   BackendTransport,
   auth: hooksAuth,
-} = await import(require.resolve("@agenthooksprotocol/sdk/client"));
-/** @type {typeof import("@agenthooksprotocol/sdk/server")} */
+} = await import(require.resolve("agenthooksprotocol/client"));
+/** @type {typeof import("agenthooksprotocol/server")} */
 export const { hooks: serverHooks } = await import(
-  require.resolve("@agenthooksprotocol/sdk/server")
+  require.resolve("agenthooksprotocol/server")
 );
-/** @type {typeof import("@agenthooksprotocol/sdk/draft")} */
-const draft = await import(require.resolve("@agenthooksprotocol/sdk/draft"));
+/** @type {typeof import("agenthooksprotocol/draft")} */
+const draft = await import(require.resolve("agenthooksprotocol/draft"));
 // Fixture prechecks use the same public canonical validators as wire handling.
 // Generated codecs alone intentionally accept unknown/extended shapes.
 export function validateCanonical(name, value, _decoder) {
@@ -46,11 +46,11 @@ export async function control(endpoint, path, value) {
 }
 
 /** Build the public consumer boundary with checked registration and options.
- * @param {{transport: import("@agenthooksprotocol/sdk/client").Registration["hooks"][number]["transport"],
- * source: string, event: import("@agenthooksprotocol/sdk/client").EventType,
- * mode: "intercept" | "observe", capabilities?: import("@agenthooksprotocol/sdk/client").Capabilities,
- * bodySelected: boolean, upload?: import("@agenthooksprotocol/sdk/client").ContentUpload,
- * auth: import("@agenthooksprotocol/sdk/client").AuthProvider, fetch?: typeof globalThis.fetch}} options
+ * @param {{transport: import("agenthooksprotocol/client").Registration["hooks"][number]["transport"],
+ * source: string, event: import("agenthooksprotocol/client").EventType,
+ * mode: "intercept" | "observe", capabilities?: import("agenthooksprotocol/client").Capabilities,
+ * bodySelected: boolean, upload?: import("agenthooksprotocol/client").ContentUpload,
+ * auth: import("agenthooksprotocol/client").AuthProvider, fetch?: typeof globalThis.fetch}} options
  */
 export function lifecycleHooks(options) {
   return new Hooks(
@@ -88,8 +88,8 @@ export function lifecycleHooks(options) {
   );
 }
 /** @param {InstanceType<typeof Hooks>} client
- * @param {{type: import("@agenthooksprotocol/sdk/client").EventType, source: string} & import("@agenthooksprotocol/sdk/client").BoundaryInput<import("@agenthooksprotocol/sdk/client").EventType>} event
- * @param {import("@agenthooksprotocol/sdk/client").BoundaryOptions["initialState"]} [state]
+ * @param {{type: import("agenthooksprotocol/client").EventType, source: string} & import("agenthooksprotocol/client").BoundaryInput<import("agenthooksprotocol/client").EventType>} event
+ * @param {import("agenthooksprotocol/client").BoundaryOptions["initialState"]} [state]
  * @param {AbortSignal} [signal]
  */
 export function dispatchLifecycle(client, event, state, signal) {

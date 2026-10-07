@@ -1,4 +1,4 @@
-import { ToolBeforeRunner } from "@agenthooksprotocol/sdk";
+import { ToolBeforeRunner } from "agenthooksprotocol";
 
 export interface ConformanceOptions {
   command: string;

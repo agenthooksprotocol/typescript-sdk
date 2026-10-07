@@ -61,10 +61,10 @@ const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
 const { Hooks, auth: sdkAuth } = await import(
-  require.resolve("@agenthooksprotocol/sdk/client")
+  require.resolve("agenthooksprotocol/client")
 );
 const { hooks: serverHooks, attachments } = await import(
-  require.resolve("@agenthooksprotocol/sdk/server")
+  require.resolve("agenthooksprotocol/server")
 );
 
 /** TLS transport adapter for this real local peer; never fabricates AHP responses. */
@@ -141,7 +141,7 @@ for (const [transport, mode, authenticatedUpload] of [
         origin,
         tokenRequests = 0;
       const controller = new AbortController();
-      /** @param {import("@agenthooksprotocol/sdk/server").Message} message */
+      /** @param {import("agenthooksprotocol/server").Message} message */
       async function policy(message) {
         const event = message.params.event;
         assert.ok(event);
@@ -261,7 +261,7 @@ for (const [transport, mode, authenticatedUpload] of [
             peer,
             `
       import { createInterface } from 'node:readline';
-      import { hooks } from ${JSON.stringify(pathToFileURL(require.resolve("@agenthooksprotocol/sdk/server")).href)};
+      import { hooks } from ${JSON.stringify(pathToFileURL(require.resolve("agenthooksprotocol/server")).href)};
       for await (const line of createInterface({ input: process.stdin })) {
         const response = await hooks.handle(new Request('http://localhost/hooks', {
           method: 'POST', headers: { 'content-type': 'application/json' }, body: line,
@@ -404,7 +404,7 @@ for (const [transport, mode, authenticatedUpload] of [
           assert.equal(response.status, 401);
         }
         for (const status of ["normal", "denied", "stopped", "interrupted"]) {
-          /** @type {import("@agenthooksprotocol/sdk/client").BoundaryInput<"tool.before">} */
+          /** @type {import("agenthooksprotocol/client").BoundaryInput<"tool.before">} */
           const input = {
             id: status,
             time: "2026-01-01T00:00:00Z",

@@ -6,7 +6,7 @@ import {
   hooks,
   type Effect,
   type Message,
-} from "@agenthooksprotocol/sdk/server";
+} from "agenthooksprotocol/server";
 
 export function barrier() {
   let resolve!: () => void;

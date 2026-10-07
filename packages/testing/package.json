@@ -7,5 +7,5 @@
   "exports": { ".": { "types": "./dist/src/index.d.ts", "default": "./dist/src/index.js" } },
   "bin": { "ahp-fake-backend": "./dist/src/fake-backend.js" },
   "scripts": { "build": "tsc -p tsconfig.json" },
-  "dependencies": { "@agenthooksprotocol/sdk": "workspace:*" }
+  "dependencies": { "agenthooksprotocol": "workspace:*" }
 }

@@ -9,22 +9,22 @@ import { TaskLineage } from "./task-lineage.mjs";
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
-/** @type {typeof import("@agenthooksprotocol/sdk/client")} */
+/** @type {typeof import("agenthooksprotocol/client")} */
 const { Hooks, auth, composeResponse } = await import(
-  require.resolve("@agenthooksprotocol/sdk/client")
+  require.resolve("agenthooksprotocol/client")
 );
-/** @type {typeof import("@agenthooksprotocol/sdk/server")} */
+/** @type {typeof import("agenthooksprotocol/server")} */
 const { hooks } = await import(
-  require.resolve("@agenthooksprotocol/sdk/server")
+  require.resolve("agenthooksprotocol/server")
 );
 
 // The application owns HTTP and authorization; the public SDK owns wire framing,
 // routing, validation, composition and observer scheduling.
 /**
  * @param {import("node:test").TestContext} t
- * @param {{id: string, mode: "intercept" | "observe", events: import("@agenthooksprotocol/sdk/client").EventType[]}[]} routes
- * @param {import("@agenthooksprotocol/sdk/client").EventCapabilities} capabilities
- * @param {(message: import("@agenthooksprotocol/sdk/server").Message, route: string) => ReturnType<import("@agenthooksprotocol/sdk/server").Handler>} handler
+ * @param {{id: string, mode: "intercept" | "observe", events: import("agenthooksprotocol/client").EventType[]}[]} routes
+ * @param {import("agenthooksprotocol/client").EventCapabilities} capabilities
+ * @param {(message: import("agenthooksprotocol/server").Message, route: string) => ReturnType<import("agenthooksprotocol/server").Handler>} handler
  * @param {string} source
  */
 async function receiver(
@@ -99,7 +99,7 @@ async function receiver(
   });
   return client;
 }
-/** @satisfies {import("@agenthooksprotocol/sdk/client").BoundaryInput<"tool.before">} */
+/** @satisfies {import("agenthooksprotocol/client").BoundaryInput<"tool.before">} */
 const toolInput = {
   id: "same",
   call: { id: "call" },
@@ -108,9 +108,9 @@ const toolInput = {
 };
 
 test("effective observation payload and offline composition use public SDK responses", async (t) => {
-  /** @type {import("@agenthooksprotocol/sdk/server").InterceptRequest | undefined} */
+  /** @type {import("agenthooksprotocol/server").InterceptRequest | undefined} */
   let request;
-  /** @satisfies {import("@agenthooksprotocol/sdk/client").Capabilities} */
+  /** @satisfies {import("agenthooksprotocol/client").Capabilities} */
   const capabilities = {
     effects: ["modify"],
     modify: { input: { replace: true, merge: false } },
@@ -190,7 +190,7 @@ test("task lineage receives canonical SDK events and rejects malformed explicit 
     },
     "urn:source",
   );
-  /** @satisfies {import("@agenthooksprotocol/sdk/client").BoundaryInput<"task.change.before">["task"]} */
+  /** @satisfies {import("agenthooksprotocol/client").BoundaryInput<"task.change.before">["task"]} */
   const task = { id: "task", operation: "update", change: { status: "done" } };
   /** @type {["task.change.after" | "task.change.before", string, string][]} */
   const occurrences = [
@@ -245,9 +245,9 @@ test("task lineage receives canonical SDK events and rejects malformed explicit 
 });
 
 test("typed task/workspace controls use public SDK and reject malformed offline bypasses", async (t) => {
-  /** @type {import("@agenthooksprotocol/sdk/client").Effect[]} */
+  /** @type {import("agenthooksprotocol/client").Effect[]} */
   let effects = [{ type: "deny", reason: "policy" }];
-  /** @type {import("@agenthooksprotocol/sdk/server").InterceptRequest | undefined} */
+  /** @type {import("agenthooksprotocol/server").InterceptRequest | undefined} */
   let request;
   const client = await receiver(
     t,
@@ -283,8 +283,8 @@ test("typed task/workspace controls use public SDK and reject malformed offline 
   assert.deepEqual(task.errors, []);
   assert.equal(task.response.result.effects[0].type, "deny");
   assert.ok(request);
-  /** @param {import("@agenthooksprotocol/sdk/client").Effect} effect
-   * @returns {import("@agenthooksprotocol/sdk/client").InterceptResponse} */
+  /** @param {import("agenthooksprotocol/client").Effect} effect
+   * @returns {import("agenthooksprotocol/client").InterceptResponse} */
   const bypass = (effect) => ({
     jsonrpc: "2.0",
     id: request.id,
@@ -306,7 +306,7 @@ test("typed task/workspace controls use public SDK and reject malformed offline 
       value: { cwd: "/new" },
     },
   ];
-  /** @satisfies {import("@agenthooksprotocol/sdk/client").BoundaryInput<"workspace.change.before">} */
+  /** @satisfies {import("agenthooksprotocol/client").BoundaryInput<"workspace.change.before">} */
   const input = {
     id: "workspace-before",
     workspace: { kind: "cwd", change: { cwd: "/old" } },

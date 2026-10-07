@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { appendFileSync } from "node:fs";
-import { hooks } from "@agenthooksprotocol/sdk/server";
+import { hooks } from "agenthooksprotocol/server";
 import { createInterface } from "node:readline";
 import {
   parseInterceptRequest,
   PROTOCOL_VERSION,
-} from "@agenthooksprotocol/sdk";
+} from "agenthooksprotocol";
 
 type Mode =
   | "no-effect"

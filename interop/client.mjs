@@ -113,7 +113,7 @@ try {
         )
           throw Error("Unsupported event");
     }
-    /** @type {import("@agenthooksprotocol/sdk/client").HooksOptions} */
+    /** @type {import("agenthooksprotocol/client").HooksOptions} */
     const options = {
       source: rows[0].request.params.event.source,
       capabilities,

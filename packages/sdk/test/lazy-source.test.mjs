@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { ContentManager, ContentSource } from "@agenthooksprotocol/sdk/client";
+import { ContentManager, ContentSource } from "agenthooksprotocol/client";
 
 function fixture(stalled = false) {
   const state = { pulls: 0, cancels: 0 };

@@ -1,7 +1,7 @@
 import test from "node:test";
 import process from "node:process";
 import assert from "node:assert/strict";
-import { Hooks, auth } from "@agenthooksprotocol/sdk/client";
+import { Hooks, auth } from "agenthooksprotocol/client";
 import { fakeBackendEntrypoint } from "../src/index.js";
 
 for (const mode of ["no-effect", "deny"] as const) {
