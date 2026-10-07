@@ -9,11 +9,15 @@ This SDK releases independently of the other language SDKs.
 1. Keep this GitHub repository public for npm provenance. Create the GitHub
    environment **release**; add required reviewers and restrict deployments to
    `main` as appropriate.
-2. Add repository secret **RELEASE_PLEASE_TOKEN**: a fine-grained PAT with access
-   to `agenthooksprotocol/typescript-sdk`, **Contents: read and write** and
-   **Pull requests: read and write**. Approve organization access if required.
-   This lets release-please PRs trigger the existing PR CI. Permit Actions to
-   create PRs in repository/organization settings.
+2. Use the existing **Agent Hooks Protocol Bot** GitHub App. Install it on this
+   repository with **Contents: read/write** and **Pull requests: read/write**.
+   Set Actions variable **`RELEASE_APP_ID`** to its App ID and Actions secret
+   **`RELEASE_APP_PRIVATE_KEY`** to a PEM private key generated in its settings.
+   Organization-level values may be shared with just the four SDK repositories.
+   The workflow mints a short-lived installation token scoped to this repository
+   and those two permissions; it is revoked when the job ends. Release PRs,
+   tags, and GitHub releases use the bot identity and trigger normal PR CI.
+   No personal access token is needed. Keep branch protection enabled.
 3. Ensure you own the unscoped npm name `agenthooksprotocol`. Name availability
    is not checked by this workflow. If it is unavailable, resolve ownership or
    explicitly change the package name and all imports before releasing; there
