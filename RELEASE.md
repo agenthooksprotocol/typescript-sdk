@@ -50,10 +50,10 @@ workflow publishes only when `packages/sdk--release_created` is true, checking
 out the exact `packages/sdk--sha` release output. The `release` environment gate
 applies before publishing. There is no separate release/tag-event workflow.
 
-The manifest and SDK start at `0.1.0`; `release-as: 0.1.0` explicitly forces the
-first release. **Remove `release-as` from `release-please-config.json` in the
-first release PR before merging it**, so later versions follow conventional
-commits rather than remaining pinned.
+The SDK package starts at `0.1.0`. The manifest starts at `0.0.0`, a sentinel
+indicating no previous release. `initial-version: 0.1.0` sets only the first
+release; subsequent versions follow conventional commits. No configuration
+cleanup is required after the first release.
 
 Publishing uses GitHub-hosted runners, Node 24, npm 11, and job-scoped OIDC.
 It builds the SDK and publishes its compiled `dist/src`, source files (for source

@@ -6,7 +6,7 @@
       "release-type": "node",
       "component": "agenthooksprotocol",
       "include-component-in-tag": true,
-      "release-as": "0.1.0"
+      "initial-version": "0.1.0"
     }
   }
 }
