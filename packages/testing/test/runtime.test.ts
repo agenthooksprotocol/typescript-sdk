@@ -222,7 +222,7 @@ test("public boundaries settle intercepts before observers with one occurrence i
           const route = new URL(request.url).hostname.split(".")[0]!;
           seen.push(route);
           assert.equal(
-            JSON.stringify(event.tool.input),
+            JSON.stringify((event as import("agenthooksprotocol/client").ToolBeforeEvent).tool.input),
             JSON.stringify({ task: route === "first" ? 123 : 124 }),
           );
           if (message.method === "hooks/observe") return;
@@ -454,7 +454,7 @@ test("unresponsive observation is not an execution gate; uploads have their own 
   );
   assert.equal(view[0]?.gap, "transfer_failed");
 });
-test("content metadata binds uploaded UTF-8 bytes and only records confirmed upload", async () => {
+test("content reference only records confirmed upload", async () => {
   const view = await prepareContent(
     [
       {
@@ -474,11 +474,9 @@ test("content metadata binds uploaded UTF-8 bytes and only records confirmed upl
       upload: async (bytes) => new ContentReceiver().upload("s", bytes),
     },
   );
-  assert.equal(view[0]?.sizeBytes, 3);
-  assert.equal(
-    view[0]?.sha256,
-    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-  );
+  assert.equal(typeof view[0]?.ref, "string");
+  assert.equal(view[0]?.sizeBytes, undefined);
+  assert.equal(view[0]?.sha256, undefined);
 });
 test("task proposals are derived from settled invocation input, with independent denial", () => {
   const invocation = stageBoundary(

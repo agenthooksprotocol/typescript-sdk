@@ -25,6 +25,8 @@ const { hooks } = await import(
   require.resolve("agenthooksprotocol/server")
 );
 
+const { validateInterceptRequest } = await import(require.resolve("agenthooksprotocol/draft"));
+
 // Raw probes explicitly opt out of client normalization and retain arbitrary bytes.
 /**
  * @param {string} endpoint
@@ -240,11 +242,10 @@ if (process.argv[2] === "client") {
   const store = new Map(),
     pending = new Map(),
     receipts = [];
-  const hash = (b) => createHash("sha256").update(b).digest("hex");
   const resolve = (ref) => {
     validate("content-reference", ref);
     const b = store.get(ref.ref);
-    if (!b || b.length !== ref.size || hash(b) !== ref.sha256)
+    if (!b)
       throw Error("Upload integrity");
     return b;
   };
@@ -506,6 +507,10 @@ if (process.argv[2] === "client") {
           return;
         }
         if (req.url !== "/hooks/intercept") throw Error("Unknown endpoint");
+        // This fixture endpoint uses HTTP 400 for rejected admission. Validate
+        // original wire data before hooks.handle can map failures to JSON-RPC 200.
+        if (!validateInterceptRequest(JSON.parse(raw.toString("utf8"))).ok)
+          throw Error("Invalid interception request");
         let rejected = false;
         const response = await hooks.handle(
           new Request("http://localhost/hooks/intercept", {

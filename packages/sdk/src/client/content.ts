@@ -1,5 +1,5 @@
 import {
-  parseContentReference,
+  parseContentUploadReceipt,
   type ContentSelection,
   type ContentUpload,
 } from "../draft/generated.js";
@@ -264,7 +264,7 @@ export class ContentManager {
             }),
             controller.signal,
           );
-          const parsed = parseContentReference(
+          const parsed = parseContentUploadReceipt(
             await readConfirmation(response, controller.signal),
           );
           if (
@@ -274,11 +274,9 @@ export class ContentManager {
           ) {
             throw new Error("Invalid or mismatched upload reference");
           }
-          result.body = {
-            ref: parsed.value.ref,
-            size: snapshot.size,
-            sha256: snapshot.sha256,
-          };
+          delete result.size;
+          delete result.sha256;
+          result.body = { ref: parsed.value.ref };
           return result;
         } finally {
           clearTimeout(timeout);

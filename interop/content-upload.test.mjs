@@ -52,7 +52,7 @@ test(
     };
     const first = source("config-source", "first"),
       second = source("row-source", "second");
-    const row = (id, body, extra = {}) => ({
+    const row = (id, receipt, extra = {}) => ({
       id,
       ...extra,
       expected: {},
@@ -78,7 +78,7 @@ test(
                 kind: "text",
                 mediaType: "application/octet-stream",
                 selection: "body",
-                body,
+                body: { ref: receipt.ref },
               },
             ],
           },
@@ -144,7 +144,7 @@ test(
         const descriptor = receipts[index].params.event.items[0].body;
         assert.notEqual(descriptor.ref, source.descriptor.ref);
         assert.deepEqual(report.results[index].contentUploads, [
-          { sourceRef: source.descriptor.ref, descriptor },
+          { sourceRef: source.descriptor.ref, descriptor: { ...source.descriptor, ref: descriptor.ref } },
         ]);
         assert.deepEqual(
           store.resolve("scope", descriptor),
@@ -259,22 +259,22 @@ test("content sources require exact descriptors and integrity without repairing 
   const sources = [{ descriptor, bytes: bytes.toString("base64") }];
   const adapter = createContentAdapter(sources);
   for (const body of [
-    { ...descriptor, ref: "missing" },
+    { ref: "missing" },
     { ...descriptor, size: 1 },
     { ...descriptor, sha256: "0".repeat(64) },
   ]) {
     const event = { items: [{ body }] };
-    assert.throws(() => adapter.hydrate(event), /exact content source/);
+    assert.throws(() => adapter.hydrate(event), /content source/);
     assert.equal(event.items[0].body, body);
   }
   assert.throws(
     () =>
       createContentAdapter([{ descriptor, bytes: "" }]).hydrate({
-        items: [{ body: descriptor }],
+        items: [{ body: { ref: descriptor.ref } }],
       }),
     /integrity/,
   );
-  const event = { items: [{ body: descriptor }] };
+  const event = { items: [{ body: { ref: descriptor.ref } }] };
   adapter.hydrate(event);
   assert.deepEqual(
     Buffer.from(await new Response(event.items[0].body).arrayBuffer()),
@@ -308,7 +308,7 @@ test("content upload reports come from actual response clones and leave response
       fetch,
       [endpoint],
     );
-    const event = { items: [{ body: descriptor }] };
+    const event = { items: [{ body: { ref: descriptor.ref } }] };
     adapter.hydrate(event);
     const body = new Uint8Array(
       await new Response(event.items[0].body).arrayBuffer(),
@@ -354,7 +354,7 @@ test("failed, mismatched and unrelated responses never fabricate content upload 
         }),
       ["https://upload.test/"],
     );
-    adapter.hydrate({ items: [{ body: descriptor }] });
+    adapter.hydrate({ items: [{ body: { ref: descriptor.ref } }] });
     const response = await adapter.fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/octet-stream" },
@@ -460,9 +460,9 @@ test("SDK upload authenticates independently, preserves octets, allocates immuta
       401,
     );
     assert.throws(() => store.resolve("other", result.body));
-    assert.throws(() =>
-      store.resolve("sub", { ...result.body, sha256: "0".repeat(64) }),
-    );
+    assert.deepEqual(store.resolve("sub", { ref: result.body.ref }), Buffer.from(bytes));
+    // Resolution trusts scoped storage, not untrusted event metadata.
+    assert.deepEqual(store.resolve("sub", { ...result.body, sha256: "0".repeat(64) }), Buffer.from(bytes));
     assert.equal(
       (await uploadBytes(upload, new Uint8Array(), opts)).body.size,
       0,

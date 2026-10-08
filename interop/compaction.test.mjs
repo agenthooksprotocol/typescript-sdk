@@ -326,7 +326,7 @@ test(
           mediaType: "text/plain",
           role: "system",
           selection: "body",
-          body: descriptor,
+          body: { ref: descriptor.ref },
         },
       };
       const request = {
@@ -362,7 +362,7 @@ test(
       const secondDescriptor = await second.json();
       assert.notEqual(secondDescriptor.ref, descriptor.ref);
       const other = structuredClone(request);
-      other.params.event.instructions.body = secondDescriptor;
+      other.params.event.instructions.body = { ref: secondDescriptor.ref };
       const scoped = await (await send("event-two", other)).json();
       assert.equal(scoped.result.effects[0].value, "base:two");
       other.id = "unrelated-id";

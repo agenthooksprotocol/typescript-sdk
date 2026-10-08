@@ -92,8 +92,9 @@ function supported(
       effect.type === "return" &&
       request.params.event.type === "user.elicitation.request"
     ) {
-      const mode = request.params.event.elicitation.mode;
-      if (!caps.elicitation?.[mode]) return false;
+      const elicitation = request.params.event.elicitation;
+      if (!object(elicitation) || typeof elicitation.mode !== "string") return false;
+      if (!caps.elicitation?.[elicitation.mode]) return false;
     }
     return true;
   });

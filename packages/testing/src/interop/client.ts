@@ -240,7 +240,7 @@ export async function runInterop(): Promise<{
       const parsed = parseInterceptRequest(JSON.stringify(definitions.request));
       if (!parsed.ok || parsed.value.params.event.type !== "tool.before")
         throw Error("Invalid tool fixture");
-      const event = parsed.value.params.event;
+      const event = parsed.value.params.event as import("agenthooksprotocol/client").ToolBeforeEvent;
       const origin =
         s.auth === "mtls" ? tlsOrigin : `http://127.0.0.1:${ready.httpPort}`;
       const authentication =

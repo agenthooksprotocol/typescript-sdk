@@ -32,7 +32,7 @@ caller-supplied subscription ID or reference.
 ## Binary content upload
 
 `uploadContent(config, bytes, options)` accepts a `Uint8Array` and resolves to a
-validated `{ref, size, sha256}` descriptor. `config` supplies `endpoint`, optional
+validated `ContentUploadReceipt` (`{ref, size, sha256}`). `config` supplies `endpoint`, optional
 `timeoutMs` and `maxBytes`, and optional bearer `auth: {type: 'bearer', tokenEnv}`.
 Use `options.resolveToken` to resolve that upload credential. Event credentials
 are not inherited. `options.allowLoopback` permits HTTP only for explicit
@@ -46,7 +46,7 @@ content reference nor subscription identity.
 Only HTTP **201 Created** with `Content-Type: application/json` and a valid
 receiver-allocated `{ref, size, sha256}` response confirms upload. The returned
 size and lowercase SHA-256 must match the exact bytes sent. Missing, malformed,
-or mismatched descriptors fail; 202 and 204 do not confirm availability. The
+or mismatched receipts fail; 202 and 204 do not confirm availability. The
 returned opaque `ref` is used unchanged. A retry may allocate a different ref;
 this is not reference-based idempotence or a durable-storage acknowledgement.
 See the normative [upload binding](../../../agent-hooks-protocol/spec/draft/content-upload.md).
@@ -55,7 +55,7 @@ See the normative [upload binding](../../../agent-hooks-protocol/spec/draft/cont
 
 `prepareWireContent(items, options)` prepares normalized item views. Supply a
 `selection` map with a `default`, an `authorized(item)` predicate, an
-`upload(bytes)` callback returning `Promise<BodyReference>`, `mode` (`intercept`
+`upload(bytes)` callback returning `Promise<ContentUploadReceipt>`, `mode` (`intercept`
 or `observe`), and `failClosed`. Optional `timeoutMs` and `maxBytes` bound transfer.
 For example, the callback can be:
 
@@ -90,3 +90,22 @@ and approvals. A candidate does not authorize execution or bypass later
 subscribers, required approval, or managed policy. No effect is not permission
 to run. Atomic acceptance protects pending state; it is not rollback of external
 side effects. See [composition](../../../agent-hooks-protocol/spec/draft/base/composition.md).
+
+### Upload receipts and event references
+
+`uploadContent` and `ContentReceiver.upload` return a `ContentUploadReceipt`
+(`{ ref, size, sha256 }`). Keep that receipt at the upload boundary: the helpers
+check the returned length and lowercase SHA-256 digest against the exact bytes
+sent. `attachments.response(receipt)` formats the HTTP 201 confirmation only
+**after** storage consumes the verified upload stream to successful EOF.
+
+Use `contentReference(receipt)` from `agenthooksprotocol/draft` to publish only
+`{ ref: receipt.ref }` in a content item's `body` or a file-change `before`/`after`
+reference. A successful body-selected item has no outer `size` or `sha256` either.
+Metadata-only and gap items can still disclose those fields. A receipt is not an
+event reference and old inline reference metadata is rejected, not ignored.
+
+Resolve references using receiver storage and authenticated scope, not event
+length/hash claims. `ContentReceiver.read(scope, reference.ref)` uses both scope
+and opaque reference and returns a defensive copy; the reference is not a URL or
+an authorization grant.

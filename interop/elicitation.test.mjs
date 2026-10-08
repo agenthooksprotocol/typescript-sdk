@@ -21,7 +21,7 @@ const item = () => ({
   role: "user",
   mediaType: "application/json",
   selection: "body",
-  body: { ...descriptor },
+  body: { ref: descriptor.ref },
 });
 function message() {
   return {
@@ -110,7 +110,7 @@ test("elicitation sender hydrates exact sources and reports real upload confirma
     assert.deepEqual(uploads, [bytes]);
     assert.deepEqual(
       messages[0].params.event.elicitation.request.body,
-      confirmed,
+      { ref: confirmed.ref },
     );
     const raw = await run({
       ...plan,
@@ -121,7 +121,7 @@ test("elicitation sender hydrates exact sources and reports real upload confirma
     assert.equal(JSON.parse(raw.stdout)[0].contentUploads, undefined);
     assert.deepEqual(
       messages[1].params.event.elicitation.request.body,
-      descriptor,
+      { ref: descriptor.ref },
     );
     assert.equal(uploads.length, 1);
     for (const contentSources of [
@@ -170,7 +170,7 @@ test("atomic elicitation preserves absent, empty, and other-mode AHP grants", as
         mode: "form",
         server: "test",
         action: "accept",
-        result: { ...item(), id: "answer", body: answerDescriptor },
+        result: { ...item(), id: "answer", body: { ref: answerDescriptor.ref } },
       };
       const boundary = effect.type === "modify" ? result : request;
       boundary.params.capabilities = {
@@ -263,4 +263,54 @@ test("atomic elicitation presentation uses SDK effects and never disguises prese
   const malformedPresentation = await run([{ ...base, effects: [] }], args);
   assert.notEqual(malformedPresentation.code, 0);
   assert.equal(malformedPresentation.stdout, "");
+});
+
+test("actual elicitation endpoint rejects forbidden ref metadata before resolving stored bytes", { timeout: 15000 }, async () => {
+  const child = spawn(process.execPath, ["interop/elicitation.mjs", "server", "../agent-hooks-protocol/schema/draft", "test-principal"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, AHP_ELICITATION_TOKEN: "event-secret", AHP_ELICITATION_UPLOAD_TOKEN: "upload-secret" },
+  });
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  try {
+    const endpoint = await new Promise((resolve, reject) => {
+      let output = "";
+      child.stdout.on("data", (chunk) => {
+        output += chunk;
+        if (output.includes("\n")) resolve(JSON.parse(output.split("\n")[0]).endpoint);
+      });
+      child.once("error", reject);
+      child.once("exit", () => reject(Error(stderr || "Receiver exited before ready")));
+    });
+    const uploaded = await fetch(endpoint + "/upload", {
+      method: "POST",
+      headers: { authorization: "Bearer upload-secret", "content-type": "application/octet-stream", "content-length": String(bytes.length), "ahp-content-sha256": descriptor.sha256 },
+      body: bytes,
+    });
+    assert.equal(uploaded.status, 201);
+    const receipt = await uploaded.json();
+    const send = (wire) => fetch(endpoint + "/hooks/intercept", {
+      method: "POST", headers: { authorization: "Bearer event-secret", "content-type": "application/json" }, body: JSON.stringify(wire),
+    });
+    for (const extra of [{ sha256: "0".repeat(64) }, { sha256: null }, { size: bytes.length }, { size: null }]) {
+      const wire = message();
+      wire.params.event.elicitation.request.body = { ref: receipt.ref, ...extra };
+      const rejected = await send(wire);
+      assert.equal(rejected.status, 400);
+      await rejected.arrayBuffer();
+    }
+    const receipts = await fetch(endpoint + "/receipts", { headers: { authorization: "Bearer event-secret" } });
+    assert.deepEqual(await receipts.json(), []);
+    const valid = message();
+    valid.params.event.elicitation.request.body = { ref: receipt.ref };
+    const accepted = await send(valid);
+    assert.equal(accepted.status, 200);
+    assert.deepEqual((await accepted.json()).result.effects, []);
+  } finally {
+    child.kill();
+    await new Promise((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) resolve();
+      else child.once("exit", resolve);
+    });
+  }
 });

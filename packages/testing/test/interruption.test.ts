@@ -435,7 +435,7 @@ test("one Hooks boundary composes ordered routes and invalidates earlier grants/
         throw new Error("Expected second tool interception");
       assert.equal(second.id, id);
       assert.equal(second.params.event.id, id);
-      assert.deepEqual(structuredClone(second.params.event.tool.input), {
+      assert.deepEqual(structuredClone((second.params.event as import("agenthooksprotocol/client").ToolBeforeEvent).tool.input), {
         task: 2,
       });
       assert.equal(second.params.state?.permission, "allow");

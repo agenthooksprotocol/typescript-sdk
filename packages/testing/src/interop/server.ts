@@ -46,7 +46,7 @@ async function intercept(body: string): Promise<string> {
           message.method === "hooks/intercept" &&
           message.params.event.type === "user.message.inbound"
         ) {
-          for (const item of message.params.event.message.text ?? []) {
+          for (const item of (message.params.event as import("agenthooksprotocol/client").UserMessageInboundEvent).message.text) {
             if (
               !("body" in item) ||
               !item.body ||

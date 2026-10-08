@@ -12,12 +12,12 @@ import type {
   ExecutionEventContextCompactBefore,
   InterceptResponse,
   InterceptRequest,
-  ObserveNotification,
+  Event,
   StaticCapabilityManifest,
 } from "../draft/generated.js";
 import type { AuthProvider, DeliveryAuthProvider } from "./auth.js";
 
-export type Event = ObserveNotification["params"]["event"];
+export type { Event } from "../draft/generated.js";
 export type { EventType } from "../draft/generated.js";
 /** Remove generated JSON extension index signatures while preserving named fields. */
 type Fields<T> = {

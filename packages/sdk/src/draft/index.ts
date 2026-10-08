@@ -233,7 +233,7 @@ export type {
 
 export type {
   UploadConfiguration,
-  BodyReference,
+  ContentUploadReceipt,
   NormalizedContentInput,
   NormalizedContentView,
 } from "../content-upload.js";
@@ -244,3 +244,5 @@ export type {
   ObservationEvent,
   ObservationNotification,
 } from "../observation.js";
+
+export { contentReference } from "../content-upload.js";

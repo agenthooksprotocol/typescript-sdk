@@ -1,3 +1,5 @@
+import type { ContentReference, ContentUploadReceipt } from "./draft/generated.js";
+export type { ContentReference, ContentUploadReceipt } from "./draft/generated.js";
 /** Normative HTTP content upload. Event authentication is deliberately not an input. */
 export interface UploadConfiguration {
   endpoint: string;
@@ -6,17 +8,16 @@ export interface UploadConfiguration {
   maxBytes?: number;
   [key: string]: unknown;
 }
-export interface BodyReference {
-  ref: string;
-  size: number;
-  sha256: string;
+/** Explicitly discard upload confirmation metadata before publishing a reference. */
+export function contentReference(receipt: ContentUploadReceipt): ContentReference {
+  return { ref: receipt.ref };
 }
-/** Check the receiver descriptor before exposing a body reference. */
-export function validateBodyReference(
+/** Verify the upload receipt against the exact sent bytes before publication. */
+export function validateUploadReceipt(
   value: unknown,
   size: number,
   sha256: string,
-): BodyReference {
+): ContentUploadReceipt {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw Error("Invalid upload descriptor");
   const body = value as Record<string, unknown>;
@@ -40,7 +41,7 @@ export async function uploadContent(
     resolveToken?: (name: string) => string | undefined;
     allowLoopback?: boolean;
   } = {},
-): Promise<BodyReference> {
+): Promise<ContentUploadReceipt> {
   if (
     !config ||
     typeof config.endpoint !== "string" ||
@@ -107,7 +108,7 @@ export async function uploadContent(
     await response.body?.cancel();
     throw Error(`Content upload failed: HTTP ${response.status}`);
   }
-  return validateBodyReference(await response.json(), snapshot.length, sha256);
+  return validateUploadReceipt(await response.json(), snapshot.length, sha256);
 }
 export interface NormalizedContentInput {
   id: string;
@@ -129,7 +130,7 @@ export interface NormalizedContentView {
   parentItemId?: string;
   synthesized?: boolean;
   selection: "body" | "metadata" | "omit";
-  body?: BodyReference;
+  body?: ContentReference;
   gap?: { reason: string };
 }
 /** Select once per subscriber. Return no body reference until upload confirms availability. */
@@ -139,7 +140,7 @@ export async function prepareWireContent(
     subscription?: string;
     selection: Record<string, "body" | "metadata" | "omit">;
     authorized: (item: NormalizedContentInput) => boolean;
-    upload: (bytes: Uint8Array) => Promise<BodyReference>;
+    upload: (bytes: Uint8Array) => Promise<ContentUploadReceipt>;
     mode: "intercept" | "observe";
     failClosed: boolean;
     timeoutMs?: number;
@@ -174,7 +175,7 @@ export async function prepareWireContent(
         try {
           const bytes = new Uint8Array(item.bytes);
           let timer: ReturnType<typeof setTimeout> | undefined;
-          let body: BodyReference;
+          let body: ContentUploadReceipt;
           try {
             body = await Promise.race([
               options.upload(bytes.slice()),
@@ -192,7 +193,7 @@ export async function prepareWireContent(
             new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
             (byte) => byte.toString(16).padStart(2, "0"),
           ).join("");
-          view.body = validateBodyReference(body, bytes.length, hash);
+          view.body = contentReference(validateUploadReceipt(body, bytes.length, hash));
         } catch {
           view.gap = { reason: "transfer_failed" };
         }

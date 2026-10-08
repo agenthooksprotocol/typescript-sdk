@@ -9,6 +9,8 @@ export { attachments, UploadError } from "./attachments.js";
 export type { Upload } from "./attachments.js";
 export type {
   ContentReference,
+  ContentUploadReceipt,
+  Event,
   InterceptRequest,
   ObserveNotification,
   CapabilitiesRequest,
