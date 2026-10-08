@@ -246,3 +246,6 @@ export type {
 } from "../observation.js";
 
 export { contentReference } from "../content-upload.js";
+
+export { effectNames, supports } from "./generated.js";
+export type { EffectName } from "./generated.js";

@@ -18,3 +18,6 @@ export type {
 } from "../draft/generated.js";
 
 export { effects } from "../draft/generated.js";
+
+export { effectNames, supports } from "../draft/generated.js";
+export type { EffectName } from "../draft/generated.js";

@@ -16778,26 +16778,51 @@ function discriminatorValue(
   return undefined;
 }
 
-function toSafeJson(value: unknown): JsonValue {
+function toSafeJson(value: unknown, ancestors = new Set<object>()): JsonValue {
   if (value === null || typeof value === "string" || typeof value === "boolean")
     return value;
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (Array.isArray(value)) return value.map(toSafeJson);
-  if (typeof value === "object") {
+  if (typeof value !== "object" || value === null || ancestors.has(value))
+    throw new TypeError("Input is not an acyclic JSON value");
+  const prototype: unknown = Object.getPrototypeOf(value);
+  if (
+    !Array.isArray(value) &&
+    prototype !== Object.prototype &&
+    prototype !== null
+  )
+    throw new TypeError("Expected a plain JSON object");
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (Reflect.ownKeys(value).length !== value.length + 1)
+        throw new TypeError("Expected a dense JSON array");
+      return Array.from({ length: value.length }, (_, index) => {
+        const property = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!property?.enumerable || !("value" in property))
+          throw new TypeError("Expected JSON array data elements");
+        return toSafeJson(property.value, ancestors);
+      });
+    }
     const result = Object.create(null) as Record<string, JsonValue>;
-    for (const [key, child] of Object.entries(
-      value as Record<string, unknown>,
-    )) {
+    for (const key of Reflect.ownKeys(value)) {
+      const property = Object.getOwnPropertyDescriptor(value, key)!;
+      if (
+        typeof key !== "string" ||
+        !property.enumerable ||
+        !("value" in property)
+      )
+        throw new TypeError("Expected enumerable JSON data properties");
       Object.defineProperty(result, key, {
-        value: toSafeJson(child),
+        value: toSafeJson(property.value, ancestors),
         enumerable: true,
         configurable: true,
         writable: true,
       });
     }
     return result;
+  } finally {
+    ancestors.delete(value);
   }
-  throw new TypeError("Input is not a JSON value");
 }
 
 function encodeJson(value: JsonValue): string {
@@ -16807,7 +16832,22 @@ function isObject(value: JsonValue): value is Record<string, JsonValue> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function sameJson(left: JsonValue, right: JsonValue): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  if (left === right) return true;
+  if (Array.isArray(left) && Array.isArray(right))
+    return (
+      left.length === right.length &&
+      left.every((value, index) => sameJson(value, right[index]!))
+    );
+  if (isObject(left) && isObject(right))
+    return (
+      Object.keys(left).length === Object.keys(right).length &&
+      Object.keys(left).every(
+        (key) =>
+          Object.prototype.hasOwnProperty.call(right, key) &&
+          sameJson(left[key]!, right[key]!),
+      )
+    );
+  return false;
 }
 function joinPath(path: string, key: string): string {
   return `${path}/${key.replace(/~/g, "~0").replace(/\//g, "~1")}`;
@@ -17139,6 +17179,28 @@ export type DeliveryDiagnosticCode =
   | "deadline_exceeded"
   | "preparation"
   | "capacity";
+
+/** Schema-derived family identifiers; custom strings remain supported. */
+export const effectNames = Object.freeze({
+  allow: "allow",
+  ask: "ask",
+  deny: "deny",
+  flow: "flow",
+  inject: "inject",
+  message: "message",
+  modify: "modify",
+  return: "return",
+} as const);
+export type EffectName = OpenString<
+  (typeof effectNames)[keyof typeof effectNames]
+>;
+/** Advertised membership only, not authorization or target/operation admission. */
+export function supports(
+  capabilities: { readonly effects: readonly string[] },
+  effect: EffectName,
+): boolean {
+  return capabilities.effects.includes(effect);
+}
 export type ConfigChangeAfterInput = {
   change: {
     mcpServers?: Array<{} & AdditionalProperties>;
