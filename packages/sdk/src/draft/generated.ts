@@ -83,12 +83,15 @@ export type Authentication =
       tokenEnv?: string;
       tokenRef?: string;
       type: "bearer";
-    } & AdditionalProperties & {
-        tokenEnv: JsonValue;
-      } & AdditionalProperties)
-  | ({
-      tokenRef: JsonValue;
-    } & AdditionalProperties)
+    } & AdditionalProperties &
+      (
+        | ({
+            tokenEnv: JsonValue;
+          } & AdditionalProperties)
+        | ({
+            tokenRef: JsonValue;
+          } & AdditionalProperties)
+      ))
   | ({
       clientId: string;
       clientSecretRef?: string;
@@ -141,96 +144,114 @@ export type Capabilities = {
     } & AdditionalProperties;
   } & AdditionalProperties;
   modify?: {
-    content?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+    content?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
-    input?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
+    input?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
-    instructions?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
+    instructions?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
-    output?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
+    output?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
-    prompt?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
+    prompt?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
-    request?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
+    request?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
-    response?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
+    response?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
-    summary?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
+    summary?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
-    workspace?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
+    workspace?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
   } & AdditionalProperties;
 } & AdditionalProperties;
 
@@ -721,12 +742,15 @@ export type ExecutionEventMcp = {
         >;
         transport: "http";
         url?: string;
-      } & AdditionalProperties & {
-          url: JsonValue;
-        } & AdditionalProperties)
-    | ({
-        gaps: JsonValue;
-      } & AdditionalProperties)
+      } & AdditionalProperties &
+        (
+          | ({
+              url: JsonValue;
+            } & AdditionalProperties)
+          | ({
+              gaps: JsonValue;
+            } & AdditionalProperties)
+        ))
     | ({
         gaps?: Array<
           {
@@ -736,12 +760,15 @@ export type ExecutionEventMcp = {
         >;
         transport: "sse";
         url?: string;
-      } & AdditionalProperties & {
-          url: JsonValue;
-        } & AdditionalProperties)
-    | ({
-        gaps: JsonValue;
-      } & AdditionalProperties)
+      } & AdditionalProperties &
+        (
+          | ({
+              url: JsonValue;
+            } & AdditionalProperties)
+          | ({
+              gaps: JsonValue;
+            } & AdditionalProperties)
+        ))
     | ({
         args?: Array<string>;
         command?: string;
@@ -753,22 +780,31 @@ export type ExecutionEventMcp = {
           } & AdditionalProperties
         >;
         transport: "stdio";
-      } & AdditionalProperties & {
-          command: JsonValue;
-        } & AdditionalProperties)
-    | ({
-        gaps: JsonValue;
-      } & AdditionalProperties & {
-          args: JsonValue;
-        } & AdditionalProperties)
-    | ({
-        gaps: JsonValue;
-      } & AdditionalProperties & {
-          cwd: JsonValue;
-        } & AdditionalProperties)
-    | ({
-        gaps: JsonValue;
-      } & AdditionalProperties)
+      } & AdditionalProperties &
+        (
+          | ({
+              command: JsonValue;
+            } & AdditionalProperties)
+          | ({
+              gaps: JsonValue;
+            } & AdditionalProperties)
+        ) &
+        (
+          | ({
+              args: JsonValue;
+            } & AdditionalProperties)
+          | ({
+              gaps: JsonValue;
+            } & AdditionalProperties)
+        ) &
+        (
+          | ({
+              cwd: JsonValue;
+            } & AdditionalProperties)
+          | ({
+              gaps: JsonValue;
+            } & AdditionalProperties)
+        ))
     | ({
         address?: string;
         addressForm?: string;
@@ -779,17 +815,23 @@ export type ExecutionEventMcp = {
           } & AdditionalProperties
         >;
         transport: string;
-      } & AdditionalProperties & {
-          addressForm: JsonValue;
-        } & AdditionalProperties)
-    | ({
-        gaps: JsonValue;
-      } & AdditionalProperties & {
-          address: JsonValue;
-        } & AdditionalProperties)
-    | ({
-        gaps: JsonValue;
-      } & AdditionalProperties)
+      } & AdditionalProperties &
+        (
+          | ({
+              addressForm: JsonValue;
+            } & AdditionalProperties)
+          | ({
+              gaps: JsonValue;
+            } & AdditionalProperties)
+        ) &
+        (
+          | ({
+              address: JsonValue;
+            } & AdditionalProperties)
+          | ({
+              gaps: JsonValue;
+            } & AdditionalProperties)
+        ))
     | UnknownVariant<"transport">;
   provenance: OpenString<"runtime" | "inferred">;
   server: {
