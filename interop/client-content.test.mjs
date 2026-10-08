@@ -266,7 +266,7 @@ test("empty snapshots retain exact zero framing and unsafe endpoints fail before
     upload,
     sender(calls),
   );
-  assert.equal(empty.items[0].body.size, 0);
+  assert.deepEqual(empty.items[0].body, { ref: "receiver-ref" });
   assert.equal(calls[0].init.headers["content-length"], "0");
   const content = source();
   for (const endpoint of [
@@ -325,7 +325,8 @@ test("readBody before preparation and composed replacement streams share the man
     upload,
     sender(calls),
   );
-  assert.equal(wire.items[0].body.sha256, hash(new Uint8Array([1, 2, 3])));
+  assert.deepEqual(wire.items[0].body, { ref: "receiver-ref" });
+  assert.equal(calls.at(-1).init.headers["ahp-content-sha256"], hash(new Uint8Array([1, 2, 3])));
   assert.deepEqual(
     await manager.readBody(replacement.stream),
     new Uint8Array([1, 2, 3]),
@@ -513,14 +514,10 @@ test("file.changed bare streams upload once per receiver from reusable snapshots
   for (const key of ["before", "after"]) {
     assert.equal(one.changes[0][key].ref, "scope-one");
     assert.equal(two.changes[0][key].ref, "scope-two");
-    assert.deepEqual(Object.keys(two.changes[0][key]).sort(), [
-      "ref",
-      "sha256",
-      "size",
-    ]);
+    assert.deepEqual(Object.keys(two.changes[0][key]), ["ref"]);
   }
-  assert.equal(two.changes[0].before.sha256, hash(new Uint8Array([1])));
-  assert.equal(two.changes[0].after.size, 2);
+  assert.equal(calls[2].init.headers["ahp-content-sha256"], hash(new Uint8Array([1])));
+  assert.equal(calls[3].init.headers["content-length"], "2");
   assert.equal(two.changes[0].path, "file.txt");
   assert.equal(event.changes[0].before, before.stream);
   await manager.close();
@@ -556,7 +553,7 @@ test("file.changed metadata and omitted references disappear without reading and
 
 test("file.changed never forwards a receiver's existing bare reference", async () => {
   const manager = new ContentManager();
-  const ref = { ref: "other-scope", size: 0, sha256: hash(new Uint8Array()) };
+  const ref = { ref: "other-scope" };
   const event = {
     type: "file.changed",
     changes: [{ path: "file", before: ref, after: ref }],
@@ -613,7 +610,7 @@ test("only canonical content paths are projected, never opaque descriptor-shaped
     elicitation: { request: stream(), result: stream() },
     fileChanges: [{ before: stream(), after: stream(), path: "file" }],
     changes: [
-      { before: { ref: "existing", size: 0, sha256: hash(new Uint8Array()) } },
+      { before: { ref: "existing" } },
     ],
   };
   const wire = await manager.prepare(

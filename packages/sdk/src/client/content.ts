@@ -1,5 +1,5 @@
 import {
-  parseContentReference,
+  parseContentUploadReceipt,
   type ContentSelection,
   type ContentUpload,
 } from "../draft/generated.js";
@@ -264,7 +264,7 @@ export class ContentManager {
             }),
             controller.signal,
           );
-          const parsed = parseContentReference(
+          const parsed = parseContentUploadReceipt(
             await readConfirmation(response, controller.signal),
           );
           if (
@@ -274,11 +274,9 @@ export class ContentManager {
           ) {
             throw new Error("Invalid or mismatched upload reference");
           }
-          result.body = {
-            ref: parsed.value.ref,
-            size: snapshot.size,
-            sha256: snapshot.sha256,
-          };
+          delete result.size;
+          delete result.sha256;
+          result.body = { ref: parsed.value.ref };
           return result;
         } finally {
           clearTimeout(timeout);
@@ -294,6 +292,20 @@ export class ContentManager {
       return result;
     };
     return visit(event);
+  }
+
+  /** Copy an already selected snapshot without reading unselected sources. */
+  async copySnapshot(
+    body: ReadableStream<Uint8Array>,
+  ): Promise<Uint8Array | undefined> {
+    const snapshot = this.snapshots.get(body);
+    if (!snapshot) return undefined;
+    try {
+      return (await snapshot).bytes.slice();
+    } catch {
+      // Failed reads have no reusable result payload; delivery reports the error.
+      return undefined;
+    }
   }
 
   /** Initiates cancellation and releases snapshots; repeated calls return the

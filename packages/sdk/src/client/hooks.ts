@@ -107,6 +107,12 @@ const matches = (selector: string, type: string) =>
   selector === type ||
   (selector.endsWith(".*") && selector.slice(0, -2) === type.split(".")[0]);
 
+type ElicitationLifetime = {
+  id: string;
+  sessionId: string | undefined;
+  retired: boolean;
+};
+
 /** Configuration-driven, harness-facing AHP client. No host operation is executed. */
 export class Hooks {
   readonly initialized: Promise<void>;
@@ -124,6 +130,9 @@ export class Hooks {
     { event: any; bytes: Uint8Array }
   >();
   private elicitationBytes = 0;
+  // Tokens exist only for active calls, including preparation before any bytes
+  // can be retained. Retirement invalidates those calls without tombstones.
+  private readonly activeElicitations = new Set<ElicitationLifetime>();
 
   constructor(config: unknown, options: HooksOptions) {
     this.options = {
@@ -435,16 +444,40 @@ export class Hooks {
     manager.own(options.contentSources);
     this.managers.add(manager);
     const signal = combineSignals(this.lifetime.signal, options.signal);
+    const exchange: ElicitationLifetime | undefined =
+      type === "user.elicitation.request"
+        ? {
+            id: input.id ?? randomUUID(),
+            sessionId: (input as any).session?.id,
+            retired: false,
+          }
+        : undefined;
+    if (exchange) this.activeElicitations.add(exchange);
+    let completed = false;
     const work = (async () => {
       // Calls after close are misuse. Active calls return interruption evidence.
       this.lifetime.signal.throwIfAborted();
       await this.initialized;
-      return this.run(type, input, options, signal, manager);
+      return this.run(type, input, options, signal, manager, exchange);
     })();
     this.pending.add(work);
     try {
-      return await work;
+      const result = await work;
+      completed = true;
+      return result;
     } finally {
+      // Terminal exchanges retire even when validation or cancellation bypasses run.
+      if (type === "user.elicitation.result")
+        this.forgetElicitation((input as any).parentEventId);
+      if (
+        type === "user.elicitation.request" &&
+        (!completed || signal.aborted) &&
+        input.id
+      )
+        this.forgetElicitation(input.id);
+      if (type === "session.end")
+        this.retireSessionElicitations((input as any).session?.id);
+      if (exchange) this.activeElicitations.delete(exchange);
       await manager.close();
       this.managers.delete(manager);
       this.pending.delete(work);
@@ -457,12 +490,13 @@ export class Hooks {
     options: BoundaryOptions,
     signal: AbortSignal,
     manager: ContentManager,
+    exchange?: ElicitationLifetime,
   ): Promise<BoundaryResult<K>> {
     let event: any = cloneInput({
       ...input,
       type,
       source: this.options.source,
-      id: input.id ?? randomUUID(),
+      id: exchange?.id ?? input.id ?? randomUUID(),
       time: input.time ?? new Date().toISOString(),
     });
     bindContentSources(type, event, options.contentSources);
@@ -494,7 +528,7 @@ export class Hooks {
     };
     if (signal.aborted)
       return {
-        event,
+        event: await resultEvent(event, manager),
         response: {
           jsonrpc: "2.0",
           id: requestId,
@@ -512,7 +546,9 @@ export class Hooks {
         observations: Promise.resolve([]),
         interrupted: true,
       } as BoundaryResult<K>;
+    const localSources = new Set<ReadableStream<Uint8Array>>();
     const originalRequest = this.elicitationFor(event);
+    manager.own(originalRequest);
     let effects: Effect[] = [];
     let state = structuredClone(options.initialState);
     // A supplied snapshot is input to the first receiver, not a newly accepted
@@ -636,7 +672,7 @@ export class Hooks {
               event.elicitation.request.body,
               signal,
             );
-            this.rememberElicitation(event, bytes);
+            this.rememberElicitation(event, bytes, exchange!);
           }
           const request = {
             jsonrpc: "2.0",
@@ -692,6 +728,10 @@ export class Hooks {
           const staged = await raceAbort(
             composeResponseAsync(event, effects, decoded.value, caps, {
               readContent: (body) => manager.readBody(body, deadline),
+              ownContent: (body) => {
+                manager.own(body);
+                localSources.add(body);
+              },
               selectedEvent: projected,
               state,
               ...(originalRequest
@@ -771,40 +811,33 @@ export class Hooks {
         const jobs = observations.map((route) =>
           this.observe(route, snapshot, manager, signal),
         );
-        observed = Promise.all(jobs)
-          .then((results) =>
-            results.filter(
-              (result): result is DeliveryError => result !== undefined,
-            ),
-          )
-          .finally(async () => {
-            await manager.close();
-            this.managers.delete(manager);
-          });
+        observed = Promise.all(jobs).then((results) =>
+          results.filter(
+            (result): result is DeliveryError => result !== undefined,
+          ),
+        );
         await observed;
-      } else {
-        await manager.close();
-        this.managers.delete(manager);
       }
       interrupted ||= signal.aborted;
       if (type === "user.elicitation.result")
         this.forgetElicitation(event.parentEventId);
       if (
         type === "user.elicitation.request" &&
-        (interrupted || effects.some((e) => e.type === "deny"))
+        (interrupted ||
+          errors.length > 0 ||
+          (await observed).length > 0 ||
+          effects.some((e) => e.type === "deny"))
       )
         this.forgetElicitation(event.id);
       if (type === "session.end")
-        for (const [id, entry] of this.elicitations)
-          if (entry.event.session?.id === event.session?.id)
-            this.forgetElicitation(id);
+        this.retireSessionElicitations(event.session?.id);
       const response = {
         jsonrpc: "2.0",
         id: requestId,
         result: { protocolVersion: "draft", effects },
       } as InterceptResponse;
       return {
-        event,
+        event: await resultEvent(event, manager, localSources),
         response,
         state: snapshotState(state),
         get permission() {
@@ -819,6 +852,8 @@ export class Hooks {
         interrupted,
       } as BoundaryResult<K>;
     } catch (error) {
+      if (type === "user.elicitation.request")
+        this.forgetElicitation(requestId);
       await manager.close();
       this.managers.delete(manager);
       throw error;
@@ -887,18 +922,33 @@ export class Hooks {
     }
   }
 
-  private rememberElicitation(event: any, bytes: Uint8Array): void {
+  private rememberElicitation(
+    event: any,
+    bytes: Uint8Array,
+    exchange: ElicitationLifetime,
+  ): void {
+    if (exchange.retired || this.lifetime.signal.aborted) return;
     if (this.elicitations.has(event.id)) return;
     const limit = this.options.maxContentBytes ?? 64 * 1024 * 1024;
     if (bytes.byteLength > limit)
       throw new Error("Elicitation request exceeds retention budget");
-    while (
+    if (
       this.elicitationBytes + bytes.byteLength > limit ||
       this.elicitations.size >= 128
     )
-      this.forgetElicitation(this.elicitations.keys().next().value!);
-    const stored = cloneInput(event);
-    delete stored.elicitation.request.body;
+      throw new Error("Active elicitation exchanges exceed retention budget");
+    // Pending exchanges own only correlation facts and selected request bytes.
+    const stored = {
+      type: event.type,
+      id: event.id,
+      source: event.source,
+      session: event.session ? { id: event.session.id } : undefined,
+      elicitation: {
+        mode: event.elicitation.mode,
+        server: event.elicitation.server,
+        request: { mediaType: event.elicitation.request.mediaType },
+      },
+    };
     this.elicitations.set(event.id, { event: stored, bytes });
     this.elicitationBytes += bytes.byteLength;
   }
@@ -916,7 +966,21 @@ export class Hooks {
     });
     return copy;
   }
+  /** End an abandoned host elicitation exchange without delivering a result. */
+  discardElicitation(requestEventId: string): void {
+    this.forgetElicitation(requestEventId);
+  }
+
+  private retireSessionElicitations(sessionId: string | undefined): void {
+    for (const exchange of this.activeElicitations)
+      if (exchange.sessionId === sessionId) exchange.retired = true;
+    for (const [id, entry] of this.elicitations)
+      if (entry.event.session?.id === sessionId) this.forgetElicitation(id);
+  }
+
   private forgetElicitation(id: string): void {
+    for (const exchange of this.activeElicitations)
+      if (exchange.id === id) exchange.retired = true;
     const entry = this.elicitations.get(id);
     if (entry) this.elicitationBytes -= entry.bytes.byteLength;
     this.elicitations.delete(id);
@@ -925,6 +989,7 @@ export class Hooks {
   /** Cancel pending work and release SDK-owned resources; injected stores remain owned by the host. */
   close(): Promise<void> {
     if (!this.closed) {
+      for (const exchange of this.activeElicitations) exchange.retired = true;
       this.lifetime.abort(new Error("Hooks closed"));
       this.closed = (async () => {
         await this.initialized.catch(() => {});
@@ -1150,6 +1215,48 @@ export class Hooks {
   }
 }
 
+// Return independent copies of prepared or synthesized payloads. Never read an
+// unselected producer stream solely to construct a result.
+async function resultEvent(
+  value: any,
+  manager: ContentManager,
+  localSources = new Set<ReadableStream<Uint8Array>>(),
+): Promise<any> {
+  if (value instanceof ContentSource) value = value.stream;
+  if (value instanceof ReadableStream) {
+    const bytes = localSources.has(value)
+      ? await manager.readBody(value)
+      : await manager.copySnapshot(value);
+    if (!bytes) return undefined;
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    });
+  }
+  if (Array.isArray(value))
+    return Promise.all(
+      value.map((child) => resultEvent(child, manager, localSources)),
+    );
+  if (value && typeof value === "object") {
+    const entries = await Promise.all(
+      Object.entries(value).map(async ([key, child]) =>
+        [key, await resultEvent(child, manager, localSources)] as const),
+    );
+    const copy = Object.fromEntries(
+      entries.filter(([, child]) => child !== undefined),
+    );
+    if (
+      (value.body instanceof ReadableStream || value.body instanceof ContentSource) &&
+      !copy.body
+    )
+      copy.selection = "metadata";
+    return copy;
+  }
+  return value;
+}
+
 function cloneInput(value: any): any {
   if (value instanceof ContentSource) return value.stream;
   if (value instanceof ReadableStream) return value;
@@ -1217,13 +1324,15 @@ function combineSignals(first: AbortSignal, second?: AbortSignal): AbortSignal {
   return second ? AbortSignal.any([first, second]) : first;
 }
 function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(signal.reason);
   return new Promise((resolve, reject) => {
     const abort = () => reject(signal.reason);
     signal.addEventListener("abort", abort, { once: true });
     promise
       .then(resolve, reject)
       .finally(() => signal.removeEventListener("abort", abort));
+    // The operation already exists: own its rejection even if cancellation
+    // occurred synchronously while constructing it.
+    if (signal.aborted) abort();
   });
 }
 

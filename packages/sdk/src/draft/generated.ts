@@ -83,12 +83,15 @@ export type Authentication =
       tokenEnv?: string;
       tokenRef?: string;
       type: "bearer";
-    } & AdditionalProperties & {
-        tokenEnv: JsonValue;
-      } & AdditionalProperties)
-  | ({
-      tokenRef: JsonValue;
-    } & AdditionalProperties)
+    } & AdditionalProperties &
+      (
+        | ({
+            tokenEnv: JsonValue;
+          } & AdditionalProperties)
+        | ({
+            tokenRef: JsonValue;
+          } & AdditionalProperties)
+      ))
   | ({
       clientId: string;
       clientSecretRef?: string;
@@ -141,96 +144,114 @@ export type Capabilities = {
     } & AdditionalProperties;
   } & AdditionalProperties;
   modify?: {
-    content?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+    content?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
-    input?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
+    input?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
-    instructions?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
+    instructions?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
-    output?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
+    output?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
-    prompt?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
+    prompt?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
-    request?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
+    request?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
-    response?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
+    response?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
-    summary?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
+    summary?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
-    workspace?:
-      | ({
-          merge: boolean;
-          replace: boolean;
-        } & AdditionalProperties & {
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
+    workspace?: {
+      merge: boolean;
+      replace: boolean;
+    } & AdditionalProperties &
+      (
+        | ({
             replace: true;
           } & AdditionalProperties)
-      | ({
-          merge: true;
-        } & AdditionalProperties);
+        | ({
+            merge: true;
+          } & AdditionalProperties)
+      );
   } & AdditionalProperties;
 } & AdditionalProperties;
 
@@ -341,7 +362,8 @@ export type CatalogueEvent =
   | WorkspaceChangeBeforeEvent
   | WorkspaceChangeAfterEvent
   | FileChangedEvent
-  | HookFailureEvent;
+  | HookFailureEvent
+  | UnknownVariant<"type">;
 
 /** Source: schema/draft/catalogue-event.schema.json#/$defs/config.change.after */
 export type ConfigChangeAfterEvent = {
@@ -409,8 +431,6 @@ export type ContentItem =
       parentItemId?: string;
       role?: string;
       selection: "body";
-      sha256?: string;
-      size?: number;
       synthesized?: boolean;
     } & AdditionalProperties)
   | ({
@@ -457,8 +477,6 @@ export type ContentItem =
 /** Source: schema/draft/content-reference.schema.json# */
 export type ContentReference = {
   ref: string;
-  sha256: string;
-  size: number;
 } & AdditionalProperties;
 
 /** Source: schema/draft/content-selection.schema.json# */
@@ -478,6 +496,13 @@ export type ContentUpload = {
   endpoint: string;
   maxBytes: number;
   timeoutMs: number;
+} & AdditionalProperties;
+
+/** Source: schema/draft/content-upload-receipt.schema.json# */
+export type ContentUploadReceipt = {
+  ref: string;
+  sha256: string;
+  size: number;
 } & AdditionalProperties;
 
 /** Source: schema/draft/capabilities.schema.json#/$defs/context.compact.after */
@@ -558,6 +583,42 @@ export type Effect =
       type: "inject";
       value: JsonValue;
     } & AdditionalProperties);
+
+/** Source: schema/draft/event.schema.json# */
+export type Event =
+  | ToolBeforeEvent
+  | ToolAfterEvent
+  | SessionStartEvent
+  | SessionEndEvent
+  | ConfigChangeBeforeEvent
+  | ConfigChangeAfterEvent
+  | TurnStartEvent
+  | TurnFinishBeforeEvent
+  | TurnEndEvent
+  | TurnProgressEvent
+  | ModelRequestBeforeEvent
+  | ModelResponseAfterEvent
+  | ModelErrorEvent
+  | ModelSwitchBeforeEvent
+  | ModelSwitchAfterEvent
+  | ToolPermissionRequestEvent
+  | ToolPermissionResolvedEvent
+  | ToolProgressEvent
+  | ToolBatchAfterEvent
+  | ContextCompactBeforeEvent
+  | ContextCompactAfterEvent
+  | TaskChangeBeforeEvent
+  | TaskChangeAfterEvent
+  | UserAttentionEvent
+  | UserElicitationRequestEvent
+  | UserElicitationResultEvent
+  | UserMessageInboundEvent
+  | UserMessageOutboundEvent
+  | WorkspaceChangeBeforeEvent
+  | WorkspaceChangeAfterEvent
+  | FileChangedEvent
+  | HookFailureEvent
+  | UnknownVariant<"type">;
 
 /** Source: schema/draft/execution-event.schema.json# */
 export type ExecutionEvent =
@@ -721,12 +782,15 @@ export type ExecutionEventMcp = {
         >;
         transport: "http";
         url?: string;
-      } & AdditionalProperties & {
-          url: JsonValue;
-        } & AdditionalProperties)
-    | ({
-        gaps: JsonValue;
-      } & AdditionalProperties)
+      } & AdditionalProperties &
+        (
+          | ({
+              url: JsonValue;
+            } & AdditionalProperties)
+          | ({
+              gaps: JsonValue;
+            } & AdditionalProperties)
+        ))
     | ({
         gaps?: Array<
           {
@@ -736,12 +800,15 @@ export type ExecutionEventMcp = {
         >;
         transport: "sse";
         url?: string;
-      } & AdditionalProperties & {
-          url: JsonValue;
-        } & AdditionalProperties)
-    | ({
-        gaps: JsonValue;
-      } & AdditionalProperties)
+      } & AdditionalProperties &
+        (
+          | ({
+              url: JsonValue;
+            } & AdditionalProperties)
+          | ({
+              gaps: JsonValue;
+            } & AdditionalProperties)
+        ))
     | ({
         args?: Array<string>;
         command?: string;
@@ -753,22 +820,31 @@ export type ExecutionEventMcp = {
           } & AdditionalProperties
         >;
         transport: "stdio";
-      } & AdditionalProperties & {
-          command: JsonValue;
-        } & AdditionalProperties)
-    | ({
-        gaps: JsonValue;
-      } & AdditionalProperties & {
-          args: JsonValue;
-        } & AdditionalProperties)
-    | ({
-        gaps: JsonValue;
-      } & AdditionalProperties & {
-          cwd: JsonValue;
-        } & AdditionalProperties)
-    | ({
-        gaps: JsonValue;
-      } & AdditionalProperties)
+      } & AdditionalProperties &
+        (
+          | ({
+              command: JsonValue;
+            } & AdditionalProperties)
+          | ({
+              gaps: JsonValue;
+            } & AdditionalProperties)
+        ) &
+        (
+          | ({
+              args: JsonValue;
+            } & AdditionalProperties)
+          | ({
+              gaps: JsonValue;
+            } & AdditionalProperties)
+        ) &
+        (
+          | ({
+              cwd: JsonValue;
+            } & AdditionalProperties)
+          | ({
+              gaps: JsonValue;
+            } & AdditionalProperties)
+        ))
     | ({
         address?: string;
         addressForm?: string;
@@ -779,17 +855,23 @@ export type ExecutionEventMcp = {
           } & AdditionalProperties
         >;
         transport: string;
-      } & AdditionalProperties & {
-          addressForm: JsonValue;
-        } & AdditionalProperties)
-    | ({
-        gaps: JsonValue;
-      } & AdditionalProperties & {
-          address: JsonValue;
-        } & AdditionalProperties)
-    | ({
-        gaps: JsonValue;
-      } & AdditionalProperties)
+      } & AdditionalProperties &
+        (
+          | ({
+              addressForm: JsonValue;
+            } & AdditionalProperties)
+          | ({
+              gaps: JsonValue;
+            } & AdditionalProperties)
+        ) &
+        (
+          | ({
+              address: JsonValue;
+            } & AdditionalProperties)
+          | ({
+              gaps: JsonValue;
+            } & AdditionalProperties)
+        ))
     | UnknownVariant<"transport">;
   provenance: OpenString<"runtime" | "inferred">;
   server: {
@@ -1414,26 +1496,7 @@ export type InterceptRequest = JsonRpcRequest & {
     capabilities: Capabilities & {
       flow?: JsonValue;
     } & AdditionalProperties;
-    event:
-      | ToolBeforeEvent
-      | ToolAfterEvent
-      | SessionStartEvent
-      | ConfigChangeBeforeEvent
-      | TurnStartEvent
-      | TurnFinishBeforeEvent
-      | ModelRequestBeforeEvent
-      | ModelSwitchBeforeEvent
-      | ToolPermissionRequestEvent
-      | ToolBatchAfterEvent
-      | ContextCompactBeforeEvent
-      | ContextCompactAfterEvent
-      | TaskChangeBeforeEvent
-      | UserElicitationRequestEvent
-      | UserElicitationResultEvent
-      | UserMessageInboundEvent
-      | UserMessageOutboundEvent
-      | WorkspaceChangeBeforeEvent
-      | ModelResponseAfterEvent;
+    event: Event;
     extensions?: Extensions;
     protocolVersion: ProtocolVersion;
     state?: {
@@ -1760,39 +1823,7 @@ export type NativeEvent = JsonValue;
 export type ObserveNotification = JsonRpcNotification & {
   method?: "hooks/observe";
   params?: {
-    event:
-      | ToolBeforeEvent
-      | ToolAfterEvent
-      | SessionStartEvent
-      | SessionEndEvent
-      | ConfigChangeBeforeEvent
-      | ConfigChangeAfterEvent
-      | TurnStartEvent
-      | TurnFinishBeforeEvent
-      | TurnEndEvent
-      | TurnProgressEvent
-      | ModelRequestBeforeEvent
-      | ModelResponseAfterEvent
-      | ModelErrorEvent
-      | ModelSwitchBeforeEvent
-      | ModelSwitchAfterEvent
-      | ToolPermissionRequestEvent
-      | ToolPermissionResolvedEvent
-      | ToolProgressEvent
-      | ToolBatchAfterEvent
-      | ContextCompactBeforeEvent
-      | ContextCompactAfterEvent
-      | TaskChangeBeforeEvent
-      | TaskChangeAfterEvent
-      | UserAttentionEvent
-      | UserElicitationRequestEvent
-      | UserElicitationResultEvent
-      | UserMessageInboundEvent
-      | UserMessageOutboundEvent
-      | WorkspaceChangeBeforeEvent
-      | WorkspaceChangeAfterEvent
-      | FileChangedEvent
-      | HookFailureEvent;
+    event: Event;
     protocolVersion: ProtocolVersion;
   } & AdditionalProperties;
 } & AdditionalProperties;
@@ -3913,6 +3944,7 @@ const SCHEMAS: Record<string, SchemaNode> = {
     ],
   },
   CatalogueEvent: {
+    discriminator: "type",
     kind: "union",
     mode: "oneOf",
     variants: [
@@ -4374,7 +4406,7 @@ const SCHEMAS: Record<string, SchemaNode> = {
         additional: {
           kind: "forbidden",
         },
-        forbidden_property_sets: [],
+        forbidden_property_sets: [["sha256"], ["size"]],
         kind: "object",
         properties: [
           {
@@ -4434,20 +4466,6 @@ const SCHEMAS: Record<string, SchemaNode> = {
               value: "body",
             },
             wire_name: "selection",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "sha256",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "integer",
-            },
-            wire_name: "size",
           },
           {
             required: false,
@@ -4731,7 +4749,7 @@ const SCHEMAS: Record<string, SchemaNode> = {
     additional: {
       kind: "forbidden",
     },
-    forbidden_property_sets: [],
+    forbidden_property_sets: [["sha256"], ["size"]],
     kind: "object",
     properties: [
       {
@@ -4740,20 +4758,6 @@ const SCHEMAS: Record<string, SchemaNode> = {
           kind: "string",
         },
         wire_name: "ref",
-      },
-      {
-        required: true,
-        shape: {
-          kind: "string",
-        },
-        wire_name: "sha256",
-      },
-      {
-        required: true,
-        shape: {
-          kind: "integer",
-        },
-        wire_name: "size",
       },
     ],
   },
@@ -4864,6 +4868,36 @@ const SCHEMAS: Record<string, SchemaNode> = {
           kind: "integer",
         },
         wire_name: "timeoutMs",
+      },
+    ],
+  },
+  ContentUploadReceipt: {
+    additional: {
+      kind: "forbidden",
+    },
+    forbidden_property_sets: [],
+    kind: "object",
+    properties: [
+      {
+        required: true,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "ref",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "sha256",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "integer",
+        },
+        wire_name: "size",
       },
     ],
   },
@@ -5252,6 +5286,141 @@ const SCHEMAS: Record<string, SchemaNode> = {
             wire_name: "value",
           },
         ],
+      },
+    ],
+  },
+  Event: {
+    discriminator: "type",
+    kind: "union",
+    mode: "oneOf",
+    variants: [
+      {
+        kind: "ref",
+        name: "ToolBeforeEvent",
+      },
+      {
+        kind: "ref",
+        name: "ToolAfterEvent",
+      },
+      {
+        kind: "ref",
+        name: "SessionStartEvent",
+      },
+      {
+        kind: "ref",
+        name: "SessionEndEvent",
+      },
+      {
+        kind: "ref",
+        name: "ConfigChangeBeforeEvent",
+      },
+      {
+        kind: "ref",
+        name: "ConfigChangeAfterEvent",
+      },
+      {
+        kind: "ref",
+        name: "TurnStartEvent",
+      },
+      {
+        kind: "ref",
+        name: "TurnFinishBeforeEvent",
+      },
+      {
+        kind: "ref",
+        name: "TurnEndEvent",
+      },
+      {
+        kind: "ref",
+        name: "TurnProgressEvent",
+      },
+      {
+        kind: "ref",
+        name: "ModelRequestBeforeEvent",
+      },
+      {
+        kind: "ref",
+        name: "ModelResponseAfterEvent",
+      },
+      {
+        kind: "ref",
+        name: "ModelErrorEvent",
+      },
+      {
+        kind: "ref",
+        name: "ModelSwitchBeforeEvent",
+      },
+      {
+        kind: "ref",
+        name: "ModelSwitchAfterEvent",
+      },
+      {
+        kind: "ref",
+        name: "ToolPermissionRequestEvent",
+      },
+      {
+        kind: "ref",
+        name: "ToolPermissionResolvedEvent",
+      },
+      {
+        kind: "ref",
+        name: "ToolProgressEvent",
+      },
+      {
+        kind: "ref",
+        name: "ToolBatchAfterEvent",
+      },
+      {
+        kind: "ref",
+        name: "ContextCompactBeforeEvent",
+      },
+      {
+        kind: "ref",
+        name: "ContextCompactAfterEvent",
+      },
+      {
+        kind: "ref",
+        name: "TaskChangeBeforeEvent",
+      },
+      {
+        kind: "ref",
+        name: "TaskChangeAfterEvent",
+      },
+      {
+        kind: "ref",
+        name: "UserAttentionEvent",
+      },
+      {
+        kind: "ref",
+        name: "UserElicitationRequestEvent",
+      },
+      {
+        kind: "ref",
+        name: "UserElicitationResultEvent",
+      },
+      {
+        kind: "ref",
+        name: "UserMessageInboundEvent",
+      },
+      {
+        kind: "ref",
+        name: "UserMessageOutboundEvent",
+      },
+      {
+        kind: "ref",
+        name: "WorkspaceChangeBeforeEvent",
+      },
+      {
+        kind: "ref",
+        name: "WorkspaceChangeAfterEvent",
+      },
+      {
+        kind: "ref",
+        name: "FileChangedEvent",
+      },
+      {
+        kind: "ref",
+        name: "HookFailureEvent",
       },
     ],
   },
@@ -6705,7 +6874,7 @@ const SCHEMAS: Record<string, SchemaNode> = {
     additional: {
       kind: "allowed",
     },
-    forbidden_property_sets: [],
+    forbidden_property_sets: [["finishReason"]],
     kind: "object",
     properties: [
       {
@@ -6925,7 +7094,13 @@ const SCHEMAS: Record<string, SchemaNode> = {
     additional: {
       kind: "allowed",
     },
-    forbidden_property_sets: [],
+    forbidden_property_sets: [
+      ["error"],
+      ["execution"],
+      ["finishReason"],
+      ["latencyMs"],
+      ["usage"],
+    ],
     kind: "object",
     properties: [
       {
@@ -7097,7 +7272,7 @@ const SCHEMAS: Record<string, SchemaNode> = {
     additional: {
       kind: "allowed",
     },
-    forbidden_property_sets: [],
+    forbidden_property_sets: [["error"]],
     kind: "object",
     properties: [
       {
@@ -7287,7 +7462,7 @@ const SCHEMAS: Record<string, SchemaNode> = {
     additional: {
       kind: "allowed",
     },
-    forbidden_property_sets: [],
+    forbidden_property_sets: [["proposed"]],
     kind: "object",
     properties: [
       {
@@ -7454,7 +7629,7 @@ const SCHEMAS: Record<string, SchemaNode> = {
     additional: {
       kind: "allowed",
     },
-    forbidden_property_sets: [],
+    forbidden_property_sets: [["previous"]],
     kind: "object",
     properties: [
       {
@@ -7984,7 +8159,12 @@ const SCHEMAS: Record<string, SchemaNode> = {
     additional: {
       kind: "allowed",
     },
-    forbidden_property_sets: [],
+    forbidden_property_sets: [
+      ["decidedBy"],
+      ["decision"],
+      ["execution"],
+      ["outcome"],
+    ],
     kind: "object",
     properties: [
       {
@@ -8412,7 +8592,7 @@ const SCHEMAS: Record<string, SchemaNode> = {
     additional: {
       kind: "allowed",
     },
-    forbidden_property_sets: [],
+    forbidden_property_sets: [["execution"], ["outcome"]],
     kind: "object",
     properties: [
       {
@@ -10437,84 +10617,250 @@ const SCHEMAS: Record<string, SchemaNode> = {
                 {
                   required: true,
                   shape: {
-                    kind: "union",
-                    mode: "oneOf",
+                    kind: "intersection",
                     variants: [
                       {
                         kind: "ref",
-                        name: "ToolBeforeEvent",
+                        name: "Event",
                       },
                       {
-                        kind: "ref",
-                        name: "ToolAfterEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "SessionStartEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ConfigChangeBeforeEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "TurnStartEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "TurnFinishBeforeEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ModelRequestBeforeEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ModelSwitchBeforeEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ToolPermissionRequestEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ToolBatchAfterEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ContextCompactBeforeEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ContextCompactAfterEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "TaskChangeBeforeEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "UserElicitationRequestEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "UserElicitationResultEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "UserMessageInboundEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "UserMessageOutboundEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "WorkspaceChangeBeforeEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ModelResponseAfterEvent",
+                        discriminator: "type",
+                        kind: "union",
+                        mode: "oneOf",
+                        variants: [
+                          {
+                            kind: "ref",
+                            name: "ToolBeforeEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "ToolAfterEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "SessionStartEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "ConfigChangeBeforeEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "TurnStartEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "TurnFinishBeforeEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "ModelRequestBeforeEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "ModelSwitchBeforeEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "ToolPermissionRequestEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "ToolBatchAfterEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "ContextCompactBeforeEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "ContextCompactAfterEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "TaskChangeBeforeEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "UserElicitationRequestEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "UserElicitationResultEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "UserMessageInboundEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "UserMessageOutboundEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "WorkspaceChangeBeforeEvent",
+                          },
+                          {
+                            kind: "ref",
+                            name: "ModelResponseAfterEvent",
+                          },
+                          {
+                            kind: "intersection",
+                            variants: [
+                              {
+                                kind: "ref",
+                                name: "SessionEndEvent",
+                              },
+                              {
+                                kind: "never",
+                              },
+                            ],
+                          },
+                          {
+                            kind: "intersection",
+                            variants: [
+                              {
+                                kind: "ref",
+                                name: "ConfigChangeAfterEvent",
+                              },
+                              {
+                                kind: "never",
+                              },
+                            ],
+                          },
+                          {
+                            kind: "intersection",
+                            variants: [
+                              {
+                                kind: "ref",
+                                name: "TurnEndEvent",
+                              },
+                              {
+                                kind: "never",
+                              },
+                            ],
+                          },
+                          {
+                            kind: "intersection",
+                            variants: [
+                              {
+                                kind: "ref",
+                                name: "TurnProgressEvent",
+                              },
+                              {
+                                kind: "never",
+                              },
+                            ],
+                          },
+                          {
+                            kind: "intersection",
+                            variants: [
+                              {
+                                kind: "ref",
+                                name: "ModelErrorEvent",
+                              },
+                              {
+                                kind: "never",
+                              },
+                            ],
+                          },
+                          {
+                            kind: "intersection",
+                            variants: [
+                              {
+                                kind: "ref",
+                                name: "ModelSwitchAfterEvent",
+                              },
+                              {
+                                kind: "never",
+                              },
+                            ],
+                          },
+                          {
+                            kind: "intersection",
+                            variants: [
+                              {
+                                kind: "ref",
+                                name: "ToolPermissionResolvedEvent",
+                              },
+                              {
+                                kind: "never",
+                              },
+                            ],
+                          },
+                          {
+                            kind: "intersection",
+                            variants: [
+                              {
+                                kind: "ref",
+                                name: "ToolProgressEvent",
+                              },
+                              {
+                                kind: "never",
+                              },
+                            ],
+                          },
+                          {
+                            kind: "intersection",
+                            variants: [
+                              {
+                                kind: "ref",
+                                name: "TaskChangeAfterEvent",
+                              },
+                              {
+                                kind: "never",
+                              },
+                            ],
+                          },
+                          {
+                            kind: "intersection",
+                            variants: [
+                              {
+                                kind: "ref",
+                                name: "UserAttentionEvent",
+                              },
+                              {
+                                kind: "never",
+                              },
+                            ],
+                          },
+                          {
+                            kind: "intersection",
+                            variants: [
+                              {
+                                kind: "ref",
+                                name: "WorkspaceChangeAfterEvent",
+                              },
+                              {
+                                kind: "never",
+                              },
+                            ],
+                          },
+                          {
+                            kind: "intersection",
+                            variants: [
+                              {
+                                kind: "ref",
+                                name: "FileChangedEvent",
+                              },
+                              {
+                                kind: "never",
+                              },
+                            ],
+                          },
+                          {
+                            kind: "intersection",
+                            variants: [
+                              {
+                                kind: "ref",
+                                name: "HookFailureEvent",
+                              },
+                              {
+                                kind: "never",
+                              },
+                            ],
+                          },
+                        ],
                       },
                     ],
                   },
@@ -12151,138 +12497,8 @@ const SCHEMAS: Record<string, SchemaNode> = {
                 {
                   required: true,
                   shape: {
-                    kind: "union",
-                    mode: "oneOf",
-                    variants: [
-                      {
-                        kind: "ref",
-                        name: "ToolBeforeEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ToolAfterEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "SessionStartEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "SessionEndEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ConfigChangeBeforeEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ConfigChangeAfterEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "TurnStartEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "TurnFinishBeforeEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "TurnEndEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "TurnProgressEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ModelRequestBeforeEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ModelResponseAfterEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ModelErrorEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ModelSwitchBeforeEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ModelSwitchAfterEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ToolPermissionRequestEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ToolPermissionResolvedEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ToolProgressEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ToolBatchAfterEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ContextCompactBeforeEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "ContextCompactAfterEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "TaskChangeBeforeEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "TaskChangeAfterEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "UserAttentionEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "UserElicitationRequestEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "UserElicitationResultEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "UserMessageInboundEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "UserMessageOutboundEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "WorkspaceChangeBeforeEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "WorkspaceChangeAfterEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "FileChangedEvent",
-                      },
-                      {
-                        kind: "ref",
-                        name: "HookFailureEvent",
-                      },
-                    ],
+                    kind: "ref",
+                    name: "Event",
                   },
                   wire_name: "event",
                 },
@@ -14905,7 +15121,12 @@ const SCHEMAS: Record<string, SchemaNode> = {
     additional: {
       kind: "allowed",
     },
-    forbidden_property_sets: [],
+    forbidden_property_sets: [
+      ["durationMs"],
+      ["execution"],
+      ["fileChanges"],
+      ["outcome"],
+    ],
     kind: "object",
     properties: [
       {
@@ -16557,26 +16778,51 @@ function discriminatorValue(
   return undefined;
 }
 
-function toSafeJson(value: unknown): JsonValue {
+function toSafeJson(value: unknown, ancestors = new Set<object>()): JsonValue {
   if (value === null || typeof value === "string" || typeof value === "boolean")
     return value;
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (Array.isArray(value)) return value.map(toSafeJson);
-  if (typeof value === "object") {
+  if (typeof value !== "object" || value === null || ancestors.has(value))
+    throw new TypeError("Input is not an acyclic JSON value");
+  const prototype: unknown = Object.getPrototypeOf(value);
+  if (
+    !Array.isArray(value) &&
+    prototype !== Object.prototype &&
+    prototype !== null
+  )
+    throw new TypeError("Expected a plain JSON object");
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (Reflect.ownKeys(value).length !== value.length + 1)
+        throw new TypeError("Expected a dense JSON array");
+      return Array.from({ length: value.length }, (_, index) => {
+        const property = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!property?.enumerable || !("value" in property))
+          throw new TypeError("Expected JSON array data elements");
+        return toSafeJson(property.value, ancestors);
+      });
+    }
     const result = Object.create(null) as Record<string, JsonValue>;
-    for (const [key, child] of Object.entries(
-      value as Record<string, unknown>,
-    )) {
+    for (const key of Reflect.ownKeys(value)) {
+      const property = Object.getOwnPropertyDescriptor(value, key)!;
+      if (
+        typeof key !== "string" ||
+        !property.enumerable ||
+        !("value" in property)
+      )
+        throw new TypeError("Expected enumerable JSON data properties");
       Object.defineProperty(result, key, {
-        value: toSafeJson(child),
+        value: toSafeJson(property.value, ancestors),
         enumerable: true,
         configurable: true,
         writable: true,
       });
     }
     return result;
+  } finally {
+    ancestors.delete(value);
   }
-  throw new TypeError("Input is not a JSON value");
 }
 
 function encodeJson(value: JsonValue): string {
@@ -16586,7 +16832,22 @@ function isObject(value: JsonValue): value is Record<string, JsonValue> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function sameJson(left: JsonValue, right: JsonValue): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  if (left === right) return true;
+  if (Array.isArray(left) && Array.isArray(right))
+    return (
+      left.length === right.length &&
+      left.every((value, index) => sameJson(value, right[index]!))
+    );
+  if (isObject(left) && isObject(right))
+    return (
+      Object.keys(left).length === Object.keys(right).length &&
+      Object.keys(left).every(
+        (key) =>
+          Object.prototype.hasOwnProperty.call(right, key) &&
+          sameJson(left[key]!, right[key]!),
+      )
+    );
+  return false;
 }
 function joinPath(path: string, key: string): string {
   return `${path}/${key.replace(/~/g, "~0").replace(/\//g, "~1")}`;
@@ -16687,6 +16948,21 @@ export function encodeContentUpload(value: ContentUpload): string {
 }
 export const contentUploadSchemaRevision = SCHEMA_REVISION;
 
+export function parseContentUploadReceipt(
+  input: string | unknown,
+): ParseResult<ContentUploadReceipt> {
+  return parseRoot(
+    "ContentUploadReceipt",
+    input,
+  ) as ParseResult<ContentUploadReceipt>;
+}
+export function encodeContentUploadReceipt(
+  value: ContentUploadReceipt,
+): string {
+  return encodeJson(value as JsonValue);
+}
+export const contentUploadReceiptSchemaRevision = SCHEMA_REVISION;
+
 export function parseDenyEffect(
   input: string | unknown,
 ): ParseResult<DenyEffect> {
@@ -16704,6 +16980,14 @@ export function encodeEffect(value: Effect): string {
   return encodeJson(value as JsonValue);
 }
 export const effectSchemaRevision = SCHEMA_REVISION;
+
+export function parseEvent(input: string | unknown): ParseResult<Event> {
+  return parseRoot("Event", input) as ParseResult<Event>;
+}
+export function encodeEvent(value: Event): string {
+  return encodeJson(value as JsonValue);
+}
+export const eventSchemaRevision = SCHEMA_REVISION;
 
 export function parseExecutionEvent(
   input: string | unknown,
@@ -16895,6 +17179,28 @@ export type DeliveryDiagnosticCode =
   | "deadline_exceeded"
   | "preparation"
   | "capacity";
+
+/** Schema-derived family identifiers; custom strings remain supported. */
+export const effectNames = Object.freeze({
+  allow: "allow",
+  ask: "ask",
+  deny: "deny",
+  flow: "flow",
+  inject: "inject",
+  message: "message",
+  modify: "modify",
+  return: "return",
+} as const);
+export type EffectName = OpenString<
+  (typeof effectNames)[keyof typeof effectNames]
+>;
+/** Advertised membership only, not authorization or target/operation admission. */
+export function supports(
+  capabilities: { readonly effects: readonly string[] },
+  effect: EffectName,
+): boolean {
+  return capabilities.effects.includes(effect);
+}
 export type ConfigChangeAfterInput = {
   change: {
     mcpServers?: Array<{} & AdditionalProperties>;

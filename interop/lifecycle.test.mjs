@@ -565,8 +565,6 @@ test("application rejects unavailable content before public observe handling", a
         selection: "body",
         body: {
           ref: "urn:missing:content",
-          size: 0,
-          sha256: createHash("sha256").update("").digest("hex"),
         },
       },
     ];
@@ -632,7 +630,7 @@ test("cached Hooks associate concurrent upload confirmations with exact deliveri
         kind: "text",
         mediaType: "text/plain",
         selection: "body",
-        body: descriptor,
+        body: { ref: descriptor.ref },
       },
     ];
     uploads.push({
@@ -673,7 +671,7 @@ test("cached Hooks associate concurrent upload confirmations with exact deliveri
     );
     assert.deepEqual(
       entries[received].message.params.event.items[0].body,
-      confirmation.descriptor,
+      { ref: confirmation.descriptor.ref },
     );
     assert.ok(
       entries

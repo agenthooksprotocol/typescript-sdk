@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import {
-  parseContentReference,
-  type ContentReference,
+  parseContentUploadReceipt,
+  type ContentUploadReceipt,
 } from "../draft/generated.js";
 import { validateWire } from "../client/validation.js";
 
@@ -113,10 +113,10 @@ function parse(request: Request): Upload {
  * Call only after an authorized storage write consumed body to successful EOF
  * and the immutable reference is synchronously available to the receiver.
  */
-function response(descriptor: ContentReference): Response {
-  if (validateWire("content-reference", descriptor).length !== 0)
+function response(descriptor: ContentUploadReceipt): Response {
+  if (validateWire("content-upload-receipt", descriptor).length !== 0)
     throw new UploadError("Invalid content descriptor");
-  const decoded = parseContentReference(descriptor);
+  const decoded = parseContentUploadReceipt(descriptor);
   if (!decoded.ok || !Number.isSafeInteger(decoded.value.size))
     throw new UploadError("Invalid content descriptor");
   return new Response(JSON.stringify(decoded.value), {

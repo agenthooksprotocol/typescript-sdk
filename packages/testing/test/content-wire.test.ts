@@ -73,7 +73,7 @@ for (const selection of ["body", "metadata", "omit"] as const) {
               assert.equal(event.type, "user.message.inbound");
               if (event.type !== "user.message.inbound")
                 throw Error("Unexpected event");
-              const item = event.message.text[0]!;
+              const item = (event as import("agenthooksprotocol/client").UserMessageInboundEvent).message.text[0]!;
               assert.equal(item.id, "item");
               assert.equal(item.selection, selection);
               const body = item.body;
@@ -88,10 +88,9 @@ for (const selection of ["body", "metadata", "omit"] as const) {
                 body?.ref,
                 selection === "body" ? "receiver-ref" : undefined,
               );
-              assert.equal(
-                body?.size,
-                selection === "body" ? bytes.length : undefined,
-              );
+              assert.deepEqual(body === undefined ? undefined : { ...body }, selection === "body" ? { ref: "receiver-ref" } : undefined);
+              assert.equal("size" in item, false);
+              assert.equal("sha256" in item, false);
               assert.equal(item.gap, undefined);
               if (selection === "body") assert.equal(uploads, 1);
               deliveries++;
@@ -178,7 +177,7 @@ test("legacy helper compatibility: normalized content selection uses category, c
   };
   const views = await prepareWireContent([item], options);
   assert.equal(uploads, 1);
-  assert.equal(views[0]?.body?.size, 3);
+  assert.deepEqual(views[0]?.body, { ref: "receiver-ref" });
   assert.equal(views[0]?.body?.ref, "receiver-ref");
   assert.equal(draftCodecs.parseContentItem(views[0]).ok, true);
   const withheld = await prepareWireContent([item], {

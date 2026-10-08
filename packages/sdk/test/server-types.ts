@@ -20,7 +20,7 @@ void route;
 hooks.handle(request, (message) => {
   switch (message.method) {
     case "hooks/intercept": {
-      const eventId: string = message.params.event.id;
+      const eventId: string = typeof message.params.event.id === "string" ? message.params.event.id : "unknown";
       void eventId;
       return { effects: [{ type: "deny", reason: "policy" }] };
     }
@@ -81,3 +81,30 @@ void serving;
 serveStdio(() => new Response(null));
 // @ts-expect-error A stdio handler returns a Web Response, not a protocol result.
 serveStdio(() => ({ effects: [] }));
+
+// Both actual request envelopes expose the same discriminated Event contract.
+import type { Event, InterceptRequest, ObserveNotification, ContentReference, ContentUploadReceipt } from "agenthooksprotocol/server";
+function consumeEvent(event: Event): string {
+  // Open unknown event variants need explicit field checks even with known type strings.
+  return typeof event.id === "string" ? event.id : "unknown";
+}
+declare const intercept: InterceptRequest;
+declare const observe: ObserveNotification;
+consumeEvent(intercept.params.event);
+consumeEvent(observe.params.event);
+const interceptEvent: Event = intercept.params.event;
+const observeEvent: Event = observe.params.event;
+const backToIntercept: InterceptRequest["params"]["event"] = observeEvent;
+const backToObserve: ObserveNotification["params"]["event"] = interceptEvent;
+void backToIntercept;
+void backToObserve;
+const reference: ContentReference = { ref: "stored" };
+const receipt: ContentUploadReceipt = { ref: "stored", size: 0, sha256: "0".repeat(64) };
+void reference;
+void receipt;
+// Extensible generated models allow arbitrary JSON keys statically; codecs enforce forbidden metadata.
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+const sameRequestEvent: Equal<InterceptRequest["params"]["event"], NonNullable<ObserveNotification["params"]>["event"]> = true;
+const exactSharedEvent: Equal<InterceptRequest["params"]["event"], Event> = true;
+void sameRequestEvent;
+void exactSharedEvent;

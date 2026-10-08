@@ -147,8 +147,7 @@ for (const [transport, mode, authenticatedUpload] of [
         assert.ok(event);
         const descriptor = event.items[0].body;
         assert.deepEqual(stored.get(descriptor.ref), bytes);
-        assert.equal(descriptor.sha256, digest(bytes));
-        assert.equal(descriptor.size, bytes.length);
+        assert.deepEqual(Object.keys(descriptor), ["ref"]);
         assert.equal(event.source, "urn:typescript:wire");
         if (message.method === "hooks/observe") {
           // hooks.handle has already validated this canonical notification.

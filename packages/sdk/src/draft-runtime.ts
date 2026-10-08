@@ -1,5 +1,5 @@
 import { validateEffect } from "./draft/index.js";
-import { validateBodyReference, type BodyReference } from "./content-upload.js";
+import { validateUploadReceipt, type ContentUploadReceipt } from "./content-upload.js";
 /** Synthetic semantic harness. Wire acceptance remains the canonical validator's job. */
 import { stageResponse, object, type PendingState } from "./draft-atomic.js";
 import type { Effect, Capabilities } from "./draft/index.js";
@@ -211,7 +211,7 @@ export interface ContentView {
 /** Receiver storage scoped by the host's authenticated principal, not wire claims. */
 export class ContentReceiver {
   private stored = new Map<string, Uint8Array>();
-  async upload(scope: string, bytes: Uint8Array): Promise<BodyReference> {
+  async upload(scope: string, bytes: Uint8Array): Promise<ContentUploadReceipt> {
     if (!scope || !(bytes instanceof Uint8Array))
       throw Error("Authenticated scope and binary bytes required");
     const snapshot = bytes.slice();
@@ -239,7 +239,7 @@ export async function prepareContent(
     mode: "intercept" | "observe";
     failClosed: boolean;
     timeoutMs?: number;
-    upload(bytes: Uint8Array): Promise<BodyReference>;
+    upload(bytes: Uint8Array): Promise<ContentUploadReceipt>;
   },
 ): Promise<ContentView[]> {
   const result: ContentView[] = [];
@@ -257,7 +257,7 @@ export async function prepareContent(
           await crypto.subtle.digest("SHA-256", bytes),
         );
         let timer: ReturnType<typeof setTimeout> | undefined;
-        let confirmed: BodyReference;
+        let confirmed: ContentUploadReceipt;
         try {
           confirmed = await Promise.race([
             options.upload(bytes.slice()),
@@ -274,10 +274,8 @@ export async function prepareContent(
         const sha256 = Array.from(hash, (byte) =>
           byte.toString(16).padStart(2, "0"),
         ).join("");
-        const body = validateBodyReference(confirmed, bytes.length, sha256);
+        const body = validateUploadReceipt(confirmed, bytes.length, sha256);
         view.ref = body.ref;
-        view.sizeBytes = body.size;
-        view.sha256 = body.sha256;
       } catch {
         view.gap = "transfer_failed";
       }
@@ -350,10 +348,10 @@ export function actualTaskChange<T>(
     after: structuredClone(after),
   };
 }
-export { uploadContent, prepareWireContent } from "./content-upload.js";
+export { uploadContent, prepareWireContent, contentReference } from "./content-upload.js";
 export type {
   UploadConfiguration,
-  BodyReference,
+  ContentUploadReceipt,
   NormalizedContentInput,
   NormalizedContentView,
 } from "./content-upload.js";

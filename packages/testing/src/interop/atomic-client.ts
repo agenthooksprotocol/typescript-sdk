@@ -269,7 +269,7 @@ function enact(
     const effective = requests[index + 1]?.params.event ?? result.event;
     if (effective.type !== "tool.before")
       throw new Error("Unexpected effective event");
-    const input = effective.tool.input as Record<string, unknown>;
+    const input = (effective as import("agenthooksprotocol/client").ToolBeforeEvent).tool.input as Record<string, unknown>;
     if (!sameInput(state.input, input)) {
       state.candidate = null;
       if (state.permission === "allow") state.permission = "native";

@@ -26,3 +26,5 @@ export {
   CapabilityBuilder,
 } from "../draft/generated.js";
 export type * from "../draft/generated.js";
+
+export { effectNames, supports } from "../draft/generated.js";

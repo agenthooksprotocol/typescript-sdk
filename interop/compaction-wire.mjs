@@ -45,8 +45,6 @@ async function receive(request, sub, config, store) {
     for (const item of items) {
       const ref = item.body,
         raw = readFileSync(location(store, sub, ref.ref));
-      if (raw.length !== ref.size || digest(raw) !== ref.sha256)
-        throw Error("integrity");
       bodies[item.id] = new TextDecoder("utf-8", { fatal: true }).decode(raw);
     }
     const action = config[sub];

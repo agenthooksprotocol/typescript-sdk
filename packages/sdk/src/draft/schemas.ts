@@ -2671,16 +2671,6 @@ export const schemas = [
             type: "string",
             minLength: 1,
           },
-          size: {
-            type: "integer",
-            minimum: 0,
-          },
-          sha256: {
-            type: "string",
-            pattern: "^[a-f0-9]{64}$",
-            minLength: 64,
-            maxLength: 64,
-          },
           synthesized: {
             type: "boolean",
             description:
@@ -2688,6 +2678,18 @@ export const schemas = [
           },
         },
         additionalProperties: false,
+        allOf: [
+          {
+            not: {
+              required: ["size"],
+            },
+          },
+          {
+            not: {
+              required: ["sha256"],
+            },
+          },
+        ],
       },
       {
         type: "object",
@@ -2881,27 +2883,29 @@ export const schemas = [
     $id: "https://agenthooksprotocol.org/schemas/draft/content-reference.schema.json",
     title: "AHP content-reference (Draft)",
     type: "object",
-    required: ["ref", "size", "sha256"],
+    required: ["ref"],
     properties: {
       ref: {
         type: "string",
         minLength: 1,
       },
-      size: {
-        type: "integer",
-        minimum: 0,
-      },
-      sha256: {
-        type: "string",
-        pattern: "^[a-f0-9]{64}$",
-        minLength: 64,
-        maxLength: 64,
-      },
     },
     additionalProperties: false,
     $comment: "Mutable AHP draft. ",
     description:
-      "Receiver-allocated immutable bytes. The HTTP 201 upload response returns this descriptor. ref is opaque, not a URL or authorization grant; access is authorized by credential-derived scope. size counts exact octets and sha256 is their lowercase SHA-256 hex digest. Senders verify both before publication. A retry may allocate another ref; changed bytes require a new ref, not a new item id.",
+      "Receiver-allocated immutable content reference. ref is opaque, not a URL or authorization grant; access is authorized by credential-derived scope. Upload size and digest belong only in the separate content-upload-receipt, never this event reference.",
+    allOf: [
+      {
+        not: {
+          required: ["size"],
+        },
+      },
+      {
+        not: {
+          required: ["sha256"],
+        },
+      },
+    ],
   },
   {
     $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -2938,6 +2942,33 @@ export const schemas = [
     $comment: "Mutable AHP draft. ",
     description:
       "Select by descriptor category; reasoning takes its own category, otherwise classify by media type, not enclosing message role. Unlisted categories use required default. Selection never grants authorization.",
+  },
+  {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    $id: "https://agenthooksprotocol.org/schemas/draft/content-upload-receipt.schema.json",
+    title: "AHP ContentUploadReceipt (Draft)",
+    type: "object",
+    required: ["ref", "size", "sha256"],
+    properties: {
+      ref: {
+        type: "string",
+        minLength: 1,
+      },
+      size: {
+        type: "integer",
+        minimum: 0,
+      },
+      sha256: {
+        type: "string",
+        pattern: "^[a-f0-9]{64}$",
+        minLength: 64,
+        maxLength: 64,
+      },
+    },
+    additionalProperties: false,
+    $comment: "Mutable AHP draft. ",
+    description:
+      "HTTP 201 upload confirmation. ref identifies receiver-allocated immutable bytes; size counts exact octets and sha256 is their lowercase SHA-256 digest. Senders verify both before publishing only ref in an event body. This receipt is not event acknowledgement or proof of durable storage.",
   },
   {
     $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -3165,6 +3196,111 @@ export const schemas = [
       },
     ],
     title: "AHP Effect (Draft)",
+  },
+  {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    $id: "https://agenthooksprotocol.org/schemas/draft/event.schema.json",
+    title: "AHP Event (Draft)",
+    $comment:
+      "Mutable AHP draft. One shared event union; intercept eligibility is constrained at the request level.",
+    oneOf: [
+      {
+        $ref: "tool-before.schema.json",
+      },
+      {
+        $ref: "tool-after.schema.json",
+      },
+      {
+        $ref: "session-start.schema.json",
+      },
+      {
+        $ref: "session-end.schema.json",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/config.change.before",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/config.change.after",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/turn.start",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/turn.finish.before",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/turn.end",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/turn.progress",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/model.request.before",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/model.response.after",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/model.error",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/model.switch.before",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/model.switch.after",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/tool.permission.request",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/tool.permission.resolved",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/tool.progress",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/tool.batch.after",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/context.compact.before",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/context.compact.after",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/task.change.before",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/task.change.after",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/user.attention",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/user.elicitation.request",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/user.elicitation.result",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/user.message.inbound",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/user.message.outbound",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/workspace.change.before",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/workspace.change.after",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/file.changed",
+      },
+      {
+        $ref: "catalogue-event.schema.json#/$defs/hook.failure",
+      },
+    ],
   },
   {
     $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -6400,6 +6536,7 @@ export const schemas = [
                 $ref: "common.schema.json#/$defs/protocolVersion",
               },
               event: {
+                $ref: "event.schema.json",
                 oneOf: [
                   {
                     $ref: "tool-before.schema.json",
@@ -7546,104 +7683,7 @@ export const schemas = [
                 $ref: "common.schema.json#/$defs/protocolVersion",
               },
               event: {
-                oneOf: [
-                  {
-                    $ref: "tool-before.schema.json",
-                  },
-                  {
-                    $ref: "tool-after.schema.json",
-                  },
-                  {
-                    $ref: "session-start.schema.json",
-                  },
-                  {
-                    $ref: "session-end.schema.json",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/config.change.before",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/config.change.after",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/turn.start",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/turn.finish.before",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/turn.end",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/turn.progress",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/model.request.before",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/model.response.after",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/model.error",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/model.switch.before",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/model.switch.after",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/tool.permission.request",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/tool.permission.resolved",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/tool.progress",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/tool.batch.after",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/context.compact.before",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/context.compact.after",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/task.change.before",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/task.change.after",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/user.attention",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/user.elicitation.request",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/user.elicitation.result",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/user.message.inbound",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/user.message.outbound",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/workspace.change.before",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/workspace.change.after",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/file.changed",
-                  },
-                  {
-                    $ref: "catalogue-event.schema.json#/$defs/hook.failure",
-                  },
-                ],
+                $ref: "event.schema.json",
               },
             },
           },

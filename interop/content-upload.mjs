@@ -37,7 +37,7 @@ export async function uploadBytes(
 ) {
   uploadURL(upload.endpoint, allowLoopback);
   if (!(bytes instanceof Uint8Array)) throw Error("Invalid upload input");
-  /** @type {{ref: string, size: number, sha256: string} | undefined} */
+  /** @type {{ref: string} | undefined} */
   let descriptor;
   const receiver = createServer(async (incoming, outgoing) => {
     try {
@@ -137,7 +137,8 @@ export async function uploadBytes(
       throw Object.assign(Error("Required SDK upload failed"), {
         errors: result.errors,
       });
-    return { status: 201, body: descriptor };
+    // The SDK verified the upload receipt before exposing the ref-only event.
+    return { status: 201, body: { ref: descriptor.ref, size: bytes.length, sha256: digest(bytes) } };
   } finally {
     await client?.close();
     receiver.closeAllConnections();
@@ -328,7 +329,7 @@ export class UploadStore {
 
   resolve(scope, body) {
     const stored = this.values.get(JSON.stringify([scope, body.ref]));
-    if (!stored || stored.size !== body.size || stored.sha256 !== body.sha256)
+    if (!stored)
       throw Object.assign(Error("Unavailable scoped content"), { status: 409 });
     return Buffer.from(stored.bytes);
   }
@@ -394,19 +395,17 @@ export function createContentAdapter(
         const descriptor = parsed.value;
         const source = contentSources.find(
           ({ descriptor: candidate }) =>
-            candidate?.ref === descriptor.ref &&
-            candidate.size === descriptor.size &&
-            candidate.sha256 === descriptor.sha256,
+            candidate?.ref === descriptor.ref,
         );
         if (!source || typeof source.bytes !== "string")
           throw Error("Unavailable exact content source");
         const bytes = Buffer.from(source.bytes, "base64");
         if (
-          bytes.length !== descriptor.size ||
-          digest(bytes) !== descriptor.sha256
+          bytes.length !== source.descriptor.size ||
+          digest(bytes) !== source.descriptor.sha256
         )
           throw Error("Content source integrity mismatch");
-        selected.push({ descriptor: { ...parsed.value }, confirmed: false });
+        selected.push({ descriptor: { ...source.descriptor }, confirmed: false });
         item.body = new ReadableStream({
           start(controller) {
             controller.enqueue(new Uint8Array(bytes));
@@ -440,7 +439,7 @@ export function createContentAdapter(
           requestCopy.arrayBuffer(),
           response.clone().json(),
         ]);
-        const parsed = sdkDraft.draftCodecs.parseContentReference(body);
+        const parsed = sdkDraft.draftCodecs.parseContentUploadReceipt(body);
         const sha256 = digest(new Uint8Array(bytes));
         if (
           !parsed.ok ||
@@ -493,8 +492,6 @@ export async function prepareRequestContent(
       if (!source || typeof source.bodyBase64 !== "string")
         throw Error("Unavailable fixture bytes");
       const bytes = Buffer.from(source.bodyBase64, "base64");
-      if (bytes.length !== item.body.size || digest(bytes) !== item.body.sha256)
-        throw Error("Fixture bytes changed");
       // Compatibility hydration only: the caller's real Hooks boundary owns upload.
       item.body = new ReadableStream({
         start(controller) {

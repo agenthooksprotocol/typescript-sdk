@@ -304,13 +304,9 @@ function ready(event, subscription) {
             ? matches[0][1]
             : undefined
           : confirmed.get(JSON.stringify([subscription, item.body.ref]));
-      if (
-        !body ||
-        body.size !== item.body.size ||
-        body.sha256 !== item.body.sha256
-      )
+      if (!body)
         throw Error("Content not confirmed before event dispatch");
-      item.body = structuredClone(body);
+      item.body = { ref: body.ref };
     }
 }
 const pending = new Map(),
