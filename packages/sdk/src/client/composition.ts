@@ -104,6 +104,8 @@ export interface CompositionOptions {
   state?: InterceptRequest["params"]["state"];
   /** Returns reusable, host-owned snapshot bytes; does not transfer a stream. */
   readContent: (body: ReadableStream<Uint8Array>) => Promise<Uint8Array>;
+  /** Register locally synthesized sources before staging can fail. */
+  ownContent?: (body: ReadableStream<Uint8Array>) => void;
   /** Raw request event associated by parentEventId, source, session and server. */
   elicitationRequest?: ClientEvent;
   /** Actual subscriber projection. Metadata/omit/gap views do not grant reads. */
@@ -440,6 +442,18 @@ export async function composeResponseAsync(
     } = oldItem;
     const text = typeof value === "string" ? value : JSON.stringify(value);
     const bytes = new TextEncoder().encode(text);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    });
+    try {
+      options.ownContent?.(body);
+    } catch (error) {
+      void body.cancel().catch(() => undefined);
+      throw error;
+    }
     return {
       ...rest,
       ...(typeof oldItem.id === "string"
@@ -450,12 +464,7 @@ export async function composeResponseAsync(
       mediaType: typeof value === "string" ? "text/plain" : "application/json",
       selection: "body",
       size: bytes.byteLength,
-      body: new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(bytes);
-          controller.close();
-        },
-      }),
+      body,
     };
   };
   const materialize = async (

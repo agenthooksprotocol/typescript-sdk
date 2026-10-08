@@ -161,6 +161,19 @@ The SDK computes size/hash and verifies receiver descriptors before publishing t
 event. Calling a boundary transfers read/cancel ownership, including unused and
 failed-call paths. Native raw streams and canonical references remain supported.
 Keep host execution data separately from these owned delivery sources.
+Returned events own independent copies of selected or locally replaced bodies;
+unselected sources become metadata without being read. Accepted inline replacement
+values also remain available in `result.response.result.effects`.
+Retaining a result does not retain its input or staged replacement sources.
+
+An unfinished elicitation exchange retains only its selected request bytes and
+correlation facts. A request `return` can still be followed by a correlated result.
+Denial, failed or interrupted delivery, a result
+attempt (including validation failure), session end, and `close()` retire that
+exchange. If the host abandons a pending exchange without a result, call
+`hooks.discardElicitation(requestEventId)`. Other pending exchanges are not evicted:
+exceeding the active exchange count or byte budget reports a preparation failure.
+
 
 Alternatively, keep a metadata descriptor in a generated input and pass
 `contentSources: [contentSlots[events.toolBefore].items(0, source)]` as boundary
