@@ -42,6 +42,7 @@ const empty = (hooks) => {
   assert.equal(hooks.elicitationBytes, 0);
   assert.equal(hooks.managers.size, 0);
   assert.equal(hooks.pending.size, 0);
+  assert.equal(hooks.activeElicitations.size, 0);
 };
 
 test("4097 terminal public invocations release snapshots even with retained results", async () => {
@@ -199,4 +200,72 @@ for (const mode of ["deny", "failure", "abort", "timeout"])
       assert.equal(manager.seenStreams.size, 0);
       assert.ok(result.event.elicitation.request.body instanceof ReadableStream);
     } finally { await hooks.close(); }
+  });
+
+function gatedRequest(id, session) {
+  let enter, release;
+  let cancelled = false;
+  const entered = new Promise((resolve) => { enter = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  const input = request(id, session);
+  input.elicitation.request.body = new ReadableStream({
+    async pull(controller) {
+      enter();
+      await gate;
+      if (cancelled) return;
+      controller.enqueue(new TextEncoder().encode(JSON.stringify({
+        message: "Answer?", requestedSchema: { type: "object", properties: {} },
+      })));
+      controller.close();
+    },
+    cancel() { cancelled = true; },
+  }, { highWaterMark: 0 });
+  return { input, entered, release };
+}
+
+for (const retirement of ["discard", "session.end", "session.end-generated", "result", "close"])
+  test(`${retirement} prevents late retention from gated request preparation`, async () => {
+    const hooks = client();
+    const slow = gatedRequest(retirement === "session.end-generated" ? undefined : "racy", "ended");
+    const other = gatedRequest("unrelated", "live");
+    const pending = hooks.dispatch(requestType, slow.input);
+    const unrelated = hooks.dispatch(requestType, other.input);
+    try {
+      await Promise.all([slow.entered, other.entered]);
+      assert.equal(hooks.activeElicitations.size, 2);
+      assert.equal(hooks.elicitations.size, 0);
+      if (retirement === "discard") hooks.discardElicitation("racy");
+      else if (retirement.startsWith("session.end"))
+        await hooks.dispatch("session.end", { session: { id: "ended" } }, { signal: AbortSignal.abort() });
+      else if (retirement === "result")
+        await hooks.dispatch(resultType, { parentEventId: "racy" }, { signal: AbortSignal.abort() });
+      else await hooks.close();
+      slow.release();
+      other.release();
+      const [result, otherResult] = await Promise.all([pending, unrelated]);
+      assert.equal(hooks.activeElicitations.size, 0);
+      assert.equal(hooks.elicitations.has("racy"), false);
+      if (retirement === "close") {
+        assert.equal(result.interrupted, true);
+        empty(hooks);
+      } else {
+        assert.deepEqual(result.errors, []);
+        assert.deepEqual(otherResult.errors, []);
+        assert.deepEqual([...hooks.elicitations.keys()], ["unrelated"]);
+        assert.equal(hooks.elicitationBytes, hooks.elicitations.get("unrelated").bytes.length);
+        hooks.discardElicitation("unrelated");
+        empty(hooks);
+        // Retirement leaves no historical tombstone that blocks a later call.
+        const next = await hooks.dispatch(requestType, request("racy", "ended"));
+        assert.deepEqual(next.errors, []);
+        assert.equal(hooks.elicitations.has("racy"), true);
+        hooks.discardElicitation("racy");
+        empty(hooks);
+      }
+    } finally {
+      slow.release();
+      other.release();
+      await Promise.allSettled([pending, unrelated]);
+      await hooks.close();
+    }
   });

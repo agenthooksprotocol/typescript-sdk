@@ -171,7 +171,10 @@ correlation facts. A request `return` can still be followed by a correlated resu
 Denial, failed or interrupted delivery, a result
 attempt (including validation failure), session end, and `close()` retire that
 exchange. If the host abandons a pending exchange without a result, call
-`hooks.discardElicitation(requestEventId)`. Other pending exchanges are not evicted:
+`hooks.discardElicitation(requestEventId)`. Retirement also prevents requests already
+in preparation from retaining correlation bytes later. This uses only active-call
+tokens, not a history of retired IDs; a later new call has its own lifetime.
+Other pending exchanges are not evicted:
 exceeding the active exchange count or byte budget reports a preparation failure.
 
 

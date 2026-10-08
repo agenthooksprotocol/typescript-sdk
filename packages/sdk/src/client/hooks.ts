@@ -107,6 +107,12 @@ const matches = (selector: string, type: string) =>
   selector === type ||
   (selector.endsWith(".*") && selector.slice(0, -2) === type.split(".")[0]);
 
+type ElicitationLifetime = {
+  id: string;
+  sessionId: string | undefined;
+  retired: boolean;
+};
+
 /** Configuration-driven, harness-facing AHP client. No host operation is executed. */
 export class Hooks {
   readonly initialized: Promise<void>;
@@ -124,6 +130,9 @@ export class Hooks {
     { event: any; bytes: Uint8Array }
   >();
   private elicitationBytes = 0;
+  // Tokens exist only for active calls, including preparation before any bytes
+  // can be retained. Retirement invalidates those calls without tombstones.
+  private readonly activeElicitations = new Set<ElicitationLifetime>();
 
   constructor(config: unknown, options: HooksOptions) {
     this.options = {
@@ -435,12 +444,21 @@ export class Hooks {
     manager.own(options.contentSources);
     this.managers.add(manager);
     const signal = combineSignals(this.lifetime.signal, options.signal);
+    const exchange: ElicitationLifetime | undefined =
+      type === "user.elicitation.request"
+        ? {
+            id: input.id ?? randomUUID(),
+            sessionId: (input as any).session?.id,
+            retired: false,
+          }
+        : undefined;
+    if (exchange) this.activeElicitations.add(exchange);
     let completed = false;
     const work = (async () => {
       // Calls after close are misuse. Active calls return interruption evidence.
       this.lifetime.signal.throwIfAborted();
       await this.initialized;
-      return this.run(type, input, options, signal, manager);
+      return this.run(type, input, options, signal, manager, exchange);
     })();
     this.pending.add(work);
     try {
@@ -458,9 +476,8 @@ export class Hooks {
       )
         this.forgetElicitation(input.id);
       if (type === "session.end")
-        for (const [id, entry] of this.elicitations)
-          if (entry.event.session?.id === (input as any).session?.id)
-            this.forgetElicitation(id);
+        this.retireSessionElicitations((input as any).session?.id);
+      if (exchange) this.activeElicitations.delete(exchange);
       await manager.close();
       this.managers.delete(manager);
       this.pending.delete(work);
@@ -473,12 +490,13 @@ export class Hooks {
     options: BoundaryOptions,
     signal: AbortSignal,
     manager: ContentManager,
+    exchange?: ElicitationLifetime,
   ): Promise<BoundaryResult<K>> {
     let event: any = cloneInput({
       ...input,
       type,
       source: this.options.source,
-      id: input.id ?? randomUUID(),
+      id: exchange?.id ?? input.id ?? randomUUID(),
       time: input.time ?? new Date().toISOString(),
     });
     bindContentSources(type, event, options.contentSources);
@@ -654,7 +672,7 @@ export class Hooks {
               event.elicitation.request.body,
               signal,
             );
-            this.rememberElicitation(event, bytes);
+            this.rememberElicitation(event, bytes, exchange!);
           }
           const request = {
             jsonrpc: "2.0",
@@ -812,9 +830,7 @@ export class Hooks {
       )
         this.forgetElicitation(event.id);
       if (type === "session.end")
-        for (const [id, entry] of this.elicitations)
-          if (entry.event.session?.id === event.session?.id)
-            this.forgetElicitation(id);
+        this.retireSessionElicitations(event.session?.id);
       const response = {
         jsonrpc: "2.0",
         id: requestId,
@@ -906,7 +922,12 @@ export class Hooks {
     }
   }
 
-  private rememberElicitation(event: any, bytes: Uint8Array): void {
+  private rememberElicitation(
+    event: any,
+    bytes: Uint8Array,
+    exchange: ElicitationLifetime,
+  ): void {
+    if (exchange.retired || this.lifetime.signal.aborted) return;
     if (this.elicitations.has(event.id)) return;
     const limit = this.options.maxContentBytes ?? 64 * 1024 * 1024;
     if (bytes.byteLength > limit)
@@ -950,7 +971,16 @@ export class Hooks {
     this.forgetElicitation(requestEventId);
   }
 
+  private retireSessionElicitations(sessionId: string | undefined): void {
+    for (const exchange of this.activeElicitations)
+      if (exchange.sessionId === sessionId) exchange.retired = true;
+    for (const [id, entry] of this.elicitations)
+      if (entry.event.session?.id === sessionId) this.forgetElicitation(id);
+  }
+
   private forgetElicitation(id: string): void {
+    for (const exchange of this.activeElicitations)
+      if (exchange.id === id) exchange.retired = true;
     const entry = this.elicitations.get(id);
     if (entry) this.elicitationBytes -= entry.bytes.byteLength;
     this.elicitations.delete(id);
@@ -959,6 +989,7 @@ export class Hooks {
   /** Cancel pending work and release SDK-owned resources; injected stores remain owned by the host. */
   close(): Promise<void> {
     if (!this.closed) {
+      for (const exchange of this.activeElicitations) exchange.retired = true;
       this.lifetime.abort(new Error("Hooks closed"));
       this.closed = (async () => {
         await this.initialized.catch(() => {});
