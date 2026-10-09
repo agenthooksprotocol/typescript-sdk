@@ -179,3 +179,40 @@ test('closing a result cancels an in-flight lazy read', async () => {
   assert.equal(aborted, true);
   assert.equal(closes, 1);
 });
+for (const mode of [undefined, 'metadata']) {
+  for (const field of ['size', 'sha256']) {
+    test(`${mode ?? 'no match'} validates ${field} on fresh and cached result reads`, async () => {
+      let opens = 0;
+      const bytes = new Uint8Array([1, 2]);
+      const event = input(Attachment.lazy(() => { opens++; return bytes; }));
+      const valid = { size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+      Object.assign(event.instructions, valid, { [field]: field === 'size' ? 99 : '0'.repeat(64) });
+      const hooks = client(mode);
+      const result = await hooks.dispatch(type, event);
+      await hooks.close();
+      assert.equal(opens, 0);
+      // Neither producer mutations nor compatibility event mutations can relax validation.
+      Object.assign(event.instructions, valid);
+      Object.assign(result.event.instructions, valid);
+      try {
+        for (let i = 0; i < 2; i++) {
+          await assert.rejects(result.content.read('instructions'), field === 'size' ? /Content size mismatch/ : /Content SHA-256 mismatch/);
+        }
+        assert.equal(opens, 1);
+      } finally { await result.content.close(); }
+    });
+  }
+}
+test('matching result metadata allows repeated independent reads after shutdown', async () => {
+  const bytes = new Uint8Array([1, 2]);
+  const event = input(Attachment.bytes(bytes));
+  Object.assign(event.instructions, { size: 2, sha256: createHash('sha256').update(bytes).digest('hex') });
+  const hooks = client('metadata');
+  const result = await hooks.dispatch(type, event);
+  await hooks.close();
+  try {
+    const first = await result.content.read('instructions');
+    first.fill(0);
+    assert.deepEqual(await result.content.read('instructions'), bytes);
+  } finally { await result.content.close(); }
+});

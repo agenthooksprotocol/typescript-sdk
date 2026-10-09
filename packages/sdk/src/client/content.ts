@@ -87,26 +87,38 @@ const ownedAttachments = new WeakMap<
   { owner?: object; dispose: () => Promise<void> }
 >();
 
+type ContentMetadata = {
+  size?: number | undefined;
+  sha256?: string | undefined;
+};
+
 /** Effective local content, independent of Hooks lifetime. Always close it.
- * Reads return independent byte copies; opaque remote references are not resolved.
+ * Reads validate item metadata and return independent byte copies;
+ * opaque remote references are not resolved.
  */
 export class AttachmentContent {
-  private readonly bodies = new Map<string, ReadableStream<Uint8Array>>();
+  private readonly bodies = new Map<string, ContentMetadata & {
+    stream: ReadableStream<Uint8Array>;
+  }>();
   constructor(private readonly manager: ContentManager, event: unknown) {
     const seen = new WeakSet<object>();
     const visit = (value: any, path: string): void => {
       if (!value || typeof value !== "object" || seen.has(value)) return;
       const stream = sourceStream(value);
       if (stream) {
-        this.bodies.set(path, stream);
+        this.bodies.set(path, { stream });
         return;
       }
       seen.add(value);
       const body = sourceStream(value.body);
       if (typeof value.id === "string" && body) {
-        if (this.bodies.has(value.id) && this.bodies.get(value.id) !== body)
+        const previous = this.bodies.get(value.id);
+        if (previous && (previous.stream !== body ||
+          previous.size !== value.size || previous.sha256 !== value.sha256))
           throw new Error("Ambiguous content item id");
-        this.bodies.set(value.id, body);
+        this.bodies.set(value.id, {
+          stream: body, size: value.size, sha256: value.sha256,
+        });
       }
       for (const [key, child] of Object.entries(value)) {
         // Content item ids are the ergonomic key; reference-only slots use JSON pointers.
@@ -122,7 +134,7 @@ export class AttachmentContent {
   async read(id: string, signal?: AbortSignal): Promise<Uint8Array> {
     const body = this.bodies.get(id);
     if (!body) throw new Error("Unknown local content item id");
-    return this.manager.readBody(body, signal);
+    return this.manager.readBody(body.stream, signal, body);
   }
   close(): Promise<void> {
     this.bodies.clear();
@@ -166,6 +178,13 @@ export interface ContentManagerOptions {
 }
 
 type Snapshot = { bytes: Uint8Array; size: number; sha256: string };
+
+function validateSnapshotMetadata(snapshot: Snapshot, metadata: ContentMetadata): void {
+  if (metadata.size !== undefined && metadata.size !== snapshot.size)
+    throw new Error("Content size mismatch");
+  if (metadata.sha256 !== undefined && metadata.sha256 !== snapshot.sha256)
+    throw new Error("Content SHA-256 mismatch");
+}
 
 /** One manager per producer/session. Selection is NOT authorization: callers must
  * authorize/project opaque native/input/output data before prepare. References
@@ -238,6 +257,7 @@ export class ContentManager {
   async readBody(
     body: ContentSource | ReadableStream<Uint8Array>,
     signal?: AbortSignal,
+    metadata: ContentMetadata = {},
   ): Promise<Uint8Array> {
     this.lifetime.signal.throwIfAborted();
     this.own(body);
@@ -259,6 +279,7 @@ export class ContentManager {
         controller.signal,
       );
       controller.signal.throwIfAborted();
+      validateSnapshotMetadata(snapshot, metadata);
       return snapshot.bytes.slice();
     } finally {
       signal?.removeEventListener("abort", abort);
@@ -357,10 +378,7 @@ export class ContentManager {
             this.snapshot(stream, controller.signal),
             controller.signal,
           );
-          if (value.size !== undefined && value.size !== snapshot.size)
-            throw new Error("Content size mismatch");
-          if (value.sha256 !== undefined && value.sha256 !== snapshot.sha256)
-            throw new Error("Content SHA-256 mismatch");
+          validateSnapshotMetadata(snapshot, value);
           if (snapshot.size > upload.maxBytes)
             throw new Error("Content exceeds upload maxBytes");
           const response = await abortable(
