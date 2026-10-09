@@ -155,7 +155,7 @@ export class Attachment extends ContentSource {
         reader = undefined;
       }
     }, () => {
-      // Legacy native cancellation must not block shutdown on producer promises.
+      // Request cancellation without awaiting producer cleanup, which may never settle.
       if (reader) void reader.cancel().catch(() => {});
       else if (!stream.locked) void stream.cancel().catch(() => {});
     }, false);
