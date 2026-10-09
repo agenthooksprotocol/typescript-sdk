@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.1.1...agenthooksprotocol-v0.2.0) (2026-10-09)
+
+
+### Features
+
+* add owned attachments and effective result content ([#13](https://github.com/agenthooksprotocol/typescript-sdk/issues/13)) ([d00bb09](https://github.com/agenthooksprotocol/typescript-sdk/commit/d00bb0907828303b3a403e911773802a7423304e))
+
 ## [0.1.1](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.1.0...agenthooksprotocol-v0.1.1) (2026-10-09)
 
 
