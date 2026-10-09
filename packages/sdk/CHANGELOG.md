@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.1.0...agenthooksprotocol-v0.1.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* preserve generated union and intersection precedence ([#10](https://github.com/agenthooksprotocol/typescript-sdk/issues/10)) ([ecba839](https://github.com/agenthooksprotocol/typescript-sdk/commit/ecba83932831a8df51e684740284044f40ba3236))
+
 ## 0.1.0 (2026-10-07)
 
 
