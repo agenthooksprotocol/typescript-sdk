@@ -216,3 +216,72 @@ test('matching result metadata allows repeated independent reads after shutdown'
     assert.deepEqual(await result.content.read('instructions'), bytes);
   } finally { await result.content.close(); }
 });
+test('selected uploads and returned content retain the exact attachment owner without stream staging', async () => {
+  const attachment = Attachment.bytes(new TextEncoder().encode('one owner'));
+  attachment.stream.getReader = () => { throw Error('must not stage the attachment stream'); };
+  let uploads = 0;
+  const hooks = client('body', { fetch: async (url, init) => {
+    const manager = [...hooks.managers][0];
+    assert.equal('snapshots' in manager, false);
+    assert.equal('readers' in manager, false);
+    assert.deepEqual([...manager.attachments], [attachment]);
+    if (String(url).endsWith('/upload')) {
+      uploads++;
+      assert.equal(new TextDecoder().decode(init.body), 'one owner');
+      const sha256 = createHash('sha256').update(init.body).digest('hex');
+      init.body.fill(0);
+      return Response.json({ ref: `ref-${uploads}`, size: 9, sha256 }, { status: 201 });
+    }
+    return Response.json({ jsonrpc: '2.0', id: JSON.parse(init.body).id, result: { protocolVersion: 'draft', effects: [] } });
+  } });
+  const result = await hooks.dispatch(type, input(attachment));
+  assert.deepEqual(result.errors, []);
+  assert.equal(uploads, 2);
+  assert.equal(result.event.instructions.body, attachment);
+  assert.equal(result.content.bodies.get('instructions').owner, attachment);
+  await hooks.close();
+  assert.equal(new TextDecoder().decode(await result.content.read('instructions')), 'one owner');
+  const copy = await attachment.read();
+  copy.fill(0);
+  assert.equal(new TextDecoder().decode(await result.content.read('instructions')), 'one owner');
+  await result.content.close();
+  await assert.rejects(attachment.read(), /closed/);
+});
+test('explicit native-stream attachments retain the same unopened owner', async () => {
+  let pulls = 0;
+  const source = new ReadableStream({ pull(controller) {
+    pulls++; controller.enqueue(new Uint8Array([7])); controller.close();
+  } }, { highWaterMark: 0 });
+  const attachment = Attachment.fromStream(source);
+  const hooks = client();
+  const result = await hooks.dispatch(type, input(attachment));
+  assert.equal(pulls, 0);
+  assert.equal(result.event.instructions.body, attachment);
+  await hooks.close();
+  assert.deepEqual(await result.content.read('instructions'), new Uint8Array([7]));
+  assert.equal(pulls, 1);
+  await result.content.close();
+});
+test('failed cleanup before result handoff also releases detached result owners', async () => {
+  let replacement;
+  const hooks = client('metadata', {
+    capabilities: { [type]: { effects: ['modify'], modify: { instructions: { replace: true, merge: false } } } },
+    fetch: async (_, init) => {
+      const manager = [...hooks.managers][0];
+      manager.transfer = content => {
+        replacement = content.bodies.get('instructions').owner;
+        content.detachFrom(manager.attachments);
+      };
+      return Response.json({ jsonrpc: '2.0', id: JSON.parse(init.body).id,
+        result: { protocolVersion: 'draft', effects: [{ type: 'modify', target: 'instructions', operation: 'replace', value: 'replacement' }] } });
+    },
+  });
+  // The replaced owner is not in effective content, but still must be disposed.
+  const bad = Attachment.lazy(() => new Uint8Array([1]), () => { throw Error('cleanup failed'); });
+  await assert.rejects(hooks.dispatch(type, input(bad)), /cleanup failed/);
+  assert.ok(replacement instanceof Attachment);
+  await assert.rejects(replacement.read(), /closed/);
+  assert.equal(hooks.managers.size, 0);
+  assert.equal(hooks.pending.size, 0);
+  await hooks.close();
+});

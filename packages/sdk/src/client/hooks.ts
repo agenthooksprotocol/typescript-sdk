@@ -23,7 +23,7 @@ import {
   validateInterceptResponse,
 } from "../draft/index.js";
 import { BackendTransport } from "./transport.js";
-import { ContentManager, ContentSource } from "./content.js";
+import { Attachment, ContentManager, ContentSource } from "./content.js";
 import { composeResponseAsync, normalizeEffects } from "./composition.js";
 import { auth } from "./auth.js";
 import { validateWire } from "./validation.js";
@@ -127,7 +127,7 @@ export class Hooks {
   private closed?: Promise<void>;
   private readonly elicitations = new Map<
     string,
-    { event: any; bytes: Uint8Array }
+    { event: any; owner: Attachment; size: number; release: () => Promise<void> }
   >();
   private elicitationBytes = 0;
   // Tokens exist only for active calls, including preparation before any bytes
@@ -458,7 +458,8 @@ export class Hooks {
         : undefined;
     if (exchange) this.activeElicitations.add(exchange);
     let completed = false;
-    let transferred = false;
+    let returnedContent: BoundaryResult<K>["content"];
+
     const work = (async () => {
       // Calls after close are misuse. Active calls return interruption evidence.
       this.lifetime.signal.throwIfAborted();
@@ -469,7 +470,10 @@ export class Hooks {
     try {
       const result = await work;
       completed = true;
-      transferred = result.content !== undefined && !result.interrupted;
+      if (result.content && !result.interrupted) {
+        manager.transfer(result.content);
+        returnedContent = result.content;
+      }
       return result;
     } finally {
       // Terminal exchanges retire even when validation or cancellation bypasses run.
@@ -485,10 +489,11 @@ export class Hooks {
         this.retireSessionElicitations((input as any).session?.id);
       if (exchange) this.activeElicitations.delete(exchange);
       try {
-        if (!transferred) {
-          if (completed) await manager.close();
-          else await manager.close().catch(() => {});
-        }
+        if (completed) await manager.close();
+        else await manager.close().catch(() => {});
+      } catch (error) {
+        await returnedContent?.close().catch(() => {});
+        throw error;
       } finally {
         this.managers.delete(manager);
         this.pending.delete(work);
@@ -559,8 +564,9 @@ export class Hooks {
         interrupted: true,
       } as BoundaryResult<K>;
     const localSources = new Set<ReadableStream<Uint8Array>>();
-    const originalRequest = this.elicitationFor(event);
-    manager.own(originalRequest);
+    let correlation: { event: Event; owner: Attachment; release: () => Promise<void> } | undefined;
+    let originalRequest: Event | undefined;
+
     let effects: Effect[] = [];
     let state = structuredClone(options.initialState);
     // A supplied snapshot is input to the first receiver, not a newly accepted
@@ -607,6 +613,8 @@ export class Hooks {
         advertised.modes.includes(r.subscription.mode),
     );
     try {
+      correlation = this.elicitationFor(event, manager);
+      originalRequest = correlation?.event;
       // Validate a metadata-only view before any delivery (this does not consume bytes).
       const metadata = await manager.prepare(
         event,
@@ -680,11 +688,8 @@ export class Hooks {
             projected.elicitation?.request?.selection === "body" &&
             event.elicitation?.request?.body instanceof ReadableStream
           ) {
-            const bytes = await manager.readBody(
-              event.elicitation.request.body,
-              signal,
-            );
-            this.rememberElicitation(event, bytes, exchange!);
+            const retained = await manager.retainBody(event.elicitation.request.body, signal);
+            this.rememberElicitation(event, retained, exchange!);
           }
           const request = {
             jsonrpc: "2.0",
@@ -739,7 +744,9 @@ export class Hooks {
             );
           const staged = await raceAbort(
             composeResponseAsync(event, effects, decoded.value, caps, {
-              readContent: (body) => manager.readBody(body, deadline),
+              readContent: (body) => originalRequest && body === (originalRequest as any).elicitation.request.body
+                ? correlation!.owner.read(deadline)
+                : manager.readBody(body, deadline),
               ownContent: (body) => {
                 manager.own(body);
                 localSources.add(body);
@@ -870,6 +877,8 @@ export class Hooks {
       await manager.close().catch(() => {});
       this.managers.delete(manager);
       throw error;
+    } finally {
+      await correlation?.release().catch(() => {});
     }
   }
 
@@ -937,20 +946,26 @@ export class Hooks {
 
   private rememberElicitation(
     event: any,
-    bytes: Uint8Array,
+    retained: { owner: Attachment; size: number; release: () => Promise<void> },
     exchange: ElicitationLifetime,
   ): void {
-    if (exchange.retired || this.lifetime.signal.aborted) return;
-    if (this.elicitations.has(event.id)) return;
+    if (exchange.retired || this.lifetime.signal.aborted || this.elicitations.has(event.id)) {
+      void retained.release().catch(() => {});
+      return;
+    }
     const limit = this.options.maxContentBytes ?? 64 * 1024 * 1024;
-    if (bytes.byteLength > limit)
+    if (retained.size > limit) {
+      void retained.release().catch(() => {});
       throw new Error("Elicitation request exceeds retention budget");
+    }
     if (
-      this.elicitationBytes + bytes.byteLength > limit ||
+      this.elicitationBytes + retained.size > limit ||
       this.elicitations.size >= 128
-    )
+    ) {
+      void retained.release().catch(() => {});
       throw new Error("Active elicitation exchanges exceed retention budget");
-    // Pending exchanges own only correlation facts and selected request bytes.
+    }
+    // Pending exchanges retain correlation facts and a lease on the same owner.
     const stored = {
       type: event.type,
       id: event.id,
@@ -962,22 +977,18 @@ export class Hooks {
         request: { mediaType: event.elicitation.request.mediaType },
       },
     };
-    this.elicitations.set(event.id, { event: stored, bytes });
-    this.elicitationBytes += bytes.byteLength;
+    this.elicitations.set(event.id, { event: stored, ...retained });
+    this.elicitationBytes += retained.size;
   }
-  private elicitationFor(event: any): Event | undefined {
+  private elicitationFor(event: any, manager: ContentManager): {
+    event: Event; owner: Attachment; release: () => Promise<void>;
+  } | undefined {
     if (event.type !== "user.elicitation.result") return undefined;
     const entry = this.elicitations.get(event.parentEventId);
     if (!entry) return undefined;
-    const copy = cloneInput(entry.event),
-      bytes = entry.bytes.slice();
-    copy.elicitation.request.body = new ReadableStream<Uint8Array>({
-      start(c) {
-        c.enqueue(bytes);
-        c.close();
-      },
-    });
-    return copy;
+    const copy = cloneInput(entry.event);
+    copy.elicitation.request.body = entry.owner.stream;
+    return { event: copy, owner: entry.owner, release: manager.lease(entry.owner) };
   }
   /** End an abandoned host elicitation exchange without delivering a result. */
   discardElicitation(requestEventId: string): void {
@@ -995,7 +1006,10 @@ export class Hooks {
     for (const exchange of this.activeElicitations)
       if (exchange.id === id) exchange.retired = true;
     const entry = this.elicitations.get(id);
-    if (entry) this.elicitationBytes -= entry.bytes.byteLength;
+    if (entry) {
+      this.elicitationBytes -= entry.size;
+      void entry.release().catch(() => {});
+    }
     this.elicitations.delete(id);
   }
 
@@ -1014,6 +1028,7 @@ export class Hooks {
         await Promise.allSettled([...this.managers].map((m) => m.close()));
         await Promise.allSettled([...this.pending]);
         this.authContexts.clear();
+        await Promise.allSettled([...this.elicitations.values()].map(entry => entry.release()));
         this.elicitations.clear();
         this.elicitationBytes = 0;
       })();
@@ -1237,16 +1252,7 @@ async function resultEvent(
 ): Promise<any> {
   if (value instanceof ContentSource) value = value.stream;
   if (value instanceof ReadableStream) {
-    const bytes = localSources.has(value)
-      ? await manager.readBody(value)
-      : await manager.copySnapshot(value);
-    if (!bytes) return undefined;
-    return new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(bytes);
-        controller.close();
-      },
-    });
+    return manager.resultBody(value, localSources.has(value));
   }
   if (Array.isArray(value))
     return Promise.all(

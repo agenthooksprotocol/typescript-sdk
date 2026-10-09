@@ -45,7 +45,7 @@ const empty = (hooks) => {
   assert.equal(hooks.activeElicitations.size, 0);
 };
 
-test("4097 terminal public invocations release snapshots even with retained results", async () => {
+test("4097 terminal invocations release bookkeeping while result views retain owners", async () => {
   const hooks = client({ effects: () => [{ type: "deny", reason: "Policy" }] });
   const results = [];
   try {
@@ -58,7 +58,10 @@ test("4097 terminal public invocations release snapshots even with retained resu
     }
     assert.deepEqual(results[0].response.result.effects, [{ type: "deny", reason: "Policy" }]);
     assert.equal((await new Response(results[0].event.elicitation.request.body).json()).message, "Answer?");
-  } finally { await hooks.close(); }
+  } finally {
+    await Promise.all(results.map(result => result.event.elicitation.request.body.cancel().catch(() => {})));
+    await hooks.close();
+  }
 });
 
 test("pending exchanges retain only required bytes; dropping one preserves another", async () => {
@@ -71,7 +74,7 @@ test("pending exchanges retain only required bytes; dropping one preserves anoth
     const entry = hooks.elicitations.get("first");
     assert.equal(entry.event.native, undefined);
     assert.equal(entry.event.elicitation.request.body, undefined);
-    assert.ok(entry.bytes.length > 0);
+    assert.ok(entry.size > 0);
     hooks.discardElicitation("first");
     assert.deepEqual([...hooks.elicitations.keys()], ["second"]);
     hooks.discardElicitation("second");
@@ -159,17 +162,17 @@ test("concurrent pending requests have isolated ownership and session retirement
     const pending = hooks.dispatch(requestType, request("slow", "slow-session"));
     await started;
     const manager = [...hooks.managers][0];
-    assert.ok(manager.retainedBytes > 0);
+    assert.ok(manager.budget.used > 0);
     await hooks.dispatch(requestType, request("fast", "fast-session"));
     assert.ok(hooks.elicitations.has("slow"));
     assert.ok(hooks.elicitations.has("fast"));
     hooks.discardElicitation("fast");
-    assert.ok(manager.retainedBytes > 0);
+    assert.ok(manager.budget.used > 0);
     release();
     await pending;
-    assert.equal(manager.retainedBytes, 0);
-    assert.equal(manager.seenStreams.size, 0);
-    assert.equal(manager.readers.size, 0);
+    assert.equal(manager.attachments.size, 0);
+    assert.equal("snapshots" in manager, false);
+    assert.equal("readers" in manager, false);
     const signal = AbortSignal.abort();
     await hooks.dispatch("session.end", { session: { id: "slow-session" } }, { signal });
     empty(hooks);
@@ -184,7 +187,7 @@ for (const mode of ["deny", "failure", "abort", "timeout"])
       effects: () => mode === "deny" ? [{ type: "deny", reason: "Policy" }] : [],
       fetchHook: async () => {
         manager = [...hooks.managers][0];
-        assert.ok(manager.retainedBytes > 0);
+        assert.ok(manager.budget.used > 0);
         if (mode === "failure") throw Error("offline");
         if (mode === "abort") controller.abort();
         if (mode === "timeout") await new Promise(() => {});
@@ -195,9 +198,9 @@ for (const mode of ["deny", "failure", "abort", "timeout"])
         signal: mode === "timeout" ? AbortSignal.timeout(30) : controller.signal,
       });
       empty(hooks);
-      assert.equal(manager.retainedBytes, 0);
-      assert.equal(manager.readers.size, 0);
-      assert.equal(manager.seenStreams.size, 0);
+      assert.equal(manager.attachments.size, 0);
+      assert.equal("readers" in manager, false);
+      assert.equal("snapshots" in manager, false);
       assert.ok(result.event.elicitation.request.body instanceof ReadableStream);
     } finally { await hooks.close(); }
   });
@@ -252,7 +255,7 @@ for (const retirement of ["discard", "session.end", "session.end-generated", "re
         assert.deepEqual(result.errors, []);
         assert.deepEqual(otherResult.errors, []);
         assert.deepEqual([...hooks.elicitations.keys()], ["unrelated"]);
-        assert.equal(hooks.elicitationBytes, hooks.elicitations.get("unrelated").bytes.length);
+        assert.equal(hooks.elicitationBytes, hooks.elicitations.get("unrelated").size);
         hooks.discardElicitation("unrelated");
         empty(hooks);
         // Retirement leaves no historical tombstone that blocks a later call.
@@ -269,3 +272,37 @@ for (const retirement of ["discard", "session.end", "session.end-generated", "re
       await hooks.close();
     }
   });
+test('legacy result stream and protocol correlation share one owner until consumed', async () => {
+  const hooks = client();
+  const result = await hooks.dispatch(requestType, request('shared-owner'));
+  const entry = hooks.elicitations.get('shared-owner');
+  assert.equal('bytes' in entry, false);
+  let reads = 0;
+  const originalRead = entry.owner.read.bind(entry.owner);
+  entry.owner.read = (...args) => { reads++; return originalRead(...args); };
+  hooks.discardElicitation('shared-owner');
+  await hooks.close();
+  assert.equal(reads, 0);
+  assert.equal((await new Response(result.event.elicitation.request.body).json()).message, 'Answer?');
+  assert.equal(reads, 1);
+  await assert.rejects(originalRead(), /closed/);
+});
+test('active correlated composition retains its owner after pending exchange retirement', async () => {
+  let hooks;
+  hooks = client({
+    effects: event => event.type === resultType ? [{ type: 'modify', target: 'content', operation: 'replace', value: { answer: 'retained' } }] : [],
+    fetchHook: req => {
+      if (req.params.event.type === resultType) hooks.discardElicitation('borrowed');
+    },
+  });
+  const initial = await hooks.dispatch(requestType, request('borrowed'));
+  // Remove the result stream lease, leaving only the pending exchange lease.
+  await initial.event.elicitation.request.body.cancel();
+  const result = await hooks.dispatch(resultType, {
+    id: 'answer', parentEventId: 'borrowed', session: { id: 'one' },
+    elicitation: { mode: 'form', server: 'test', action: 'accept', result: item({ action: 'accept', content: {} }) },
+  });
+  assert.deepEqual(result.errors, []);
+  await hooks.close();
+  assert.deepEqual(await new Response(result.event.elicitation.result.body).json(), { action: 'accept', content: { answer: 'retained' } });
+});

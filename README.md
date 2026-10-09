@@ -161,13 +161,14 @@ The SDK computes size/hash and verifies receiver descriptors before publishing t
 event. Calling a boundary transfers read/cancel ownership, including unused and
 failed-call paths. Native raw streams and canonical references remain supported.
 Keep host execution data separately from these owned delivery sources.
-Returned events own independent copies of selected or locally replaced bodies;
-unselected sources become metadata without being read. Accepted inline replacement
-values also remain available in `result.response.result.effects`.
-Retaining a result does not retain its input or staged replacement sources.
+Legacy returned body streams are lazy views of the same attachment owner, not
+queued copies. Consume or cancel these streams to release their owner leases;
+unselected legacy sources become metadata without being read. Owned attachments
+instead expose `result.content.close()`. Accepted inline replacement values also
+remain available in `result.response.result.effects`.
 
-An unfinished elicitation exchange retains only its selected request bytes and
-correlation facts. A request `return` can still be followed by a correlated result.
+An unfinished elicitation exchange retains a lease on its selected request owner
+and correlation facts, not another byte buffer. A request `return` can still be followed by a correlated result.
 Denial, failed or interrupted delivery, a result
 attempt (including validation failure), session end, and `close()` retire that
 exchange. If the host abandons a pending exchange without a result, call
@@ -395,8 +396,10 @@ The accessor owns effective local bytes and sources independently of
 sources instead of transferring usable ownership. There is no session archive
 or automatic cross-invocation handle reuse. Opaque remote references are not
 resolved by this accessor. It also owns legacy local streams in the same result.
-The compatibility `result.event` body projection still contains only already
-materialized bytes; use `result.content` for deferred reads.
+For owned attachments, `result.event` body fields reference the same attachment
+owners, including unopened sources. Use `result.content` for metadata-validated
+reads and collective disposal. Legacy result streams retain the same owner and
+copy only when consumed, not while constructing the result.
 
 This adds no binary editing effects. Existing canonical text/JSON composition
 rules and capability grants remain required for edits; arbitrary binary
@@ -404,3 +407,28 @@ attachments are delivery inputs, not a new editable effect target.
 
 See the standalone [file attachment example](packages/sdk/examples/file-attachment.mjs)
 for lazy file loading, typed source binding, and reading after shutdown.
+
+
+#### Ownership architecture and migration
+
+`Attachment` is the sole backing owner. Its private materialization is shared by
+uploads, effective result content, and necessary active elicitation correlation
+leases. `ContentManager` is now only a delivery/cleanup coordinator: its snapshot
+cache, reader registry, byte assembly, and snapshot copying API were removed.
+The remaining stream-identity and content-slot indexes refer to owners; budget
+counters hold numbers, and per-delivery receipts hold protocol references only.
+Server/receiver upload storage is unchanged.
+
+`ContentManager.copySnapshot()` has been removed. Use `result.content.read(id)`
+for validated effective bytes, or consume/cancel a legacy returned body stream.
+Explicit native-stream ownership is available as `Attachment.fromStream(stream)`.
+`Attachment.read(signal?)` returns a defensive copy and `Attachment.close()`
+releases its ownership; once passed to a boundary, let the returned content
+accessor manage that lifetime. Do not read a standalone attachment before handing
+it to a new invocation. Existing `ContentSource` and raw-stream inputs are adapted
+to the same owner implementation without another backing store.
+
+Protocol correlation leases are limited to unfinished elicitation exchanges and
+active correlated invocations. Retiring an exchange releases only its lease;
+returned content and an already-running correlated invocation retain their own
+leases. This does not enable application-level cross-invocation handle reuse.

@@ -4,141 +4,282 @@ import {
   type ContentUpload,
 } from "../draft/generated.js";
 
-/** An owned native content stream, distinct from a receiver content reference.
- * Construction does not read, lock, or upload the stream. Passing this source to
- * an awaited SDK operation transfers cleanup responsibility to that operation;
- * callers must not consume or reuse the underlying stream afterward. Native
- * streams can prefetch independently; use highWaterMark: 0 to disable that.
- */
+/** Compatibility adapter for a native lazy stream. The stream is consumed by
+ * its attachment owner, not staged in an invocation store. */
 export class ContentSource {
   readonly #stream: ReadableStream<Uint8Array>;
-
   constructor(stream: ReadableStream<Uint8Array>) {
     if (!(stream instanceof ReadableStream))
       throw new Error("Content source requires a native ReadableStream");
     this.#stream = stream;
   }
-
-  /** Native stream identity is preserved for snapshot sharing and cleanup. */
-  get stream(): ReadableStream<Uint8Array> {
-    return this.#stream;
-  }
+  get stream(): ReadableStream<Uint8Array> { return this.#stream; }
 }
 
-/** An invocation-owned attachment. Metadata remains on its content item.
- * A handle can occur in multiple slots in one invocation, but cannot be reused
- * across invocations. Use a new attachment for each invocation.
- */
+type ContentMetadata = { size?: number | undefined; sha256?: string | undefined };
+type Snapshot = { bytes: Uint8Array; size: number; sha256: string };
+type Budget = { used: number; limit: number };
+type Loader = (signal: AbortSignal, reserve: (bytes: number) => void) => Promise<Uint8Array>;
+// This is only an identity index for legacy native streams, never a byte store.
+const streamOwners = new WeakMap<ReadableStream<Uint8Array>, Attachment>();
+const retainedOwners = new WeakSet<Attachment>();
+let ownerAccess: {
+  claim(owner: Attachment, invocation: object, budget: Budget): void;
+  snapshot(owner: Attachment, signal?: AbortSignal): Promise<Snapshot>;
+  peek(owner: Attachment): Promise<Snapshot> | undefined;
+  retain(owner: Attachment): () => Promise<void>;
+  adapt(stream: ReadableStream<Uint8Array>): Attachment;
+};
+
+/** Sole backing owner for immutable bytes or an unread lazy source. Metadata
+ * stays on content items. A handle may be shared within, but not across, calls. */
 export class Attachment extends ContentSource {
-  private constructor(
-    stream: ReadableStream<Uint8Array>,
-    dispose: () => Promise<void>,
-  ) {
-    super(stream);
-    ownedAttachments.set(stream, { dispose });
+  #load: Loader | undefined;
+  #snapshot: Promise<Snapshot> | undefined;
+  #lifetime = new AbortController();
+  #invocation: object | undefined;
+  #budget: Budget = { used: 0, limit: 64 * 1024 * 1024 };
+  #reserved = 0;
+  #dispose: () => void | Promise<void>;
+  #disposal: Promise<void> | undefined;
+  #closed: Promise<void> | undefined;
+  #primaryRelease: Promise<void> | undefined;
+  #leases = 1;
+
+  private constructor(load: Loader, dispose: () => void | Promise<void>, retained = true) {
+    let owner: Attachment;
+    super(new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          controller.enqueue(await owner.read());
+          controller.close();
+        } catch (error) { controller.error(error); }
+      },
+      cancel() { return owner.close(); },
+    }, { highWaterMark: 0 }));
+    owner = this;
+    this.#load = load;
+    this.#dispose = dispose;
+    streamOwners.set(this.stream, this);
+    if (retained) retainedOwners.add(this);
   }
 
-  /** Snapshot mutable caller bytes immediately. */
+  static {
+    ownerAccess = {
+      claim(owner, invocation, budget) {
+        if (owner.#invocation && owner.#invocation !== invocation)
+          throw new Error("Attachment already belongs to another invocation");
+        if (owner.#closed) throw new Error("Attachment closed");
+        if (!owner.#invocation) {
+          if (owner.#snapshot !== undefined)
+            throw new Error("Read attachments cannot be transferred to an invocation");
+          owner.#invocation = invocation;
+          owner.#budget = budget;
+        }
+      },
+      snapshot: (owner, signal) => owner.#materialize(signal),
+      peek: (owner) => owner.#snapshot,
+      adapt: (stream) => Attachment.#fromStream(stream),
+      retain(owner) {
+        owner.#lifetime.signal.throwIfAborted();
+        owner.#leases++;
+        let released: Promise<void> | undefined;
+        return () => released ??= owner.#release();
+      },
+    };
+  }
+
+  /** One defensive input copy, retained directly by this owner. */
   static bytes(bytes: Uint8Array): Attachment {
-    let copy: Uint8Array | undefined = new Uint8Array(bytes);
-    return Attachment.lazy(() => copy!, () => { copy = undefined; });
+    let initial: Uint8Array | undefined = new Uint8Array(bytes);
+    return new Attachment(async (_signal, reserve) => {
+      const bytes = initial!;
+      reserve(bytes.byteLength);
+      initial = undefined;
+      return bytes;
+    }, () => { initial = undefined; });
   }
 
-  /** Open at most once, only when selected bytes or result bytes are demanded.
-   * dispose runs even if open is never called. It must release producer resources
-   * promptly; cancellation does not wait for an uncooperative open callback.
-   */
+  /** Evaluated once, on demand. The returned mutable buffer is copied once. */
   static lazy(
     open: (signal: AbortSignal) => Uint8Array | Promise<Uint8Array>,
     dispose: () => void | Promise<void> = () => {},
   ): Attachment {
-    const lifetime = new AbortController();
-    let started = false;
-    let disposed: Promise<void> | undefined;
-    const cleanup = () => disposed ??= Promise.resolve().then(dispose);
-    return new Attachment(new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        if (started) return;
-        started = true;
-        try {
-          const bytes = await open(lifetime.signal);
-          lifetime.signal.throwIfAborted();
-          if (!(bytes instanceof Uint8Array))
-            throw new TypeError("Attachment source must return Uint8Array");
-          controller.enqueue(new Uint8Array(bytes));
-          controller.close();
-        } catch (error) {
-          if (!lifetime.signal.aborted) controller.error(error);
-        } finally {
-          await cleanup();
+    return new Attachment(async (signal, reserve) => {
+      const bytes = await open(signal);
+      signal.throwIfAborted();
+      if (!(bytes instanceof Uint8Array))
+        throw new TypeError("Attachment source must return Uint8Array");
+      reserve(bytes.byteLength);
+      return new Uint8Array(bytes);
+    }, dispose);
+  }
+
+  /** Adapt a native source without a second snapshot cache. */
+  static fromStream(stream: ReadableStream<Uint8Array>): Attachment {
+    if (!(stream instanceof ReadableStream))
+      throw new TypeError("Attachment source requires a native ReadableStream");
+    const owner = Attachment.#fromStream(stream);
+    retainedOwners.add(owner);
+    return owner;
+  }
+
+  static #fromStream(stream: ReadableStream<Uint8Array>): Attachment {
+    const existing = streamOwners.get(stream);
+    if (existing) return existing;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const owner = new Attachment(async (signal, reserve) => {
+      reader = stream.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      const cancel = () => { void reader?.cancel(signal.reason).catch(() => {}); };
+      signal.addEventListener("abort", cancel, { once: true });
+      try {
+        for (;;) {
+          const next = await abortable(reader.read(), signal);
+          signal.throwIfAborted();
+          if (next.done) break;
+          if (!(next.value instanceof Uint8Array))
+            throw new Error("Content stream must yield Uint8Array chunks");
+          reserve(next.value.byteLength);
+          chunks.push(new Uint8Array(next.value));
+          size += next.value.byteLength;
         }
-      },
-      cancel(reason) {
-        lifetime.abort(reason);
-        return cleanup();
-      },
-    }, { highWaterMark: 0 }), cleanup);
+        const bytes = new Uint8Array(size);
+        let offset = 0;
+        for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+        return bytes;
+      } finally {
+        signal.removeEventListener("abort", cancel);
+        reader.releaseLock();
+        reader = undefined;
+      }
+    }, () => {
+      // Legacy native cancellation must not block shutdown on producer promises.
+      if (reader) void reader.cancel().catch(() => {});
+      else if (!stream.locked) void stream.cancel().catch(() => {});
+    }, false);
+    streamOwners.set(stream, owner);
+    return owner;
+  }
+
+  #cleanup(): Promise<void> {
+    if (!this.#disposal) {
+      const dispose = this.#dispose;
+      this.#dispose = () => {};
+      this.#disposal = Promise.resolve().then(dispose);
+    }
+    return this.#disposal;
+  }
+
+  #materialize(signal?: AbortSignal): Promise<Snapshot> {
+    this.#lifetime.signal.throwIfAborted();
+    signal?.throwIfAborted();
+    if (!this.#snapshot) {
+      const load = this.#load!;
+      this.#load = undefined;
+      const abort = () => this.#lifetime.abort(signal?.reason);
+      signal?.addEventListener("abort", abort, { once: true });
+      this.#snapshot = (async () => {
+        try {
+          const bytes = await abortable(load(this.#lifetime.signal, (size) => {
+            this.#lifetime.signal.throwIfAborted();
+            if (this.#budget.used + size > this.#budget.limit)
+              throw new Error("Content snapshot memory limit exceeded");
+            this.#budget.used += size;
+            this.#reserved += size;
+          }), this.#lifetime.signal);
+          this.#lifetime.signal.throwIfAborted();
+          // All loaders allocate ordinary ArrayBuffers before returning bytes.
+          const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>));
+          this.#lifetime.signal.throwIfAborted();
+          return { bytes, size: bytes.length,
+            sha256: Array.from(digest, byte => byte.toString(16).padStart(2, "0")).join("") };
+        } catch (error) {
+          this.#budget.used -= this.#reserved;
+          this.#reserved = 0;
+          throw error;
+        } finally {
+          signal?.removeEventListener("abort", abort);
+          await this.#cleanup();
+        }
+      })();
+    }
+    return signal ? abortable(this.#snapshot, signal) : this.#snapshot;
+  }
+
+  /** Defensive caller copy; uploads use the same private materialization. */
+  async read(signal?: AbortSignal, metadata: ContentMetadata = {}): Promise<Uint8Array> {
+    const snapshot = await this.#materialize(signal);
+    validateSnapshotMetadata(snapshot, metadata);
+    return snapshot.bytes.slice();
+  }
+
+  close(): Promise<void> {
+    return this.#primaryRelease ??= this.#release();
+  }
+
+  #release(): Promise<void> {
+    if (--this.#leases !== 0) return Promise.resolve();
+    if (this.#closed) return this.#closed;
+    this.#lifetime.abort(new Error("Attachment closed"));
+    this.#load = undefined;
+    this.#snapshot = undefined;
+    this.#budget.used -= this.#reserved;
+    this.#reserved = 0;
+    return this.#closed = this.#cleanup();
   }
 }
 
-// Stream identity survives typed projection and source binding.
-const ownedAttachments = new WeakMap<
-  ReadableStream<Uint8Array>,
-  { owner?: object; dispose: () => Promise<void> }
->();
-
-type ContentMetadata = {
-  size?: number | undefined;
-  sha256?: string | undefined;
-};
-
-/** Effective local content, independent of Hooks lifetime. Always close it.
- * Reads validate item metadata and return independent byte copies;
- * opaque remote references are not resolved.
- */
+/** Effective slot index. Owners, not an invocation manager, outlive Hooks. */
 export class AttachmentContent {
-  private readonly bodies = new Map<string, ContentMetadata & {
-    stream: ReadableStream<Uint8Array>;
-  }>();
-  constructor(private readonly manager: ContentManager, event: unknown) {
+  private readonly bodies = new Map<string, ContentMetadata & { owner: Attachment }>();
+  private readonly owners = new Set<Attachment>();
+  private closed: Promise<void> | undefined;
+  constructor(event: unknown) {
     const seen = new WeakSet<object>();
     const visit = (value: any, path: string): void => {
       if (!value || typeof value !== "object" || seen.has(value)) return;
       const stream = sourceStream(value);
       if (stream) {
-        this.bodies.set(path, { stream });
+        const owner = ownerAccess.adapt(stream);
+        this.bodies.set(path, { owner });
+        this.owners.add(owner);
         return;
       }
       seen.add(value);
       const body = sourceStream(value.body);
       if (typeof value.id === "string" && body) {
+        const owner = ownerAccess.adapt(body);
         const previous = this.bodies.get(value.id);
-        if (previous && (previous.stream !== body ||
-          previous.size !== value.size || previous.sha256 !== value.sha256))
+        if (previous && (previous.owner !== owner || previous.size !== value.size || previous.sha256 !== value.sha256))
           throw new Error("Ambiguous content item id");
-        this.bodies.set(value.id, {
-          stream: body, size: value.size, sha256: value.sha256,
-        });
+        this.bodies.set(value.id, { owner, size: value.size, sha256: value.sha256 });
+        this.owners.add(owner);
       }
       for (const [key, child] of Object.entries(value)) {
-        // Content item ids are the ergonomic key; reference-only slots use JSON pointers.
         if (key === "body" && body && typeof value.id === "string") continue;
         visit(child, path + "/" + key.replaceAll("~", "~0").replaceAll("/", "~1"));
       }
     };
     visit(event, "");
   }
-  get ids(): readonly string[] {
-    return [...this.bodies.keys()];
+  get ids(): readonly string[] { return [...this.bodies.keys()]; }
+  /** @internal Transfer cleanup responsibility without copying backing bytes. */
+  detachFrom(pending: Set<Attachment>): void {
+    for (const owner of this.owners) pending.delete(owner);
   }
   async read(id: string, signal?: AbortSignal): Promise<Uint8Array> {
     const body = this.bodies.get(id);
     if (!body) throw new Error("Unknown local content item id");
-    return this.manager.readBody(body.stream, signal, body);
+    return body.owner.read(signal, body);
   }
   close(): Promise<void> {
+    if (this.closed) return this.closed;
     this.bodies.clear();
-    return this.manager.close();
+    this.closed = Promise.all([...this.owners].map(owner => owner.close())).then(() => {});
+    this.owners.clear();
+    return this.closed;
   }
 }
 
@@ -177,8 +318,6 @@ export interface ContentManagerOptions {
   allowLoopback?: boolean;
 }
 
-type Snapshot = { bytes: Uint8Array; size: number; sha256: string };
-
 function validateSnapshotMetadata(snapshot: Snapshot, metadata: ContentMetadata): void {
   if (metadata.size !== undefined && metadata.size !== snapshot.size)
     throw new Error("Content size mismatch");
@@ -186,34 +325,33 @@ function validateSnapshotMetadata(snapshot: Snapshot, metadata: ContentMetadata)
     throw new Error("Content SHA-256 mismatch");
 }
 
-/** One manager per producer/session. Selection is NOT authorization: callers must
- * authorize/project opaque native/input/output data before prepare. References
- * are deliberately never cached: each prepare uploads in its receiver's scope.
+/** Per-invocation delivery and cleanup coordinator, not a content store.
+ * Byte materialization lives only in Attachment. This class retains owner
+ * identities and non-owning aggregate budget counters, never byte buffers.
+ * Selection is not authorization; project opaque host data before prepare.
  */
 export class ContentManager {
   private hasAttachments = false;
   private readonly ownership = {};
 
-  /** @internal Transfer effective content ownership to the returned accessor. */
+  /** @internal Build a slot index retaining the existing owners. */
   resultContent(event: unknown): AttachmentContent | undefined {
-    return this.hasAttachments ? new AttachmentContent(this, event) : undefined;
+    return this.hasAttachments ? new AttachmentContent(event) : undefined;
   }
 
-  private snapshots = new WeakMap<
-    ReadableStream<Uint8Array>,
-    Promise<Snapshot>
-  >();
-  private readers = new Set<ReadableStreamDefaultReader<Uint8Array>>();
-  private seenStreams = new Set<ReadableStream<Uint8Array>>();
+  private readonly attachments = new Set<Attachment>();
   private lifetime = new AbortController();
-  private retainedBytes = 0;
   private closePromise: Promise<void> | undefined;
-  private readonly limit: number;
+  private readonly budget: Budget;
   private readonly allowLoopback: boolean;
 
+  /** @internal Detach returned owners; dispose everything else in close(). */
+  transfer(content: AttachmentContent): void { content.detachFrom(this.attachments); }
+
   constructor(options: ContentManagerOptions = {}) {
-    this.limit = options.maxSnapshotBytes ?? 64 * 1024 * 1024;
-    if (!Number.isSafeInteger(this.limit) || this.limit < 0)
+    const limit = options.maxSnapshotBytes ?? 64 * 1024 * 1024;
+    this.budget = { used: 0, limit };
+    if (!Number.isSafeInteger(limit) || limit < 0)
       throw new Error("Invalid snapshot byte limit");
     this.allowLoopback = options.allowLoopback ?? false;
   }
@@ -232,16 +370,13 @@ export class ContentManager {
       visited.add(value);
       const stream = sourceStream(value);
       if (stream) {
-        if (ownedAttachments.has(stream)) {
-          const attachment = ownedAttachments.get(stream)!;
-          if (attachment.owner && attachment.owner !== this.ownership) {
-            conflict = true;
-            return;
-          }
-          attachment.owner = this.ownership;
-          this.hasAttachments = true;
-        }
-        this.seenStreams.add(stream);
+        const existing = streamOwners.get(stream);
+        const owner = ownerAccess.adapt(stream);
+        try { ownerAccess.claim(owner, this.ownership, this.budget); }
+        catch { conflict = true; return; }
+        // Explicit Attachment sources opt into retained result ownership.
+        if (existing && retainedOwners.has(existing)) this.hasAttachments = true;
+        this.attachments.add(owner);
         return;
       }
       for (const child of Object.values(value)) visit(child);
@@ -436,41 +571,46 @@ export class ContentManager {
     return visit(event);
   }
 
-  /** Copy an already selected snapshot without reading unselected sources. */
-  async copySnapshot(
-    body: ReadableStream<Uint8Array>,
-  ): Promise<Uint8Array | undefined> {
-    const snapshot = this.snapshots.get(body);
-    if (!snapshot) return undefined;
-    try {
-      return (await snapshot).bytes.slice();
-    } catch {
-      // Failed reads have no reusable result payload; delivery reports the error.
-      return undefined;
-    }
+  /** @internal A protocol correlation lease shares the same owner, never bytes. */
+  async retainBody(body: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<{
+    owner: Attachment; size: number; release: () => Promise<void>;
+  }> {
+    const owner = ownerAccess.adapt(body);
+    const snapshot = await ownerAccess.snapshot(owner, signal);
+    return { owner, size: snapshot.size, release: ownerAccess.retain(owner) };
   }
 
-  /** Initiates cancellation and releases snapshots; repeated calls return the
-   * same promise. Never waits for producer-controlled cancellation promises.
-   */
+  /** @internal Project compatibility results, or preserve the actual owner. */
+  async resultBody(body: ReadableStream<Uint8Array>, synthesized: boolean): Promise<Attachment | ReadableStream<Uint8Array> | undefined> {
+    const owner = ownerAccess.adapt(body);
+    if (this.hasAttachments) return owner;
+    const pending = ownerAccess.peek(owner);
+    if (!synthesized && !pending) return undefined;
+    try {
+      if (synthesized) await ownerAccess.snapshot(owner);
+      else await pending;
+    } catch { return undefined; }
+    // Legacy callers receive a lazy view of this same owner, not a queued copy.
+    const release = ownerAccess.retain(owner);
+    return new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try { controller.enqueue(await owner.read()); controller.close(); }
+        catch (error) { controller.error(error); }
+        finally { await release(); }
+      },
+      cancel() { return release(); },
+    }, { highWaterMark: 0 });
+  }
+
+  /** @internal Invocation-scoped borrow of an active protocol exchange. */
+  lease(owner: Attachment): () => Promise<void> { return ownerAccess.retain(owner); }
+
+  /** Cancel and dispose remaining owners. No backing bytes live here. */
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
-    this.closePromise = Promise.resolve();
     this.lifetime.abort(new Error("Content manager closed"));
-    const readers = [...this.readers];
-    this.snapshots = new WeakMap();
-    const disposals = [...this.seenStreams].map(
-      (stream) => ownedAttachments.get(stream)?.dispose,
-    );
-    const unread = [...this.seenStreams].filter((stream) => !stream.locked);
-    this.seenStreams.clear();
-    this.readers.clear();
-    for (const reader of readers) void reader.cancel().catch(() => undefined);
-    for (const stream of unread) void stream.cancel().catch(() => undefined);
-    this.retainedBytes = 0;
-    this.closePromise = Promise.all(
-      disposals.map((dispose) => dispose?.()),
-    ).then(() => {});
+    this.closePromise = Promise.all([...this.attachments].map(owner => owner.close())).then(() => {});
+    this.attachments.clear();
     return this.closePromise;
   }
 
@@ -495,71 +635,8 @@ export class ContentManager {
       throw new Error("Invalid upload budget");
   }
 
-  private snapshot(
-    stream: ReadableStream<Uint8Array>,
-    signal: AbortSignal,
-  ): Promise<Snapshot> {
-    const existing = this.snapshots.get(stream);
-    if (existing) return existing;
-    const pending = this.readSnapshot(stream, signal);
-    this.snapshots.set(stream, pending);
-    return pending;
-  }
-
-  private async readSnapshot(
-    stream: ReadableStream<Uint8Array>,
-    signal: AbortSignal,
-  ): Promise<Snapshot> {
-    signal.throwIfAborted();
-    const reader = stream.getReader();
-    this.readers.add(reader);
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    const cancel = () => {
-      void reader.cancel(signal.reason).catch(() => undefined);
-    };
-    signal.addEventListener("abort", cancel, { once: true });
-    try {
-      for (;;) {
-        const next = await abortable(reader.read(), signal);
-        signal.throwIfAborted();
-        if (next.done) break;
-        if (!(next.value instanceof Uint8Array))
-          throw new Error("Content stream must yield Uint8Array chunks");
-        if (this.retainedBytes + next.value.byteLength > this.limit)
-          throw new Error("Content snapshot memory limit exceeded");
-        if (next.value.byteLength === 0) continue;
-        chunks.push(next.value.slice());
-        size += next.value.byteLength;
-        this.retainedBytes += next.value.byteLength;
-      }
-      const bytes = new Uint8Array(size);
-      let offset = 0;
-      for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
-      chunks.length = 0;
-      const digest = new Uint8Array(
-        await crypto.subtle.digest("SHA-256", bytes),
-      );
-      signal.throwIfAborted();
-      return {
-        bytes,
-        size,
-        sha256: Array.from(digest, (byte) =>
-          byte.toString(16).padStart(2, "0"),
-        ).join(""),
-      };
-    } catch (error) {
-      if (!this.lifetime.signal.aborted) this.retainedBytes -= size;
-      void reader.cancel(error).catch(() => undefined);
-      throw error;
-    } finally {
-      signal.removeEventListener("abort", cancel);
-      this.readers.delete(reader);
-      reader.releaseLock();
-    }
+  private snapshot(stream: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<Snapshot> {
+    return ownerAccess.snapshot(ownerAccess.adapt(stream), signal);
   }
 }
 
