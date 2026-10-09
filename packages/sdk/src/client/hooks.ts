@@ -440,8 +440,12 @@ export class Hooks {
           : 64 * 1024 * 1024,
       allowLoopback: true,
     });
-    manager.own(input);
-    manager.own(options.contentSources);
+    try {
+      manager.own([input, options.contentSources]);
+    } catch (error) {
+      await manager.close().catch(() => {});
+      throw error;
+    }
     this.managers.add(manager);
     const signal = combineSignals(this.lifetime.signal, options.signal);
     const exchange: ElicitationLifetime | undefined =
@@ -454,6 +458,7 @@ export class Hooks {
         : undefined;
     if (exchange) this.activeElicitations.add(exchange);
     let completed = false;
+    let transferred = false;
     const work = (async () => {
       // Calls after close are misuse. Active calls return interruption evidence.
       this.lifetime.signal.throwIfAborted();
@@ -464,6 +469,7 @@ export class Hooks {
     try {
       const result = await work;
       completed = true;
+      transferred = result.content !== undefined && !result.interrupted;
       return result;
     } finally {
       // Terminal exchanges retire even when validation or cancellation bypasses run.
@@ -478,9 +484,15 @@ export class Hooks {
       if (type === "session.end")
         this.retireSessionElicitations((input as any).session?.id);
       if (exchange) this.activeElicitations.delete(exchange);
-      await manager.close();
-      this.managers.delete(manager);
-      this.pending.delete(work);
+      try {
+        if (!transferred) {
+          if (completed) await manager.close();
+          else await manager.close().catch(() => {});
+        }
+      } finally {
+        this.managers.delete(manager);
+        this.pending.delete(work);
+      }
     }
   }
 
@@ -838,6 +850,7 @@ export class Hooks {
       } as InterceptResponse;
       return {
         event: await resultEvent(event, manager, localSources),
+        content: manager.resultContent(event),
         response,
         state: snapshotState(state),
         get permission() {
@@ -854,7 +867,7 @@ export class Hooks {
     } catch (error) {
       if (type === "user.elicitation.request")
         this.forgetElicitation(requestId);
-      await manager.close();
+      await manager.close().catch(() => {});
       this.managers.delete(manager);
       throw error;
     }

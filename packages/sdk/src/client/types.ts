@@ -5,7 +5,7 @@ import type {
   ContentSourceBinding,
   DeliveryDiagnosticCode,
 } from "../draft/generated.js";
-import type { ContentSource } from "./content.js";
+import type { AttachmentContent, ContentSource } from "./content.js";
 import type {
   Capabilities,
   ContentReference,
@@ -139,6 +139,9 @@ export type BoundaryState = ReadonlyState<
   NonNullable<InterceptRequest["params"]["state"]>
 >;
 export interface BoundaryResult<K extends EventType = EventType> {
+  /** Present for owned Attachments. Effective local bodies by content item id,
+   * including unread lazy sources. Close explicitly, independently of Hooks. */
+  readonly content?: AttachmentContent;
   /** Accepted effective input, with occurrence identity and static envelope supplied.
    * Body streams are owned delivery resources, not reusable output streams. */
   event: HarnessEvent<K>;

@@ -356,3 +356,51 @@ Local dispatch IDs and harness state must not be copied into protocol payloads.
 ## License
 
 Apache-2.0
+
+### Owned attachments
+
+Import `Attachment` from `agenthooksprotocol/client` for invocation-owned local
+content without a backing store, upload scope, staging, or reference resolution:
+
+```ts
+const attachment = Attachment.bytes(new Uint8Array([1, 2, 3]));
+const lazy = Attachment.lazy(async (signal) => readFile(path, { signal }));
+```
+
+`bytes` defensively copies its input. `lazy(open, dispose?)` calls `open` at most
+once, on actual byte demand; it must return a `Uint8Array` or its promise. An
+optional asynchronous `dispose` releases producer resources even when never
+opened. Cleanup must finish promptly, and `open` should honor its abort signal.
+Apply producer-side bounds when loading files: `maxContentBytes` bounds retained
+SDK snapshots, not allocations inside a caller's loader.
+
+Use attachments in typed content-item `body` fields, or in generated
+`contentSlots[eventType]` bindings. Metadata stays on the content item. The
+invocation owns the attachment and shares one immutable snapshot among selected
+consumers; no-match, metadata, and omit delivery do not open it. The same handle
+may appear multiple times in one invocation, but reuse in another invocation is
+rejected. Existing `ContentSource`, raw streams, and reference APIs still work.
+
+Results from successful owned-attachment invocations include `result.content`:
+
+- `ids` lists local effective content item IDs (reference-only slots instead use
+  JSON pointers such as `/changes/0/after`). Content item IDs must be unambiguous.
+- `read(id, signal?)` returns a fresh byte copy, materializing an unread source
+  only on demand, with the invocation's aggregate byte limit still enforced.
+- `close()` is asynchronous and idempotent. Always await it in `finally`, even if
+  no bytes were read. It releases snapshots and disposes unopened sources.
+
+The accessor owns effective local bytes and sources independently of
+`Hooks.close()`. Thrown invocations and interrupted boundaries clean up their
+sources instead of transferring usable ownership. There is no session archive
+or automatic cross-invocation handle reuse. Opaque remote references are not
+resolved by this accessor. It also owns legacy local streams in the same result.
+The compatibility `result.event` body projection still contains only already
+materialized bytes; use `result.content` for deferred reads.
+
+This adds no binary editing effects. Existing canonical text/JSON composition
+rules and capability grants remain required for edits; arbitrary binary
+attachments are delivery inputs, not a new editable effect target.
+
+See the standalone [file attachment example](packages/sdk/examples/file-attachment.mjs)
+for lazy file loading, typed source binding, and reading after shutdown.

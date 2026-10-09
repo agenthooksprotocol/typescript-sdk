@@ -25,6 +25,111 @@ export class ContentSource {
   }
 }
 
+/** An invocation-owned attachment. Metadata remains on its content item.
+ * A handle can occur in multiple slots in one invocation, but cannot be reused
+ * across invocations. Use a new attachment for each invocation.
+ */
+export class Attachment extends ContentSource {
+  private constructor(
+    stream: ReadableStream<Uint8Array>,
+    dispose: () => Promise<void>,
+  ) {
+    super(stream);
+    ownedAttachments.set(stream, { dispose });
+  }
+
+  /** Snapshot mutable caller bytes immediately. */
+  static bytes(bytes: Uint8Array): Attachment {
+    let copy: Uint8Array | undefined = new Uint8Array(bytes);
+    return Attachment.lazy(() => copy!, () => { copy = undefined; });
+  }
+
+  /** Open at most once, only when selected bytes or result bytes are demanded.
+   * dispose runs even if open is never called. It must release producer resources
+   * promptly; cancellation does not wait for an uncooperative open callback.
+   */
+  static lazy(
+    open: (signal: AbortSignal) => Uint8Array | Promise<Uint8Array>,
+    dispose: () => void | Promise<void> = () => {},
+  ): Attachment {
+    const lifetime = new AbortController();
+    let started = false;
+    let disposed: Promise<void> | undefined;
+    const cleanup = () => disposed ??= Promise.resolve().then(dispose);
+    return new Attachment(new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (started) return;
+        started = true;
+        try {
+          const bytes = await open(lifetime.signal);
+          lifetime.signal.throwIfAborted();
+          if (!(bytes instanceof Uint8Array))
+            throw new TypeError("Attachment source must return Uint8Array");
+          controller.enqueue(new Uint8Array(bytes));
+          controller.close();
+        } catch (error) {
+          if (!lifetime.signal.aborted) controller.error(error);
+        } finally {
+          await cleanup();
+        }
+      },
+      cancel(reason) {
+        lifetime.abort(reason);
+        return cleanup();
+      },
+    }, { highWaterMark: 0 }), cleanup);
+  }
+}
+
+// Stream identity survives typed projection and source binding.
+const ownedAttachments = new WeakMap<
+  ReadableStream<Uint8Array>,
+  { owner?: object; dispose: () => Promise<void> }
+>();
+
+/** Effective local content, independent of Hooks lifetime. Always close it.
+ * Reads return independent byte copies; opaque remote references are not resolved.
+ */
+export class AttachmentContent {
+  private readonly bodies = new Map<string, ReadableStream<Uint8Array>>();
+  constructor(private readonly manager: ContentManager, event: unknown) {
+    const seen = new WeakSet<object>();
+    const visit = (value: any, path: string): void => {
+      if (!value || typeof value !== "object" || seen.has(value)) return;
+      const stream = sourceStream(value);
+      if (stream) {
+        this.bodies.set(path, stream);
+        return;
+      }
+      seen.add(value);
+      const body = sourceStream(value.body);
+      if (typeof value.id === "string" && body) {
+        if (this.bodies.has(value.id) && this.bodies.get(value.id) !== body)
+          throw new Error("Ambiguous content item id");
+        this.bodies.set(value.id, body);
+      }
+      for (const [key, child] of Object.entries(value)) {
+        // Content item ids are the ergonomic key; reference-only slots use JSON pointers.
+        if (key === "body" && body && typeof value.id === "string") continue;
+        visit(child, path + "/" + key.replaceAll("~", "~0").replaceAll("/", "~1"));
+      }
+    };
+    visit(event, "");
+  }
+  get ids(): readonly string[] {
+    return [...this.bodies.keys()];
+  }
+  async read(id: string, signal?: AbortSignal): Promise<Uint8Array> {
+    const body = this.bodies.get(id);
+    if (!body) throw new Error("Unknown local content item id");
+    return this.manager.readBody(body, signal);
+  }
+  close(): Promise<void> {
+    this.bodies.clear();
+    return this.manager.close();
+  }
+}
+
 function sourceStream(value: unknown): ReadableStream<Uint8Array> | undefined {
   if (value instanceof ContentSource) return value.stream;
   return value instanceof ReadableStream ? value : undefined;
@@ -67,6 +172,14 @@ type Snapshot = { bytes: Uint8Array; size: number; sha256: string };
  * are deliberately never cached: each prepare uploads in its receiver's scope.
  */
 export class ContentManager {
+  private hasAttachments = false;
+  private readonly ownership = {};
+
+  /** @internal Transfer effective content ownership to the returned accessor. */
+  resultContent(event: unknown): AttachmentContent | undefined {
+    return this.hasAttachments ? new AttachmentContent(this, event) : undefined;
+  }
+
   private snapshots = new WeakMap<
     ReadableStream<Uint8Array>,
     Promise<Snapshot>
@@ -93,18 +206,29 @@ export class ContentManager {
   own(event: unknown): void {
     this.lifetime.signal.throwIfAborted();
     const visited = new WeakSet<object>();
+    let conflict = false;
     const visit = (value: unknown): void => {
       if (value === null || typeof value !== "object" || visited.has(value))
         return;
       visited.add(value);
       const stream = sourceStream(value);
       if (stream) {
+        if (ownedAttachments.has(stream)) {
+          const attachment = ownedAttachments.get(stream)!;
+          if (attachment.owner && attachment.owner !== this.ownership) {
+            conflict = true;
+            return;
+          }
+          attachment.owner = this.ownership;
+          this.hasAttachments = true;
+        }
         this.seenStreams.add(stream);
         return;
       }
       for (const child of Object.values(value)) visit(child);
     };
     visit(event);
+    if (conflict) throw new Error("Attachment already belongs to another invocation");
   }
 
   /** Reads local producer bytes for composition, never remote references.
@@ -317,12 +441,18 @@ export class ContentManager {
     this.lifetime.abort(new Error("Content manager closed"));
     const readers = [...this.readers];
     this.snapshots = new WeakMap();
+    const disposals = [...this.seenStreams].map(
+      (stream) => ownedAttachments.get(stream)?.dispose,
+    );
     const unread = [...this.seenStreams].filter((stream) => !stream.locked);
     this.seenStreams.clear();
     this.readers.clear();
     for (const reader of readers) void reader.cancel().catch(() => undefined);
     for (const stream of unread) void stream.cancel().catch(() => undefined);
     this.retainedBytes = 0;
+    this.closePromise = Promise.all(
+      disposals.map((dispose) => dispose?.()),
+    ).then(() => {});
     return this.closePromise;
   }
 
