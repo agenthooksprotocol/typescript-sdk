@@ -2,7 +2,7 @@
 
 TypeScript models, JSON codecs, and runtime utilities for the [Agent Hooks Protocol (AHP)](https://github.com/agenthooksprotocol/agent-hooks-protocol).
 
-The generated schema API follows the current AHP `draft` snapshot. The `/client` entrypoint provides the configuration-driven `Hooks` API for harness integrations. The root entrypoint retains the legacy deny/no-effect `tool.before` runner; the draft entrypoint adds canonical validation and reference boundary helpers. Node.js 20 or newer is required.
+The generated schema API follows the current AHP `draft` snapshot. The `/client` entrypoint provides the configuration-driven `Hooks` API for harness integrations. The root entrypoint provides the deny/no-effect `tool.before` runner; the draft entrypoint provides canonical validation and reference boundary helpers. Node.js 20 or newer is required.
 
 ## Installation
 
@@ -10,7 +10,7 @@ The generated schema API follows the current AHP `draft` snapshot. The `/client`
 npm install agenthooksprotocol
 ```
 
-Only the SDK is published. The testing and conformance packages remain private
+Only the SDK is published. The testing and conformance packages are private
 workspace tools. See [RELEASE.md](RELEASE.md) for release setup and maintenance.
 
 ## Parse and encode protocol messages
@@ -39,7 +39,7 @@ Every public AHP schema has a generated TypeScript type plus `parse<Type>` and `
 
 ## Intercept a tool call with `Hooks`
 
-Use `agenthooksprotocol/client` for new harness integrations. Store a registration
+Use `agenthooksprotocol/client` for harness integrations. Store a registration
 in `hooks.json` (replace the URL with your hook backend):
 
 ```json
@@ -132,20 +132,20 @@ check `result.interrupted` before execution; interruption does not authorize wor
 `result.permission` reads that canonical settled permission; `none` is not approval,
 `ask` requires host approval, and an interrupted result is not executable. For tool
 boundaries, `result.input` exposes accepted arguments as `unknown`; validate them
-against the host's tool schema. `result.event` and `result.response` remain available.
+against the host's tool schema. `result.event` and `result.response` expose the effective event and protocol response.
 
 ### Operation and resource ownership
 
 Awaiting a boundary also waits for its selected, bounded observation deliveries.
 Observations cannot change the settled decision. `result.diagnostics` includes both
-interception and observation delivery failures; the compatibility `observations`
+interception and observation delivery failures; the `observations`
 promise is already settled when the boundary returns. To run a call concurrently,
 retain its promise in the harness. Do not execute a gated operation before that
 promise settles and its permission, interruption, and host-validation gates pass.
 
 Pass `signal: AbortSignal.timeout(milliseconds)` for one outer operation budget,
 or a host-owned cancellation signal. Queue waits, authentication, selected content,
-uploads, retries, and observations share that signal. Existing subscription/upload
+uploads, retries, and observations share that signal. Subscription/upload
 limits can shorten it, never reset it. Cancellation stops new delivery work; SDK
 child processes are reaped before operation cleanup completes. Safety cleanup can
 extend beyond the deadline. `close()` cancels active calls and releases SDK-owned
@@ -159,21 +159,22 @@ Metadata/omit/unmatched routes do not read bytes; selected body deliveries snaps
 once under the configured limit and upload independently to authorized destinations.
 The SDK computes size/hash and verifies receiver descriptors before publishing the
 event. Calling a boundary transfers read/cancel ownership, including unused and
-failed-call paths. Native raw streams and canonical references remain supported.
+failed-call paths. Native raw streams and canonical references are also supported.
 Keep host execution data separately from these owned delivery sources.
-Returned events own independent copies of selected or locally replaced bodies;
-unselected sources become metadata without being read. Accepted inline replacement
-values also remain available in `result.response.result.effects`.
-Retaining a result does not retain its input or staged replacement sources.
+Returned body streams are lazy views of their attachment owner. Consume or cancel
+these streams to release their owner leases; unselected stream sources become
+metadata without being read. Owned attachments expose `result.content.close()`.
+Accepted inline replacement values are available in `result.response.result.effects`.
 
-An unfinished elicitation exchange retains only its selected request bytes and
-correlation facts. A request `return` can still be followed by a correlated result.
+An unfinished elicitation exchange retains correlation facts and a lease on its
+selected request owner. A request `return` can be followed by a correlated result.
 Denial, failed or interrupted delivery, a result
 attempt (including validation failure), session end, and `close()` retire that
 exchange. If the host abandons a pending exchange without a result, call
 `hooks.discardElicitation(requestEventId)`. Retirement also prevents requests already
 in preparation from retaining correlation bytes later. This uses only active-call
-tokens, not a history of retired IDs; a later new call has its own lifetime.
+tokens; each call has its own lifetime. Retiring an exchange releases its lease
+without invalidating returned content or an already-running correlated invocation.
 Other pending exchanges are not evicted:
 exceeding the active exchange count or byte budget reports a preparation failure.
 
@@ -199,8 +200,8 @@ rotation, shared coordination and persistence. Callbacks must honor their signal
 cancelling one wait does not authorize cancelling other callers' shared work.
 Absent bindings start anonymously and may use challenge-driven discovery under the
 host's trust policy. Configured missing credentials fail closed. Upload bindings
-never fall back to event credentials. Existing `auth()` discovery/exchange helpers
-remain optional conveniences; TLS/network policy stays in the trusted HTTP adapter.
+never fall back to event credentials. The `auth()` discovery/exchange helpers
+are optional; TLS/network policy belongs in the trusted HTTP adapter.
 
 Generated `capability.intercept()` deliberately advertises both interception and
 observation; `capability.observe()` advertises observation only. Builders compose
@@ -223,7 +224,7 @@ const capabilities: EventCapabilities = {
 };
 ```
 
-Omitted events and modes grant nothing. Full static manifests remain supported.
+Omitted events and modes grant nothing. Full static manifests are also supported.
 Effect grants and elicitation `form`/`url` grants must also be explicit.
 
 `ReadFileArguments` checks the host's original arguments at compile time. The SDK
@@ -233,7 +234,7 @@ tool schema before executing it; do not cast it back to `ReadFileArguments` or u
 the original arguments as though a rewrite had not occurred. The host is responsible
 for tool-specific runtime validation and for enacting any other granted effects.
 
-## Legacy `ToolBeforeRunner`
+## `ToolBeforeRunner`
 
 ```ts
 import { ToolBeforeRunner } from "agenthooksprotocol";
@@ -288,7 +289,7 @@ await serveStdio((request) =>
 `serveStdio(handler, { stdin?, stdout?, signal? })` defaults to the Node process
 streams. Each UTF-8 NDJSON line becomes a POST `Request` with an
 `application/json` body; the shim does not parse or validate JSON-RPC.
-`hooks.handle` remains responsible for validation and response correlation.
+`hooks.handle` performs validation and response correlation.
 Nonempty response bodies are written even for error HTTP statuses; empty bodies
 (including notification responses) produce no output. Physical CR/LF characters
 in response bodies become spaces so each reply occupies one line. Log to stderr,
@@ -304,7 +305,7 @@ Web server entrypoint.
 ## Packages
 
 - `agenthooksprotocol/client` — configuration-driven harness client, typed event boundaries, and HTTP/stdio delivery
-- `agenthooksprotocol` — legacy hook runner, stdio transport, runtime types, and operational errors
+- `agenthooksprotocol` — hook runner, stdio transport, runtime types, and operational errors
 - `agenthooksprotocol/generated` — schema-derived models and structural codecs
 - `agenthooksprotocol/draft` — canonical draft validators, generated models, and reference boundary helpers
 - `@agenthooksprotocol/testing` — configurable fake backend for integration tests
@@ -334,8 +335,8 @@ Generated code lives in `packages/sdk/src/generated.ts`. Its provenance is recor
 
 `agenthooksprotocol/draft` exposes generated models and codecs for the full
 canonical draft catalogue, schema-backed validators, content-upload helpers, and
-synthetic boundary evaluators. This does **not** expand `ToolBeforeRunner` beyond
-its deny/no-effect `tool.before` slice or provide a complete production adapter.
+synthetic boundary evaluators. `ToolBeforeRunner` supports only the deny/no-effect
+`tool.before` slice. The draft API is not a complete production adapter.
 See the [draft API guide](packages/sdk/DRAFT-API.md) for entrypoints and limits.
 
 The protocol authority is the sibling repository's
@@ -356,3 +357,59 @@ Local dispatch IDs and harness state must not be copied into protocol payloads.
 ## License
 
 Apache-2.0
+
+### Owned attachments
+
+Import `Attachment` from `agenthooksprotocol/client` for invocation-owned local
+content without a backing store, upload scope, staging, or reference resolution:
+
+```ts
+const attachment = Attachment.bytes(new Uint8Array([1, 2, 3]));
+const lazy = Attachment.lazy(async (signal) => readFile(path, { signal }));
+```
+
+`bytes` defensively copies its input. `lazy(open, dispose?)` calls `open` at most
+once, on actual byte demand; it must return a `Uint8Array` or its promise. An
+optional asynchronous `dispose` releases producer resources even when never
+opened. Cleanup must finish promptly, and `open` should honor its abort signal.
+
+Use `Attachment.fromStream(stream)` to take ownership of a native stream.
+`Attachment.read(signal?)` returns a defensive copy, and `Attachment.close()`
+releases ownership. Once an attachment is passed to a boundary, let the returned
+content accessor manage its lifetime. Do not read a standalone attachment before
+handing it to an invocation.
+
+Apply producer-side bounds when loading files: `maxContentBytes` bounds retained
+SDK snapshots, not allocations inside a caller's loader.
+
+Use attachments in typed content-item `body` fields, or in generated
+`contentSlots[eventType]` bindings. Metadata stays on the content item. The
+invocation owns the attachment and shares one immutable snapshot among selected
+consumers; no-match, metadata, and omit delivery do not open it. The same handle
+may appear multiple times in one invocation, but reuse in another invocation is
+rejected. `ContentSource`, raw streams, and reference APIs are also supported.
+
+Results from successful owned-attachment invocations include `result.content`:
+
+- `ids` lists local effective content item IDs (reference-only slots instead use
+  JSON pointers such as `/changes/0/after`). Content item IDs must be unambiguous.
+- `read(id, signal?)` returns a fresh byte copy, materializing an unread source
+  only on demand, subject to the invocation's aggregate byte limit.
+- `close()` is asynchronous and idempotent. Always await it in `finally`, even if
+  no bytes were read. It releases snapshots and disposes unopened sources.
+
+The accessor owns effective local bytes and sources independently of
+`Hooks.close()`. Thrown invocations and interrupted boundaries clean up their
+sources instead of transferring usable ownership. There is no session archive
+or automatic cross-invocation handle reuse. Opaque remote references are not
+resolved by this accessor. It also owns local streams in the same result.
+For owned attachments, `result.event` body fields reference the same attachment
+owners, including unopened sources. Use `result.content` for metadata-validated
+reads and collective disposal. Returned body streams retain the same owner and
+provide a defensive copy when consumed.
+
+Edits require canonical text/JSON composition rules and capability grants.
+Binary attachments are delivery inputs, not editable effect targets.
+
+See the standalone [file attachment example](packages/sdk/examples/file-attachment.mjs)
+for lazy file loading, typed source binding, and reading after shutdown.

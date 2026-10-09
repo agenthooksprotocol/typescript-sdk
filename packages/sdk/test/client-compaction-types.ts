@@ -60,3 +60,24 @@ void [
   invalidInstructions,
   missingContentFields,
 ];
+
+// Owned attachments use the same typed content and source binding paths.
+import { Attachment, contentSlots } from "agenthooksprotocol/client";
+declare const ownedHooks: import("agenthooksprotocol/client").Hooks;
+const owned = Attachment.bytes(new Uint8Array([1, 2]));
+const deferred = Attachment.lazy(async (signal) => {
+  signal.throwIfAborted();
+  return new Uint8Array([3]);
+}, async () => {});
+void ownedHooks.contextCompactBefore({
+  trigger: "manual", items: [],
+  instructions: { id: "owned", kind: "text", mediaType: "text/plain", body: owned },
+}).then(async result => {
+  const bytes: Uint8Array | undefined = await result.content?.read("owned");
+  void bytes;
+  await result.content?.close();
+});
+void ownedHooks.contextCompactBefore({
+  trigger: "manual", items: [],
+  instructions: { id: "deferred", kind: "text", mediaType: "text/plain" },
+}, { contentSources: [contentSlots["context.compact.before"].instructions(deferred)] });
