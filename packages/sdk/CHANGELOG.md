@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.2.0...agenthooksprotocol-v0.3.0) (2026-10-10)
+
+
+### Features
+
+* support inline messages and bounded attachment preuploads ([#15](https://github.com/agenthooksprotocol/typescript-sdk/issues/15)) ([0e016e8](https://github.com/agenthooksprotocol/typescript-sdk/commit/0e016e87f73a17ec982c25818c7ce56ee143653e))
+
 ## [0.2.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.1.1...agenthooksprotocol-v0.2.0) (2026-10-09)
 
 
