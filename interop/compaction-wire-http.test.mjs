@@ -90,7 +90,7 @@ for (const mediaType of [
             name: "chain",
             snapshot: {
               boundary: "before",
-              instructions: "base",
+              instructions: textParts("base"),
               capabilities: compactionCapabilities("before"),
             },
           }),

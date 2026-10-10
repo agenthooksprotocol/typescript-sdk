@@ -50,6 +50,7 @@ export async function control(endpoint, path, value) {
  * @param {{transport: import("agenthooksprotocol/client").Registration["hooks"][number]["transport"],
  * source: string, event: import("agenthooksprotocol/client").EventType,
  * mode: "intercept" | "observe", capabilities?: import("agenthooksprotocol/client").Capabilities,
+ * content?: import("agenthooksprotocol/client").ContentSelection,
  * bodySelected: boolean, upload?: import("agenthooksprotocol/client").ContentUpload,
  * auth: import("agenthooksprotocol/client").AuthProvider, fetch?: typeof globalThis.fetch}} options
  */
@@ -68,7 +69,7 @@ export function lifecycleHooks(options) {
               ...(options.mode === "intercept"
                 ? { timeoutMs: 15000, failurePolicy: "fail-open" }
                 : {}),
-              content: { default: options.bodySelected ? "body" : "metadata" },
+              content: options.content ?? { default: options.bodySelected ? "body" : "metadata" },
               ...(options.upload ? { upload: options.upload } : {}),
             },
           ],

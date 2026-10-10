@@ -2,6 +2,26 @@ import { manifest as coreManifest, discovery } from "./common.mjs";
 import { sdkDraft, sdkClient } from "./common.mjs";
 const { draftCodecs } = sdkDraft;
 const { Hooks, auth: hooksAuth } = sdkClient;
+/** Build fixture subscriptions from canonical items, not opaque native payloads. */
+export function catalogueContentSelection(event) {
+  const content = { default: "metadata" };
+  for (const item of event.items ?? []) {
+    for (const part of item.parts ?? [item]) {
+      if (part.selection === undefined) continue;
+      const mediaType = (part.mediaType ?? "").toLowerCase().split(";")[0].trim();
+      const category = part.category ??
+        (mediaType.startsWith("text/") || mediaType === "application/json" ? "text" :
+          mediaType.startsWith("image/") ? "images" :
+          mediaType.startsWith("audio/") ? "audio" :
+          mediaType.startsWith("video/") ? "video" : "files");
+      if (content[category] !== undefined && content[category] !== part.selection)
+        throw Error(`Conflicting catalogue selection for ${category}`);
+      content[category] = part.selection;
+    }
+  }
+  return content;
+}
+
 export const catalogueEvents = [
   "tool.before",
   "tool.after",

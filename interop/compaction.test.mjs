@@ -25,11 +25,11 @@ test("compaction callbacks and generator see accepted inputs and results", async
     ],
     [
       hook("redact", (snapshot) => [
-        modify("summary", inlineText(snapshot.summary.parts) + ":redacted"),
+        modify("summary", inlineText(snapshot.summary) + ":redacted"),
       ]),
       hook("watch", (snapshot) => {
         assert.equal(
-          inlineText(snapshot.summary.parts),
+          inlineText(snapshot.summary),
           "generated:new:redacted",
         );
         return [];
@@ -45,9 +45,10 @@ test("compaction callbacks and generator see accepted inputs and results", async
   assert.deepEqual(generated, ["new"]);
   assert.deepEqual(r.failures, []);
   assert.equal(r.applied, true);
-  assert.equal(r.seen[1].summary.id, r.summary.id);
-  assert.notEqual(inlineText(r.seen[1].summary.parts), inlineText(r.summary.parts));
-  assert.equal(inlineText(r.seen[1].summary.parts), "generated:new");
+  assert.equal(r.seen[1].summary[0].id, "summary-1");
+  assert.equal(r.summary[0].id, "text");
+  assert.notEqual(inlineText(r.seen[1].summary), inlineText(r.summary));
+  assert.equal(inlineText(r.seen[1].summary), "generated:new");
 });
 test("failed compound preserves candidate, messages and input; supplied summary still redacted", async () => {
   const r = await runCompaction(
@@ -71,9 +72,9 @@ test("failed compound preserves candidate, messages and input; supplied summary 
       },
     },
   );
-  assert.equal(r.instructions, "old");
+  assert.equal(inlineText(r.instructions), "old");
   assert.deepEqual(r.messages, []);
-  assert.equal(inlineText(r.summary.parts), "safe");
+  assert.equal(inlineText(r.summary), "safe");
   assert.deepEqual(r.provenance, { kind: "supplied", supplier: "cache" });
   assert.equal(r.applied, true);
 });
@@ -89,7 +90,7 @@ test("after failure prevents delivery; observation does not advertise control", 
     ],
   );
   assert.equal(r.applied, false);
-  assert.equal(inlineText(r.summary.parts).includes("leak"), false);
+  assert.equal(inlineText(r.summary).includes("leak"), false);
   assert.deepEqual(compactionCapabilities("after", true), {
     effects: [],
     modify: {},
@@ -155,11 +156,11 @@ test(
       release();
       const r = await work;
       await finished;
-      const downstream = r.applied ? [inlineText(r.summary.parts)] : [];
+      const downstream = r.applied ? [inlineText(r.summary)] : [];
       assert.deepEqual(downstream, ["summary:base"]);
       assert.deepEqual(r.failures, []);
       const saved = structuredClone(r);
-      snapshot.summary.parts[0].text = "late mutation";
+      snapshot.summary[0].text = "late mutation";
       snapshot.summary = "forbidden";
       await new Promise((resolve) => setImmediate(resolve));
       assert.deepEqual(r, saved);
@@ -192,7 +193,7 @@ test(
             snapshot = value;
             notify();
             await gate;
-            value.summary.parts[0].text = "mutation";
+            value.summary[0].text = "mutation";
             return [modify("summary", "forbidden")];
           }),
         ],
@@ -211,10 +212,10 @@ test(
       assert.deepEqual(snapshot.capabilities, { effects: [], modify: {} });
       release();
       const r = await work;
-      const downstream = r.applied ? [inlineText(r.summary.parts)] : [];
+      const downstream = r.applied ? [inlineText(r.summary)] : [];
       assert.deepEqual(downstream, ["summary:base"]);
       assert.deepEqual(r.failures, []);
-      assert.equal(inlineText(r.summary.parts), "summary:base");
+      assert.equal(inlineText(r.summary), "summary:base");
       const saved = structuredClone(r);
       snapshot.summary = "late mutation";
       await new Promise((resolve) => setImmediate(resolve));
@@ -405,7 +406,7 @@ test("wire sender refuses plans missing independent upload credentials", () => {
 test("empty hook plans still use a valid public Hooks registration", async () => {
   const result = await runCompaction("base");
   assert.equal(result.applied, true);
-  assert.equal(inlineText(result.summary.parts), "summary:base");
+  assert.equal(inlineText(result.summary), "summary:base");
   assert.deepEqual(result.seen, []);
   assert.deepEqual(result.failures, []);
 });
@@ -423,7 +424,7 @@ test("explicit malformed-response bypass exercises SDK rejection", async () => {
     { boundary: "before", supplier: "malformed" },
   ]);
   assert.equal(result.applied, true);
-  assert.equal(inlineText(result.summary.parts), "summary:base");
+  assert.equal(inlineText(result.summary), "summary:base");
 });
 
 
@@ -439,10 +440,57 @@ test("compaction composes all inline text parts before generation", async () => 
       ],
     }]),
     hook("watch", (snapshot) => {
-      assert.equal(snapshot.instructions, "first:second");
+      assert.equal(inlineText(snapshot.instructions), "first:second");
       return [];
     }),
   ]);
   assert.deepEqual(result.failures, []);
-  assert.equal(inlineText(result.summary.parts), "summary:first:second");
+  assert.equal(inlineText(result.summary), "summary:first:second");
+});
+
+
+test("canonical instruction identities preserve a supplied candidate across a no-change edit", async () => {
+  const instructions = [{ ...textParts("base")[0], id: "fixture:text" }];
+  const result = await runCompaction(instructions, [
+    hook("cache", () => [{ type: "return", value: "cached" }]),
+    hook("same", snapshot => [{ type: "modify", target: "instructions", operation: "replace", value: structuredClone(snapshot.instructions) }]),
+  ], [hook("watch", snapshot => {
+    assert.ok(Array.isArray(snapshot.instructions));
+    assert.ok(Array.isArray(snapshot.summary));
+    assert.equal(snapshot.instructions[0].id, "fixture:text");
+    return [];
+  })], { generate() { throw Error("same-input modification must preserve supplied candidate"); } });
+  assert.deepEqual(result.failures, []);
+  assert.deepEqual(result.instructions, instructions);
+  assert.equal(inlineText(result.summary), "cached");
+  assert.equal(result.generated, false);
+  assert.deepEqual(result.provenance, { kind: "supplied", supplier: "cache" });
+});
+
+
+test("rejected equal-valued return cannot overwrite the accepted supplier", async () => {
+  const result = await runCompaction(textParts("base"), [
+    hook("cache", () => [{ type: "return", value: "cached" }]),
+    hook("rejected", () => [{ type: "return", value: "cached" }, modify("summary", "leak")], "fail-open"),
+  ]);
+  assert.equal(result.failures.length, 1);
+  assert.equal(result.generated, false);
+  assert.equal(inlineText(result.summary), "cached");
+  assert.deepEqual(result.provenance, { kind: "supplied", supplier: "cache" });
+});
+
+test("multipart supplied summaries retain canonical order, identities, and supplier", async () => {
+  const supplied = [{ ...textParts("first")[0], id: "supplied:first" }, { ...textParts(":second")[0], id: "supplied:second" }];
+  const result = await runCompaction(textParts("base"), [
+    hook("cache", () => [{ type: "return", value: supplied }]),
+    hook("watch", snapshot => {
+      assert.deepEqual(snapshot.candidate.body, supplied);
+      assert.equal(snapshot.candidate.supplier, "cache");
+      return [];
+    }),
+  ], [hook("after", snapshot => { assert.deepEqual(snapshot.summary, supplied); return []; })],
+  { generate() { throw Error("supplied canonical summary must skip generation"); } });
+  assert.deepEqual(result.failures, []);
+  assert.deepEqual(result.summary, supplied);
+  assert.deepEqual(result.provenance, { kind: "supplied", supplier: "cache" });
 });

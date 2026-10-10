@@ -121,12 +121,12 @@ async function exchange(plan, sub, name, snapshot) {
           items: [
             contentItem(name + ":context", "conversation", "user"),
           ],
-          instructions: textParts(snapshot.instructions),
+          instructions: snapshot.instructions,
         }
       : {
           ...common,
           parentEventId: name + ":before",
-          summary: snapshot.summary.parts,
+          summary: snapshot.summary,
           removed: [{ id: name + ":context" }],
           execution:
             snapshot.candidate === null
@@ -240,7 +240,7 @@ if (mode === "host" || mode === "call") {
           },
         }));
       const result = await runCompaction(
-          "base",
+          textParts("base"),
           hooks("before"),
           hooks("after"),
           {
@@ -248,7 +248,7 @@ if (mode === "host" || mode === "call") {
           },
         ),
         downstream = [];
-      if (result.applied) downstream.push(inlineText(result.summary.parts));
+      if (result.applied) downstream.push(inlineText(result.summary));
       out.push({ name: row.name, result, trace, downstream });
     }
     console.log(JSON.stringify(out));
