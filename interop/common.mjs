@@ -43,12 +43,34 @@ export async function atomic(path, value) {
  * @property {Array<{ref: string, bodyBase64: string}>} [contentBodies]
  * @property {import("./content-upload.mjs").ContentSource[]} [contentSources]
  */
+/** Migrate legacy producer injection fixtures without repairing negative probes. */
+export function canonicalFixtureInjections(row) {
+  for (const effects of [row.response?.result?.effects, row.expected?.injections]) {
+    if (!Array.isArray(effects)) continue;
+    for (const [index, effect] of effects.entries()) {
+      if (effect.type !== "inject" || typeof effect.value?.text !== "string") continue;
+      effect.value = [{
+        id: `${row.id}:injection:${index}`,
+        role: "system",
+        parts: [{
+          id: `${row.id}:injection:${index}:text`,
+          kind: "text",
+          mediaType: "text/plain",
+          selection: "body",
+          text: effect.value.text,
+        }],
+      }];
+    }
+  }
+  return row;
+}
 /** @param {string} path @returns {Promise<FixtureScenario[]>} */
 export async function scenarios(path) {
   const value = JSON.parse(await readFile(path, "utf8"));
   if (value.version !== 1 || !Array.isArray(value.scenarios))
     throw Error("Invalid scenario file");
   for (const row of value.scenarios) {
+    canonicalFixtureInjections(row);
     const request = sdkDraft.validateInterceptRequest(row.request);
     if (typeof row.id !== "string" || !request.ok)
       throw Error("Invalid fixture request");

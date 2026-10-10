@@ -5,7 +5,7 @@ import {
   Permission,
   state,
   effects,
-  ContentSource,
+  Attachment,
 } from "agenthooksprotocol/client";
 import { effects as serverEffects } from "agenthooksprotocol/server";
 
@@ -60,7 +60,7 @@ test("named boundaries project generated flattened host facts into canonical wir
       result: {
         protocolVersion: "draft",
         effects: [
-          serverEffects.modify_input.replace({ path: "accepted" }),
+          serverEffects.modify("replace", "input", { path: "accepted" }),
           effects.allow(),
         ],
       },
@@ -130,7 +130,7 @@ test("named generated inputs bind lazy sources without manual content paths", as
   let reads = 0,
     cancelled = 0,
     wire;
-  const source = new ContentSource(
+  const source = Attachment.fromStream(
     new ReadableStream(
       {
         pull() {
@@ -152,15 +152,17 @@ test("named generated inputs bind lazy sources without manual content paths", as
     });
   });
   try {
-    await client.toolBefore({
+    const result = await client.toolBefore({
       ...facts,
       items: [
-        { id: "content", kind: "text", mediaType: "text/plain", body: source },
+        { id: "content", kind: "attachment", mediaType: "application/octet-stream", selection: "body", body: source },
       ],
     });
     assert.equal(wire.params.event.items[0].selection, "metadata");
     assert.equal("body" in wire.params.event.items[0], false);
     assert.equal(reads, 0);
+    assert.equal(cancelled, 0, "retained result keeps the attachment alive");
+    await result.content?.close();
     assert.equal(cancelled, 1);
   } finally {
     await client.close();
@@ -235,7 +237,7 @@ test("generated declarations are immutable, explicit and boundary-compatible", a
 test("named source binding prepares receiver references from descriptors without caller refs", async () => {
   let reads = 0;
   const bytes = new TextEncoder().encode("owned binary\u0000payload");
-  const source = new ContentSource(
+  const source = Attachment.fromStream(
     new ReadableStream(
       {
         pull(controller) {
@@ -249,8 +251,8 @@ test("named source binding prepares receiver references from descriptors without
   );
   const descriptor = {
     id: "content",
-    kind: "text",
-    mediaType: "text/plain",
+    kind: "attachment",
+    mediaType: "application/octet-stream",
     selection: "metadata",
   };
   const requests = [],
@@ -330,6 +332,7 @@ test("named source binding prepares receiver references from descriptors without
       false,
       "producer descriptor is not mutated",
     );
+    await result.content?.close();
   } finally {
     await client.close();
   }
@@ -339,7 +342,7 @@ for (const mode of ["metadata", "omit"])
   test(`named source binding remains unread for ${mode} delivery`, async () => {
     let reads = 0,
       cancelled = 0;
-    const source = new ContentSource(
+    const source = Attachment.fromStream(
       new ReadableStream(
         {
           pull() {
@@ -376,14 +379,14 @@ for (const mode of ["metadata", "omit"])
       },
     );
     try {
-      await client.toolBefore(
+      const result = await client.toolBefore(
         {
           ...facts,
           items: [
             {
               id: "content",
-              kind: "text",
-              mediaType: "text/plain",
+              kind: "attachment",
+              mediaType: "application/octet-stream",
               selection: "metadata",
             },
           ],
@@ -391,6 +394,8 @@ for (const mode of ["metadata", "omit"])
         { contentSources: [contentSlots[events.toolBefore].items(0, source)] },
       );
       assert.equal(reads, 0);
+      assert.equal(cancelled, 0, "retained result keeps the attachment alive");
+      await result.content?.close();
       assert.equal(cancelled, 1);
     } finally {
       await client.close();

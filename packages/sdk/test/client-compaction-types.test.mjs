@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 
 test(
-  "public compact-before declarations preserve canonical input fields and streams",
+  "public compact-before declarations preserve canonical inline instructions and binary attachments",
   { timeout: 30000 },
   () => {
     const result = spawnSync(

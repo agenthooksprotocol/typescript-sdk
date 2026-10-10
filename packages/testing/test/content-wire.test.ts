@@ -73,7 +73,7 @@ for (const selection of ["body", "metadata", "omit"] as const) {
               assert.equal(event.type, "user.message.inbound");
               if (event.type !== "user.message.inbound")
                 throw Error("Unexpected event");
-              const item = (event as import("agenthooksprotocol/client").UserMessageInboundEvent).message.text[0]!;
+              const item = (event as import("agenthooksprotocol/client").UserMessageInboundEvent).message.messages[0]!.parts[0]!;
               assert.equal(item.id, "item");
               assert.equal(item.selection, selection);
               const body = item.body;
@@ -111,10 +111,10 @@ for (const selection of ["body", "metadata", "omit"] as const) {
           message: {
             channel: "chat",
             sender: "user",
-            text: [
+            messages: [{ id: "message", role: "user", parts: [
               {
                 id: "item",
-                kind: "message",
+                kind: "attachment",
                 mediaType: "application/octet-stream",
                 body: new ReadableStream<Uint8Array>(
                   {
@@ -127,7 +127,7 @@ for (const selection of ["body", "metadata", "omit"] as const) {
                   { highWaterMark: 0 },
                 ),
               },
-            ],
+            ] }],
           },
         });
         assert.deepEqual(result.errors, []);
@@ -149,7 +149,7 @@ test("legacy helper compatibility: normalized content selection uses category, c
   let uploads = 0;
   const item = {
     id: "item",
-    kind: "image",
+    kind: "attachment",
     category: "text",
     mediaType: "application/octet-stream",
     ref: "ref",
@@ -206,7 +206,7 @@ test("legacy helper compatibility: normalized content selection uses category, c
 test("effective operation invalidates cached allowance; fresh ask wins over allow atomically", () => {
   const before = {
     input: { task: 1 },
-    values: { output: { status: "open" } },
+    values: { output: outputText(JSON.stringify({ status: "open" })) },
     candidate: null,
     permission: "allow" as const,
     approval: "approved" as const,
@@ -224,7 +224,7 @@ test("effective operation invalidates cached allowance; fresh ask wins over allo
         type: "modify",
         target: "output",
         operation: "replace",
-        value: { status: "done" },
+        value: outputText(JSON.stringify({ status: "done" })),
       },
     ],
     caps,
@@ -240,7 +240,7 @@ test("effective operation invalidates cached allowance; fresh ask wins over allo
         type: "modify",
         target: "output",
         operation: "replace",
-        value: { status: "done" },
+        value: outputText(JSON.stringify({ status: "done" })),
       },
       { type: "allow" },
       { type: "ask" },
@@ -262,9 +262,9 @@ test("unconfirmed or mismatched receiver descriptors never publish a body", asyn
   };
   const item = {
     id: "item",
-    kind: "text",
+    kind: "attachment",
     category: "text",
-    mediaType: "text/plain",
+    mediaType: "application/octet-stream",
     bytes,
   };
   for (const descriptor of [
@@ -433,3 +433,53 @@ test("HTTP upload rejects unconfirmed status, media type and malformed or mismat
     globalThis.fetch = originalFetch;
   }
 });
+
+for (const selection of ["body", "metadata", "omit"] as const) {
+  test(`public inline text ${selection}: role and message boundaries survive selection`, async () => {
+    const text = "Zażółć 🚀";
+    let deliveries = 0;
+    const client = new Hooks({ protocolVersion: "draft", hooks: [{
+      id: "test.inline", transport: { type: "http", url: "https://receiver.test/hooks" },
+      subscriptions: [{ mode: "observe", events: ["user.message.inbound"], content: { default: selection } }],
+    }] }, {
+      source: "urn:test:inline",
+      capabilities: { "user.message.inbound": { modes: ["observe"] } },
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        assert.equal(request.url, "https://receiver.test/hooks");
+        return hooks.handle(request, (message) => {
+          if (message.method !== "hooks/observe" || message.params.event.type !== "user.message.inbound")
+            throw Error("Unexpected delivery");
+          const event = message.params.event as import("agenthooksprotocol/client").UserMessageInboundEvent;
+          assert.equal(event.message.messages.length, 2);
+          for (const [index, value] of event.message.messages.entries()) {
+            assert.equal(value.id, `message-${index}`);
+            assert.equal(value.role, "user");
+            const part = value.parts[0]!;
+            assert.equal(part.kind, "text");
+            assert.equal(part.selection, selection);
+            assert.equal(part.text, selection === "body" ? text : undefined);
+            assert.equal(part.body, undefined);
+            assert.equal(part.gap, undefined);
+          }
+          deliveries++;
+        });
+      },
+    });
+    try {
+      const result = await client.dispatch("user.message.inbound", { message: {
+        channel: "chat", sender: "user", messages: [0, 1].map((index) => ({
+          id: `message-${index}`, role: "user" as const,
+          parts: [{ id: `text-${index}`, kind: "text" as const, mediaType: "text/plain" as const, text }],
+        })),
+      } });
+      assert.deepEqual(result.errors, []);
+      assert.deepEqual(await result.observations, []);
+      assert.equal(deliveries, 1);
+    } finally { await client.close(); }
+  });
+}
+
+function outputText(text: string) {
+  return [{ id: "output", role: "tool", parts: [{ id: "output-text", kind: "text", mediaType: "text/plain", selection: "body", text }] }];
+}

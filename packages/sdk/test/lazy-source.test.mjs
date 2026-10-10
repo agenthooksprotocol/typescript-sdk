@@ -26,12 +26,13 @@ function fixture(stalled = false) {
     stream,
     source,
     event: {
-      instructions: {
+      type: "turn.start", turn: { id: "turn" }, trigger: "user",
+      items: [{ id: "message", role: "user", parts: [{
         id: "i",
-        kind: "text",
-        mediaType: "text/plain",
+        kind: "attachment",
+        mediaType: "application/octet-stream",
         body: source,
-      },
+      }] }],
     },
   };
 }
@@ -59,9 +60,9 @@ for (const mode of ["metadata", "omit"]) {
         undefined,
         unexpected,
       );
-      assert.equal(prepared.instructions.body, undefined);
-      assert.equal(prepared.instructions.mediaType, "text/plain");
-      assert.equal(prepared.instructions.selection, mode);
+      assert.equal(prepared.items[0].parts[0].body, undefined);
+      assert.equal(prepared.items[0].parts[0].mediaType, "application/octet-stream");
+      assert.equal(prepared.items[0].parts[0].selection, mode);
       assert.equal(state.pulls, 0);
     } finally {
       await manager.close();
@@ -100,7 +101,7 @@ test("concurrent body fanout shares one snapshot and independent receiver upload
     const results = await Promise.all([
       manager.prepare(event, { default: "body" }, upload, send),
       manager.prepare(
-        { instructions: { ...event.instructions, body: stream } },
+        { ...event, items: [{ ...event.items[0], parts: [{ ...event.items[0].parts[0], body: stream }] }] },
         { default: "body" },
         upload,
         send,
@@ -109,11 +110,11 @@ test("concurrent body fanout shares one snapshot and independent receiver upload
     assert.equal(state.pulls, 1);
     assert.deepEqual(seen, ["hello", "hello"]);
     assert.notEqual(
-      results[0].instructions.body.ref,
-      results[1].instructions.body.ref,
+      results[0].items[0].parts[0].body.ref,
+      results[1].items[0].parts[0].body.ref,
     );
     assert.equal(
-      new TextDecoder().decode(await manager.readBody(event.instructions.body)),
+      new TextDecoder().decode(await manager.readBody(event.items[0].parts[0].body)),
       "hello",
     );
   } finally {

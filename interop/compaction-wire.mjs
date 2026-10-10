@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline";
-import { runCompaction, contentItem, port } from "./compaction.mjs";
+import { runCompaction, contentItem, textParts, inlineText, port } from "./compaction.mjs";
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
@@ -36,17 +36,9 @@ async function receive(request, sub, config, store) {
   let bodies = {};
   const evaluate = (message) => {
     const event = message.params.event;
-    const items = [
-      ...(event.items ?? []),
-      ...["instructions", "summary"]
-        .filter((k) => k in event)
-        .map((k) => event[k]),
-    ];
-    for (const item of items) {
-      const ref = item.body,
-        raw = readFileSync(location(store, sub, ref.ref));
-      bodies[item.id] = new TextDecoder("utf-8", { fatal: true }).decode(raw);
-    }
+    for (const item of event.items ?? []) bodies[item.id] = inlineText(item.parts);
+    for (const key of ["instructions", "summary"])
+      if (key in event) bodies[key] = inlineText(event[key]);
     const action = config[sub];
     return {
       effects:
@@ -56,7 +48,7 @@ async function receive(request, sub, config, store) {
                 type: "modify",
                 target: action.target,
                 operation: "replace",
-                value: bodies[event[action.target].id] + action.suffix,
+                value: textParts(bodies[action.target] + action.suffix),
               },
             ]
           : action.effects,
@@ -127,24 +119,14 @@ async function exchange(plan, sub, name, snapshot) {
           ...common,
           trigger: "manual",
           items: [
-            contentItem(name + ":context", "user", "conversation", "user"),
+            contentItem(name + ":context", "conversation", "user"),
           ],
-          instructions: contentItem(
-            name + ":instructions",
-            "instructions",
-            snapshot.instructions,
-            "system",
-          ),
+          instructions: snapshot.instructions,
         }
       : {
           ...common,
           parentEventId: name + ":before",
-          summary: contentItem(
-            snapshot.summary.id,
-            "summary",
-            snapshot.bodies[snapshot.summary.ref],
-            "assistant",
-          ),
+          summary: snapshot.summary,
           removed: [{ id: name + ":context" }],
           execution:
             snapshot.candidate === null
@@ -258,7 +240,7 @@ if (mode === "host" || mode === "call") {
           },
         }));
       const result = await runCompaction(
-          "base",
+          textParts("base"),
           hooks("before"),
           hooks("after"),
           {
@@ -266,7 +248,7 @@ if (mode === "host" || mode === "call") {
           },
         ),
         downstream = [];
-      if (result.applied) downstream.push(result.bodies[result.summary.ref]);
+      if (result.applied) downstream.push(inlineText(result.summary));
       out.push({ name: row.name, result, trace, downstream });
     }
     console.log(JSON.stringify(out));

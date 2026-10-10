@@ -89,8 +89,8 @@ test("client network delegation preserves independent event and upload authentic
       items: [
         {
           id: "payload",
-          kind: "text",
-          mediaType: "text/plain",
+          kind: "attachment",
+          mediaType: "application/octet-stream",
           body: new ReadableStream({
             start(controller) {
               controller.enqueue(new TextEncoder().encode("network payload"));

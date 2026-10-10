@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { runChain } from "./observation-chain.mjs";
-import { evaluateRegistration } from "./catalogue.mjs";
+import { evaluateRegistration, catalogueContentSelection } from "./catalogue.mjs";
 import { TaskLineage } from "./task-lineage.mjs";
 import { effectiveEvent } from "./settlement.mjs";
 import {
@@ -206,7 +206,11 @@ async function sdkCall(
     upload ? [upload.endpoint] : [],
   );
   adapter.hydrate(event);
+  const content = cfg.suite === "catalogue"
+    ? catalogueContentSelection(event)
+    : undefined;
   const key = JSON.stringify([
+    content,
     event.source,
     event.type,
     mode,
@@ -222,6 +226,7 @@ async function sdkCall(
       event: event.type,
       mode,
       bodySelected,
+      ...(content ? { content } : {}),
       capabilities:
         mode === "intercept" ? message.params.capabilities : undefined,
       transport,

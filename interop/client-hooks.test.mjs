@@ -372,7 +372,7 @@ test("metadata observations do not consume bodies and native is opt-in", async (
   try {
     const input = tool();
     input.items = [
-      { id: "item", kind: "message", mediaType: "text/plain", body },
+      { id: "item", kind: "attachment", mediaType: "application/octet-stream", body },
     ];
     input.native = {
       provider: "test",
@@ -395,7 +395,7 @@ test("metadata observations do not consume bodies and native is opt-in", async (
 });
 
 test("uploads consume one raw snapshot, authenticate separately, and finish before each receiver event", async () => {
-  const bytes = new TextEncoder().encode("immutable");
+  const bytes = new Uint8Array([0, 255, 128, 1, 2, 3]);
   let reads = 0;
   const seen = [];
   const stored = new Map();
@@ -447,24 +447,26 @@ test("uploads consume one raw snapshot, authenticate separately, and finish befo
   try {
     const input = tool();
     input.items = [
-      { id: "same-item", kind: "text", mediaType: "text/plain", body },
+      { id: "same-item", kind: "attachment", mediaType: "application/octet-stream", body },
     ];
     const r = await hooks.dispatch("tool.before", input);
     assert.equal(r.errors.length, 0);
     assert.equal(reads, 1);
-    assert.deepEqual(seen, ["/upload-a", "/event", "/upload-b", "/event"]);
-    assert.deepEqual(credentials, ["upload-a", "event", "upload-b", "event"]);
+    assert.deepEqual(seen.slice(0, 2).sort(), ["/upload-a", "/upload-b"]);
+    assert.deepEqual(seen.slice(2), ["/event", "/event"]);
+    assert.deepEqual(credentials.slice(0, 2).sort(), ["upload-a", "upload-b"]);
+    assert.deepEqual(credentials.slice(2), ["event", "event"]);
     assert.deepEqual(stored.get("/upload-a"), Buffer.from(bytes));
     assert.deepEqual(stored.get("/upload-b"), Buffer.from(bytes));
     assert.equal(
-      s.messages[1].message.params.event.items[0].body.ref,
+      s.messages[2].message.params.event.items[0].body.ref,
       "/upload-a",
     );
     assert.equal(
       s.messages[3].message.params.event.items[0].body.ref,
       "/upload-b",
     );
-    assert.equal(s.messages[1].headers.authorization, "Bearer event");
+    assert.equal(s.messages[2].headers.authorization, "Bearer event");
     assert.equal(s.messages[0].headers.authorization, "Bearer upload-a");
   } finally {
     await hooks.close();
@@ -514,24 +516,16 @@ test("invalid and expired override credentials fail before a network request", a
   }
 });
 
-const streamItem = (id, value) => {
-  const bytes = new TextEncoder().encode(
-    typeof value === "string" ? value : JSON.stringify(value),
-  );
-  return {
-    id,
-    kind: "text",
-    mediaType: typeof value === "string" ? "text/plain" : "application/json",
-    body: new ReadableStream({
-      start(c) {
-        c.enqueue(bytes);
-        c.close();
-      },
-    }),
-  };
-};
+const textPart = (id, value) => ({
+  id, kind: "text", mediaType: "text/plain", selection: "body",
+  text: typeof value === "string" ? value : JSON.stringify(value),
+});
 
-test("elicitation retains authorized request schema and rewrites result bodies before downstream upload", async () => {
+const message = (id, value, role = "user") => ({
+  id, role, parts: [textPart(`${id}-text`, value)],
+});
+
+test("elicitation retains authorized request schema and rewrites inline result text before downstream dispatch", async () => {
   const uploaded = [];
   const invocations = {};
   const s = await server((m, q, r) => {
@@ -604,7 +598,7 @@ test("elicitation retains authorized request schema and rewrites result bodies b
       elicitation: {
         server: "mcp",
         mode: "form",
-        request: streamItem("question", {
+        request: textPart("question", {
           message: "Name?",
           requestedSchema: {
             type: "object",
@@ -629,7 +623,7 @@ test("elicitation retains authorized request schema and rewrites result bodies b
         server: "mcp",
         mode: "form",
         action: "accept",
-        result: streamItem("answer", {
+        result: textPart("answer", {
           action: "accept",
           content: { name: "Alice", age: 3 },
           _meta: { keep: true },
@@ -638,7 +632,12 @@ test("elicitation retains authorized request schema and rewrites result bodies b
     });
     assert.equal(result.errors.length, 0);
     assert.equal(result.event.elicitation.result.id, "answer");
-    assert.deepEqual(JSON.parse(uploaded.at(-1)), {
+    assert.deepEqual(uploaded, []);
+    assert.deepEqual(JSON.parse(
+      s.messages
+        .filter(x => x.message.params.event.type === "user.elicitation.result")
+        .at(-1).message.params.event.elicitation.result.text,
+    ), {
       action: "accept",
       content: { name: "Alice", age: 4 },
       _meta: { keep: true },
@@ -649,7 +648,7 @@ test("elicitation retains authorized request schema and rewrites result bodies b
   }
 });
 
-test("compaction rewrites body snapshots for later subscribers, and canonical continuation stays one step", async () => {
+test("compaction rewrites inline text for later subscribers, and canonical continuation stays one step", async () => {
   const uploads = [];
   let count = 0;
   const s = await server((m, q, r) => {
@@ -669,7 +668,7 @@ test("compaction rewrites body snapshots for later subscribers, and canonical co
                 type: "modify",
                 target: "instructions",
                 operation: "replace",
-                value: "replacement",
+                value: [textPart("instructions", "replacement")],
               },
               { type: "return", value: "summary" },
             ]
@@ -721,11 +720,17 @@ test("compaction rewrites body snapshots for later subscribers, and canonical co
     const result = await hooks.dispatch("context.compact.before", {
       trigger: "manual",
       items: [],
-      instructions: streamItem("instructions", "original"),
+      instructions: [textPart("instructions", "original")],
     });
     assert.equal(result.errors.length, 0);
-    assert.deepEqual(uploads, ["original", "replacement"]);
-    assert.equal(result.event.instructions.id, "instructions");
+    assert.deepEqual(uploads, []);
+    assert.deepEqual(
+      s.messages
+        .filter(x => x.message.params.event.type === "context.compact.before")
+        .map(x => x.message.params.event.instructions[0].text),
+      ["original", "replacement"],
+    );
+    assert.equal(result.event.instructions[0].id, "instructions");
     const finish = await hooks.dispatch("turn.finish.before", {
       turn: { id: "turn" },
       outcome: "completed",
@@ -839,7 +844,7 @@ for (const failure of ["timeout", "auth", "malformed"]) {
     const hooks = new Hooks(
       config(s.url, [
         sub(),
-        sub({ timeoutMs: 50, failurePolicy: "fail-closed" }),
+        sub({ timeoutMs: 500, failurePolicy: "fail-closed" }),
       ]),
       options({
         capabilities: { "tool.before": { effects: ["allow", "return"] } },

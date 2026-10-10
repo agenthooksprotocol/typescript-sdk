@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { sdkDraft } from "./common.mjs";
 import {
+  canonicalLifecycleFixture,
   lifecycleWireGate,
   maliciousLifecycleObservation,
 } from "./lifecycle-common.mjs";
@@ -40,7 +41,7 @@ const central = JSON.parse(
     cwd + "/../agent-hooks-protocol/interop/lifecycle-scenarios.json",
     "utf8",
   ),
-).scenarios;
+).scenarios.map(canonicalLifecycleFixture);
 // Local compatibility with the old pinned central schedule: §9 makes
 // observations operation-owned, so cancellation starts no new observer work.
 // Keep the adversarial intercept/cancellation schedule unchanged; only the
@@ -560,8 +561,8 @@ test("application rejects unavailable content before public observe handling", a
     event.items = [
       {
         id: "missing",
-        kind: "text",
-        mediaType: "text/plain",
+        kind: "attachment",
+        mediaType: "application/octet-stream",
         selection: "body",
         body: {
           ref: "urn:missing:content",
@@ -627,8 +628,8 @@ test("cached Hooks associate concurrent upload confirmations with exact deliveri
     row.requests[key].params.event.items = [
       {
         id: `item-${key}`,
-        kind: "text",
-        mediaType: "text/plain",
+        kind: "attachment",
+        mediaType: "application/octet-stream",
         selection: "body",
         body: { ref: descriptor.ref },
       },

@@ -114,8 +114,7 @@ test("public sender never inherits event Authorization when upload auth is omitt
       items: [
         {
           id: "body-item",
-          kind: "text",
-          role: "user",
+          kind: "attachment",
           mediaType: "application/octet-stream",
           body: new ReadableStream({
             start(controller) {

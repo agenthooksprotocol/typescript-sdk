@@ -102,7 +102,7 @@ for (const name of ["compaction", "elicitation"])
           );
           assert.equal(response.status, 401);
           if (name === "compaction") {
-            // Exercise the real compaction boundary: SDK uploads before dispatch.
+            // Exercise the real compaction boundary with inline instructions.
             const client = new Hooks(
               {
                 protocolVersion: "draft",
@@ -143,21 +143,18 @@ for (const name of ["compaction", "elicitation"])
               const result = await client.dispatch("context.compact.before", {
                 trigger: "manual",
                 items: [],
-                instructions: {
-                  id: "instructions",
-                  kind: "instructions",
-                  role: "system",
-                  mediaType: "text/plain",
-                  body: new ReadableStream({
-                    start(controller) {
-                      controller.enqueue(Buffer.from("changed"));
-                      controller.close();
-                    },
-                  }),
-                },
+                instructions: [
+                  {
+                    id: "instructions",
+                    kind: "text",
+                    mediaType: "text/plain",
+                    selection: "body",
+                    text: "changed",
+                  },
+                ],
               });
               assert.deepEqual(result.errors, []);
-              assert.deepEqual(result.response.effects ?? [], []);
+              assert.deepEqual(result.response.result.effects, []);
             } finally {
               await client.close();
             }

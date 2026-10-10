@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { Hooks, ContentSource } from "agenthooksprotocol/client";
 
 const input = () => ({
+  items: [],
   call: { id: "call" },
   path: "native",
   tool: { name: "test", origin: "native", input: { x: 1 } },
@@ -236,7 +237,7 @@ for (const early of ["unmatched", "invalid", "cancelled"])
       ],
       ...(early === "invalid" ? { capabilities: {} } : {}),
     });
-    const value = { ...input(), native: { source } };
+    const value = { ...input(), items: [{ id: "body", kind: "attachment", mediaType: "application/octet-stream", body: source }] };
     const controller = new AbortController();
     if (early === "cancelled") controller.abort();
     try {
@@ -360,7 +361,7 @@ test("outer budget stops selected content preparation before upload or publicati
       {
         ...input(),
         items: [
-          { id: "body", kind: "text", mediaType: "text/plain", body: source },
+          { id: "body", kind: "attachment", mediaType: "application/octet-stream", body: source },
         ],
       },
       { signal: controller.signal },

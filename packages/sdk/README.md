@@ -63,8 +63,7 @@ JavaScript numbers: numeric token spelling and integers above the safe range
 cannot be preserved exactly by JavaScript JSON parsing. Non-finite values are
 rejected. Use strings for application-owned exact large numeric identifiers.
 
-Migration: the query APIs are additive. Object-input parsing now rejects class
-instances, sparse arrays, cycles, accessors, and non-JSON properties rather than
-silently discarding them. Pass plain JSON data instead. Generated model aliases
-remain static types; constructors/helpers do not claim runtime validation or
+Object-input parsing requires plain JSON data. Class instances, sparse arrays,
+cycles, accessors, and non-JSON properties are rejected. Generated model aliases
+are static types; constructors and helpers do not claim runtime validation or
 authorization. Native untyped decoding is outside this contract.

@@ -77,6 +77,57 @@ type SchemaNode =
   | { kind: "intersection"; variants: SchemaNode[] }
   | { kind: "ref"; name: string };
 
+/** Source: schema/draft/content-item.schema.json#/$defs/attachmentBodyPart */
+export type AttachmentBodyPart = {
+  body: ContentReference;
+  category?: string;
+  id: string;
+  kind: "attachment";
+  mediaType: string;
+  selection: "body";
+  synthesized?: boolean;
+} & AdditionalProperties;
+
+/** Source: schema/draft/content-item.schema.json#/$defs/attachmentGapPart */
+export type AttachmentGapPart = {
+  category?: string;
+  gap: {
+    path?: string;
+    reason: string;
+  } & AdditionalProperties;
+  id: string;
+  kind: "attachment";
+  mediaType: string;
+  selection: "body";
+  sha256?: string;
+  size?: number;
+  synthesized?: boolean;
+} & AdditionalProperties;
+
+/** Source: schema/draft/content-item.schema.json#/$defs/attachmentMetadataPart */
+export type AttachmentMetadataPart = {
+  category?: string;
+  id: string;
+  kind: "attachment";
+  mediaType: string;
+  selection: "metadata";
+  sha256?: string;
+  size?: number;
+  synthesized?: boolean;
+} & AdditionalProperties;
+
+/** Source: schema/draft/content-item.schema.json#/$defs/attachmentOmittedPart */
+export type AttachmentOmittedPart = {
+  category?: string;
+  id: string;
+  kind: "attachment";
+  mediaType: string;
+  selection: "omit";
+  sha256?: string;
+  size?: number;
+  synthesized?: boolean;
+} & AdditionalProperties;
+
 /** Source: schema/draft/registration.schema.json#/$defs/authentication */
 export type Authentication =
   | ({
@@ -111,6 +162,17 @@ export type Backend = {
   >;
   transport: StdioTransport | HttpTransport | UnknownVariant<"type">;
 } & AdditionalProperties;
+
+/** Source: schema/draft/content-item.schema.json#/$defs/message */
+export type CanonicalMessage = {
+  id: string;
+  parts: Array<ContentItem>;
+  role: OpenString<"system" | "developer" | "user" | "assistant" | "tool">;
+  synthesized?: boolean;
+} & AdditionalProperties;
+
+/** Source: schema/draft/content-item.schema.json#/$defs/messages */
+export type CanonicalMessages = Array<CanonicalMessage>;
 
 /** Source: schema/draft/capabilities.schema.json# */
 export type Capabilities = {
@@ -422,57 +484,14 @@ export type ConfigChangeBeforeEvent = {
 
 /** Source: schema/draft/content-item.schema.json# */
 export type ContentItem =
-  | ({
-      body: ContentReference;
-      category?: string;
-      id: string;
-      kind: string;
-      mediaType: string;
-      parentItemId?: string;
-      role?: string;
-      selection: "body";
-      synthesized?: boolean;
-    } & AdditionalProperties)
-  | ({
-      category?: string;
-      gap: {
-        path?: string;
-        reason: string;
-      } & AdditionalProperties;
-      id: string;
-      kind: string;
-      mediaType: string;
-      parentItemId?: string;
-      role?: string;
-      selection: "body";
-      sha256?: string;
-      size?: number;
-      synthesized?: boolean;
-    } & AdditionalProperties)
-  | ({
-      category?: string;
-      id: string;
-      kind: string;
-      mediaType: string;
-      parentItemId?: string;
-      role?: string;
-      selection: "metadata";
-      sha256?: string;
-      size?: number;
-      synthesized?: boolean;
-    } & AdditionalProperties)
-  | ({
-      category?: string;
-      id: string;
-      kind: string;
-      mediaType: string;
-      parentItemId?: string;
-      role?: string;
-      selection: "omit";
-      sha256?: string;
-      size?: number;
-      synthesized?: boolean;
-    } & AdditionalProperties);
+  | TextBodyPart
+  | TextGapPart
+  | TextMetadataPart
+  | TextOmittedPart
+  | AttachmentBodyPart
+  | AttachmentGapPart
+  | AttachmentMetadataPart
+  | AttachmentOmittedPart;
 
 /** Source: schema/draft/content-reference.schema.json# */
 export type ContentReference = {
@@ -581,7 +600,7 @@ export type Effect =
       operation: "append";
       target: "context";
       type: "inject";
-      value: JsonValue;
+      value: CanonicalMessages;
     } & AdditionalProperties);
 
 /** Source: schema/draft/event.schema.json# */
@@ -681,7 +700,7 @@ export type ExecutionEventContextCompactAfter = {
   >;
   session?: Session;
   source: string;
-  summary: ModelVisibleItem;
+  summary: TextParts;
   synthesized?: boolean;
   time: string;
   tokenCounts?: ExecutionEventTokencounts;
@@ -702,7 +721,7 @@ export type ExecutionEventContextCompactBefore = {
     } & AdditionalProperties
   >;
   id: string;
-  instructions?: ContentItem;
+  instructions?: TextParts;
   items: Array<ModelVisibleItem>;
   native?: NativeEvent;
   parentEventId?: string;
@@ -1421,8 +1440,8 @@ export type InteractionEventHookFailure = {
 export type InteractionEventUserAttention = {
   attention: {
     kind: string;
-    message: Array<ContentItem>;
-    title: Array<ContentItem>;
+    message: TextParts;
+    title: TextParts;
   } & AdditionalProperties;
   type: "user.attention";
 } & AdditionalProperties;
@@ -1431,9 +1450,7 @@ export type InteractionEventUserAttention = {
 export type InteractionEventUserElicitationRequest = {
   elicitation: {
     mode: OpenString<"form" | "url">;
-    request?: ContentItem & {
-      mediaType?: "application/json";
-    } & AdditionalProperties;
+    request?: TextPart;
     server: string;
   } & AdditionalProperties;
   type: "user.elicitation.request";
@@ -1444,9 +1461,7 @@ export type InteractionEventUserElicitationResult = {
   elicitation: {
     action: OpenString<"accept" | "decline" | "cancel">;
     mode: OpenString<"form" | "url">;
-    result?: ContentItem & {
-      mediaType?: "application/json";
-    } & AdditionalProperties;
+    result?: TextPart;
     server: string;
   } & AdditionalProperties;
   type: "user.elicitation.result";
@@ -1456,8 +1471,12 @@ export type InteractionEventUserElicitationResult = {
 export type InteractionEventUserMessageInbound = {
   message: {
     channel: string;
+    messages: Array<
+      CanonicalMessage & {
+        role?: "user";
+      } & AdditionalProperties
+    >;
     sender: string;
-    text: Array<ContentItem>;
   } & AdditionalProperties;
   type: "user.message.inbound";
 } & AdditionalProperties;
@@ -1466,7 +1485,11 @@ export type InteractionEventUserMessageInbound = {
 export type InteractionEventUserMessageOutbound = {
   message: {
     channel: string;
-    payload: Array<ContentItem>;
+    messages: Array<
+      CanonicalMessage & {
+        role?: "assistant";
+      } & AdditionalProperties
+    >;
   } & AdditionalProperties;
   type: "user.message.outbound";
 } & AdditionalProperties;
@@ -1812,9 +1835,7 @@ export type ModelSwitchBeforeCapabilities = Capabilities & {
 export type ModelSwitchBeforeEvent = ExecutionEventModelSwitchBefore;
 
 /** Source: schema/draft/content-item.schema.json#/$defs/modelVisibleItem */
-export type ModelVisibleItem = ContentItem & {
-  role: string;
-} & AdditionalProperties;
+export type ModelVisibleItem = CanonicalMessage;
 
 /** Source: schema/draft/common.schema.json#/$defs/native */
 export type NativeEvent = JsonValue;
@@ -2077,9 +2098,9 @@ export type TaskWorkspaceEvent =
 export type TaskWorkspaceEventFileChanged = {
   changes: Array<
     {
-      after?: ContentReference;
+      after?: ContentItem;
       agentCaused: boolean;
-      before?: ContentReference;
+      before?: ContentItem;
       operation: OpenString<"create" | "update" | "remove">;
       path: string;
     } & AdditionalProperties
@@ -2241,6 +2262,67 @@ export type TaskWorkspaceEventWorkspaceChangeBefore = {
     reason?: string;
   } & AdditionalProperties;
 } & AdditionalProperties;
+
+/** Source: schema/draft/content-item.schema.json#/$defs/textBodyPart */
+export type TextBodyPart = {
+  category?: string;
+  id: string;
+  kind: "text";
+  mediaType: "text/plain";
+  selection: "body";
+  synthesized?: boolean;
+  text: string;
+} & AdditionalProperties;
+
+/** Source: schema/draft/content-item.schema.json#/$defs/textGapPart */
+export type TextGapPart = {
+  category?: string;
+  gap: {
+    path?: string;
+    reason: string;
+  } & AdditionalProperties;
+  id: string;
+  kind: "text";
+  mediaType: "text/plain";
+  selection: "body";
+  sha256?: string;
+  size?: number;
+  synthesized?: boolean;
+} & AdditionalProperties;
+
+/** Source: schema/draft/content-item.schema.json#/$defs/textMetadataPart */
+export type TextMetadataPart = {
+  category?: string;
+  id: string;
+  kind: "text";
+  mediaType: "text/plain";
+  selection: "metadata";
+  sha256?: string;
+  size?: number;
+  synthesized?: boolean;
+} & AdditionalProperties;
+
+/** Source: schema/draft/content-item.schema.json#/$defs/textOmittedPart */
+export type TextOmittedPart = {
+  category?: string;
+  id: string;
+  kind: "text";
+  mediaType: "text/plain";
+  selection: "omit";
+  sha256?: string;
+  size?: number;
+  synthesized?: boolean;
+} & AdditionalProperties;
+
+/** Source: schema/draft/content-item.schema.json#/$defs/textPart */
+export type TextPart =
+  | TextBodyPart
+  | TextGapPart
+  | TextMetadataPart
+  | TextOmittedPart;
+
+/** Source: schema/draft/content-item.schema.json#/$defs/textParts */
+export type TextParts = Array<TextPart>;
 
 /** Source: schema/draft/capabilities.schema.json#/$defs/tool.after */
 export type ToolAfterCapabilities = Capabilities & {
@@ -2570,6 +2652,295 @@ export type WorkspaceChangeBeforeEvent =
   TaskWorkspaceEventWorkspaceChangeBefore;
 
 const SCHEMAS: Record<string, SchemaNode> = {
+  AttachmentBodyPart: {
+    additional: {
+      kind: "forbidden",
+    },
+    forbidden_property_sets: [["sha256"], ["size"]],
+    kind: "object",
+    properties: [
+      {
+        required: true,
+        shape: {
+          kind: "ref",
+          name: "ContentReference",
+        },
+        wire_name: "body",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "category",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "id",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "attachment",
+        },
+        wire_name: "kind",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "mediaType",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "body",
+        },
+        wire_name: "selection",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "boolean",
+        },
+        wire_name: "synthesized",
+      },
+    ],
+  },
+  AttachmentGapPart: {
+    additional: {
+      kind: "forbidden",
+    },
+    forbidden_property_sets: [],
+    kind: "object",
+    properties: [
+      {
+        required: false,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "category",
+      },
+      {
+        required: true,
+        shape: {
+          additional: {
+            kind: "forbidden",
+          },
+          forbidden_property_sets: [],
+          kind: "object",
+          properties: [
+            {
+              required: false,
+              shape: {
+                kind: "string",
+              },
+              wire_name: "path",
+            },
+            {
+              required: true,
+              shape: {
+                kind: "string",
+              },
+              wire_name: "reason",
+            },
+          ],
+        },
+        wire_name: "gap",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "id",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "attachment",
+        },
+        wire_name: "kind",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "mediaType",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "body",
+        },
+        wire_name: "selection",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "sha256",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "integer",
+        },
+        wire_name: "size",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "boolean",
+        },
+        wire_name: "synthesized",
+      },
+    ],
+  },
+  AttachmentMetadataPart: {
+    additional: {
+      kind: "forbidden",
+    },
+    forbidden_property_sets: [],
+    kind: "object",
+    properties: [
+      {
+        required: false,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "category",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "id",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "attachment",
+        },
+        wire_name: "kind",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "mediaType",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "metadata",
+        },
+        wire_name: "selection",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "sha256",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "integer",
+        },
+        wire_name: "size",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "boolean",
+        },
+        wire_name: "synthesized",
+      },
+    ],
+  },
+  AttachmentOmittedPart: {
+    additional: {
+      kind: "forbidden",
+    },
+    forbidden_property_sets: [],
+    kind: "object",
+    properties: [
+      {
+        required: false,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "category",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "id",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "attachment",
+        },
+        wire_name: "kind",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "mediaType",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "omit",
+        },
+        wire_name: "selection",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "sha256",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "integer",
+        },
+        wire_name: "size",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "boolean",
+        },
+        wire_name: "synthesized",
+      },
+    ],
+  },
   Authentication: {
     kind: "union",
     mode: "anyOf",
@@ -2779,6 +3150,56 @@ const SCHEMAS: Record<string, SchemaNode> = {
         wire_name: "transport",
       },
     ],
+  },
+  CanonicalMessage: {
+    additional: {
+      kind: "forbidden",
+    },
+    forbidden_property_sets: [],
+    kind: "object",
+    properties: [
+      {
+        required: true,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "id",
+      },
+      {
+        required: true,
+        shape: {
+          items: {
+            kind: "ref",
+            name: "ContentItem",
+          },
+          kind: "array",
+        },
+        wire_name: "parts",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "enum",
+          open_strings: true,
+          values: ["system", "developer", "user", "assistant", "tool"],
+        },
+        wire_name: "role",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "boolean",
+        },
+        wire_name: "synthesized",
+      },
+    ],
+  },
+  CanonicalMessages: {
+    items: {
+      kind: "ref",
+      name: "CanonicalMessage",
+    },
+    kind: "array",
   },
   Capabilities: {
     additional: {
@@ -4403,345 +4824,36 @@ const SCHEMAS: Record<string, SchemaNode> = {
     mode: "oneOf",
     variants: [
       {
-        additional: {
-          kind: "forbidden",
-        },
-        forbidden_property_sets: [["sha256"], ["size"]],
-        kind: "object",
-        properties: [
-          {
-            required: true,
-            shape: {
-              kind: "ref",
-              name: "ContentReference",
-            },
-            wire_name: "body",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "category",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "id",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "kind",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "mediaType",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "parentItemId",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "role",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "literal",
-              value: "body",
-            },
-            wire_name: "selection",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "boolean",
-            },
-            wire_name: "synthesized",
-          },
-        ],
+        kind: "ref",
+        name: "TextBodyPart",
       },
       {
-        additional: {
-          kind: "forbidden",
-        },
-        forbidden_property_sets: [],
-        kind: "object",
-        properties: [
-          {
-            required: false,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "category",
-          },
-          {
-            required: true,
-            shape: {
-              additional: {
-                kind: "forbidden",
-              },
-              forbidden_property_sets: [],
-              kind: "object",
-              properties: [
-                {
-                  required: false,
-                  shape: {
-                    kind: "string",
-                  },
-                  wire_name: "path",
-                },
-                {
-                  required: true,
-                  shape: {
-                    kind: "string",
-                  },
-                  wire_name: "reason",
-                },
-              ],
-            },
-            wire_name: "gap",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "id",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "kind",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "mediaType",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "parentItemId",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "role",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "literal",
-              value: "body",
-            },
-            wire_name: "selection",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "sha256",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "integer",
-            },
-            wire_name: "size",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "boolean",
-            },
-            wire_name: "synthesized",
-          },
-        ],
+        kind: "ref",
+        name: "TextGapPart",
       },
       {
-        additional: {
-          kind: "forbidden",
-        },
-        forbidden_property_sets: [],
-        kind: "object",
-        properties: [
-          {
-            required: false,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "category",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "id",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "kind",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "mediaType",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "parentItemId",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "role",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "literal",
-              value: "metadata",
-            },
-            wire_name: "selection",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "sha256",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "integer",
-            },
-            wire_name: "size",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "boolean",
-            },
-            wire_name: "synthesized",
-          },
-        ],
+        kind: "ref",
+        name: "TextMetadataPart",
       },
       {
-        additional: {
-          kind: "forbidden",
-        },
-        forbidden_property_sets: [],
-        kind: "object",
-        properties: [
-          {
-            required: false,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "category",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "id",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "kind",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "mediaType",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "parentItemId",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "role",
-          },
-          {
-            required: true,
-            shape: {
-              kind: "literal",
-              value: "omit",
-            },
-            wire_name: "selection",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "sha256",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "integer",
-            },
-            wire_name: "size",
-          },
-          {
-            required: false,
-            shape: {
-              kind: "boolean",
-            },
-            wire_name: "synthesized",
-          },
-        ],
+        kind: "ref",
+        name: "TextOmittedPart",
+      },
+      {
+        kind: "ref",
+        name: "AttachmentBodyPart",
+      },
+      {
+        kind: "ref",
+        name: "AttachmentGapPart",
+      },
+      {
+        kind: "ref",
+        name: "AttachmentMetadataPart",
+      },
+      {
+        kind: "ref",
+        name: "AttachmentOmittedPart",
       },
     ],
   },
@@ -5281,7 +5393,8 @@ const SCHEMAS: Record<string, SchemaNode> = {
           {
             required: true,
             shape: {
-              kind: "any",
+              kind: "ref",
+              name: "CanonicalMessages",
             },
             wire_name: "value",
           },
@@ -5725,7 +5838,7 @@ const SCHEMAS: Record<string, SchemaNode> = {
         required: true,
         shape: {
           kind: "ref",
-          name: "ModelVisibleItem",
+          name: "TextParts",
         },
         wire_name: "summary",
       },
@@ -5847,7 +5960,7 @@ const SCHEMAS: Record<string, SchemaNode> = {
             required: false,
             shape: {
               kind: "ref",
-              name: "ContentItem",
+              name: "TextParts",
             },
             wire_name: "instructions",
           },
@@ -10142,22 +10255,16 @@ const SCHEMAS: Record<string, SchemaNode> = {
             {
               required: true,
               shape: {
-                items: {
-                  kind: "ref",
-                  name: "ContentItem",
-                },
-                kind: "array",
+                kind: "ref",
+                name: "TextParts",
               },
               wire_name: "message",
             },
             {
               required: true,
               shape: {
-                items: {
-                  kind: "ref",
-                  name: "ContentItem",
-                },
-                kind: "array",
+                kind: "ref",
+                name: "TextParts",
               },
               wire_name: "title",
             },
@@ -10203,30 +10310,8 @@ const SCHEMAS: Record<string, SchemaNode> = {
             {
               required: false,
               shape: {
-                kind: "intersection",
-                variants: [
-                  {
-                    kind: "ref",
-                    name: "ContentItem",
-                  },
-                  {
-                    additional: {
-                      kind: "allowed",
-                    },
-                    forbidden_property_sets: [],
-                    kind: "object",
-                    properties: [
-                      {
-                        required: false,
-                        shape: {
-                          kind: "literal",
-                          value: "application/json",
-                        },
-                        wire_name: "mediaType",
-                      },
-                    ],
-                  },
-                ],
+                kind: "ref",
+                name: "TextPart",
               },
               wire_name: "request",
             },
@@ -10288,30 +10373,8 @@ const SCHEMAS: Record<string, SchemaNode> = {
             {
               required: false,
               shape: {
-                kind: "intersection",
-                variants: [
-                  {
-                    kind: "ref",
-                    name: "ContentItem",
-                  },
-                  {
-                    additional: {
-                      kind: "allowed",
-                    },
-                    forbidden_property_sets: [],
-                    kind: "object",
-                    properties: [
-                      {
-                        required: false,
-                        shape: {
-                          kind: "literal",
-                          value: "application/json",
-                        },
-                        wire_name: "mediaType",
-                      },
-                    ],
-                  },
-                ],
+                kind: "ref",
+                name: "TextPart",
               },
               wire_name: "result",
             },
@@ -10362,20 +10425,42 @@ const SCHEMAS: Record<string, SchemaNode> = {
             {
               required: true,
               shape: {
-                kind: "string",
+                items: {
+                  kind: "intersection",
+                  variants: [
+                    {
+                      kind: "ref",
+                      name: "CanonicalMessage",
+                    },
+                    {
+                      additional: {
+                        kind: "allowed",
+                      },
+                      forbidden_property_sets: [],
+                      kind: "object",
+                      properties: [
+                        {
+                          required: false,
+                          shape: {
+                            kind: "literal",
+                            value: "user",
+                          },
+                          wire_name: "role",
+                        },
+                      ],
+                    },
+                  ],
+                },
+                kind: "array",
               },
-              wire_name: "sender",
+              wire_name: "messages",
             },
             {
               required: true,
               shape: {
-                items: {
-                  kind: "ref",
-                  name: "ContentItem",
-                },
-                kind: "array",
+                kind: "string",
               },
-              wire_name: "text",
+              wire_name: "sender",
             },
           ],
         },
@@ -10418,12 +10503,34 @@ const SCHEMAS: Record<string, SchemaNode> = {
               required: true,
               shape: {
                 items: {
-                  kind: "ref",
-                  name: "ContentItem",
+                  kind: "intersection",
+                  variants: [
+                    {
+                      kind: "ref",
+                      name: "CanonicalMessage",
+                    },
+                    {
+                      additional: {
+                        kind: "allowed",
+                      },
+                      forbidden_property_sets: [],
+                      kind: "object",
+                      properties: [
+                        {
+                          required: false,
+                          shape: {
+                            kind: "literal",
+                            value: "assistant",
+                          },
+                          wire_name: "role",
+                        },
+                      ],
+                    },
+                  ],
                 },
                 kind: "array",
               },
-              wire_name: "payload",
+              wire_name: "messages",
             },
           ],
         },
@@ -12436,29 +12543,8 @@ const SCHEMAS: Record<string, SchemaNode> = {
     name: "ExecutionEventModelSwitchBefore",
   },
   ModelVisibleItem: {
-    kind: "intersection",
-    variants: [
-      {
-        kind: "ref",
-        name: "ContentItem",
-      },
-      {
-        additional: {
-          kind: "allowed",
-        },
-        forbidden_property_sets: [],
-        kind: "object",
-        properties: [
-          {
-            required: true,
-            shape: {
-              kind: "string",
-            },
-            wire_name: "role",
-          },
-        ],
-      },
-    ],
+    kind: "ref",
+    name: "CanonicalMessage",
   },
   NativeEvent: {
     kind: "any",
@@ -13612,7 +13698,7 @@ const SCHEMAS: Record<string, SchemaNode> = {
                 required: false,
                 shape: {
                   kind: "ref",
-                  name: "ContentReference",
+                  name: "ContentItem",
                 },
                 wire_name: "after",
               },
@@ -13627,7 +13713,7 @@ const SCHEMAS: Record<string, SchemaNode> = {
                 required: false,
                 shape: {
                   kind: "ref",
-                  name: "ContentReference",
+                  name: "ContentItem",
                 },
                 wire_name: "before",
               },
@@ -14677,6 +14763,327 @@ const SCHEMAS: Record<string, SchemaNode> = {
         wire_name: "workspace",
       },
     ],
+  },
+  TextBodyPart: {
+    additional: {
+      kind: "forbidden",
+    },
+    forbidden_property_sets: [["sha256"], ["size"]],
+    kind: "object",
+    properties: [
+      {
+        required: false,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "category",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "id",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "text",
+        },
+        wire_name: "kind",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "text/plain",
+        },
+        wire_name: "mediaType",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "body",
+        },
+        wire_name: "selection",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "boolean",
+        },
+        wire_name: "synthesized",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "text",
+      },
+    ],
+  },
+  TextGapPart: {
+    additional: {
+      kind: "forbidden",
+    },
+    forbidden_property_sets: [],
+    kind: "object",
+    properties: [
+      {
+        required: false,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "category",
+      },
+      {
+        required: true,
+        shape: {
+          additional: {
+            kind: "forbidden",
+          },
+          forbidden_property_sets: [],
+          kind: "object",
+          properties: [
+            {
+              required: false,
+              shape: {
+                kind: "string",
+              },
+              wire_name: "path",
+            },
+            {
+              required: true,
+              shape: {
+                kind: "string",
+              },
+              wire_name: "reason",
+            },
+          ],
+        },
+        wire_name: "gap",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "id",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "text",
+        },
+        wire_name: "kind",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "text/plain",
+        },
+        wire_name: "mediaType",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "body",
+        },
+        wire_name: "selection",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "sha256",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "integer",
+        },
+        wire_name: "size",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "boolean",
+        },
+        wire_name: "synthesized",
+      },
+    ],
+  },
+  TextMetadataPart: {
+    additional: {
+      kind: "forbidden",
+    },
+    forbidden_property_sets: [],
+    kind: "object",
+    properties: [
+      {
+        required: false,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "category",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "id",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "text",
+        },
+        wire_name: "kind",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "text/plain",
+        },
+        wire_name: "mediaType",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "metadata",
+        },
+        wire_name: "selection",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "sha256",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "integer",
+        },
+        wire_name: "size",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "boolean",
+        },
+        wire_name: "synthesized",
+      },
+    ],
+  },
+  TextOmittedPart: {
+    additional: {
+      kind: "forbidden",
+    },
+    forbidden_property_sets: [],
+    kind: "object",
+    properties: [
+      {
+        required: false,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "category",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "id",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "text",
+        },
+        wire_name: "kind",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "text/plain",
+        },
+        wire_name: "mediaType",
+      },
+      {
+        required: true,
+        shape: {
+          kind: "literal",
+          value: "omit",
+        },
+        wire_name: "selection",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "string",
+        },
+        wire_name: "sha256",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "integer",
+        },
+        wire_name: "size",
+      },
+      {
+        required: false,
+        shape: {
+          kind: "boolean",
+        },
+        wire_name: "synthesized",
+      },
+    ],
+  },
+  TextPart: {
+    kind: "union",
+    mode: "oneOf",
+    variants: [
+      {
+        kind: "ref",
+        name: "TextBodyPart",
+      },
+      {
+        kind: "ref",
+        name: "TextGapPart",
+      },
+      {
+        kind: "ref",
+        name: "TextMetadataPart",
+      },
+      {
+        kind: "ref",
+        name: "TextOmittedPart",
+      },
+    ],
+  },
+  TextParts: {
+    items: {
+      kind: "ref",
+      name: "TextPart",
+    },
+    kind: "array",
   },
   ToolAfterCapabilities: {
     kind: "intersection",
@@ -17275,7 +17682,7 @@ export type ContextCompactAfterInput = {
     } & AdditionalProperties
   >;
   session?: Session;
-  summary: ModelVisibleItem;
+  summary: TextParts;
   synthesized?: boolean;
   time?: string;
   tokenCounts?: ExecutionEventTokencounts;
@@ -17293,7 +17700,7 @@ export type ContextCompactBeforeInput = {
     } & AdditionalProperties
   >;
   id?: string;
-  instructions?: ContentItem;
+  instructions?: TextParts;
   items: Array<ModelVisibleItem>;
   native?: NativeEvent;
   parentEventId?: string;
@@ -17310,9 +17717,9 @@ export type ContextCompactBeforeInput = {
 export type FileChangedInput = {
   changes: Array<
     {
-      after?: ContentReference;
+      after?: ContentItem;
       agentCaused: boolean;
-      before?: ContentReference;
+      before?: ContentItem;
       operation: OpenString<"create" | "update" | "remove">;
       path: string;
     } & AdditionalProperties
@@ -17898,8 +18305,8 @@ export type TurnStartInput = {
 export type UserAttentionInput = {
   attention: {
     kind: string;
-    message: Array<ContentItem>;
-    title: Array<ContentItem>;
+    message: TextParts;
+    title: TextParts;
   } & AdditionalProperties;
   extensions?: Extensions;
   gaps?: Array<
@@ -17923,9 +18330,7 @@ export type UserAttentionInput = {
 export type UserElicitationRequestInput = {
   elicitation: {
     mode: OpenString<"form" | "url">;
-    request?: ContentItem & {
-      mediaType?: "application/json";
-    } & AdditionalProperties;
+    request?: TextPart;
     server: string;
   } & AdditionalProperties;
   extensions?: Extensions;
@@ -17951,9 +18356,7 @@ export type UserElicitationResultInput = {
   elicitation: {
     action: OpenString<"accept" | "decline" | "cancel">;
     mode: OpenString<"form" | "url">;
-    result?: ContentItem & {
-      mediaType?: "application/json";
-    } & AdditionalProperties;
+    result?: TextPart;
     server: string;
   } & AdditionalProperties;
   extensions?: Extensions;
@@ -17987,8 +18390,12 @@ export type UserMessageInboundInput = {
   items?: Array<ContentItem>;
   message: {
     channel: string;
+    messages: Array<
+      CanonicalMessage & {
+        role?: "user";
+      } & AdditionalProperties
+    >;
     sender: string;
-    text: Array<ContentItem>;
   } & AdditionalProperties;
   native?: NativeEvent;
   parentEventId?: string;
@@ -18012,7 +18419,11 @@ export type UserMessageOutboundInput = {
   items?: Array<ContentItem>;
   message: {
     channel: string;
-    payload: Array<ContentItem>;
+    messages: Array<
+      CanonicalMessage & {
+        role?: "assistant";
+      } & AdditionalProperties
+    >;
   } & AdditionalProperties;
   native?: NativeEvent;
   parentEventId?: string;
@@ -18712,27 +19123,19 @@ export const contentSlots = {
       return { path: ["items", index], source };
     },
   },
-  "context.compact.after": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-    summary<S>(source: S): ContentSourceBinding<S> {
-      return { path: ["summary"], source };
-    },
-  },
-  "context.compact.before": {
-    instructions<S>(source: S): ContentSourceBinding<S> {
-      return { path: ["instructions"], source };
-    },
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
+  "context.compact.after": {},
+  "context.compact.before": {},
   "file.changed": {
+    changesAfter<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["changes", index, "after"], source };
+    },
+    changesBefore<S>(index: number, source: S): ContentSourceBinding<S> {
+      if (!Number.isSafeInteger(index) || index < 0)
+        throw new RangeError("content index must be a nonnegative integer");
+      return { path: ["changes", index, "before"], source };
+    },
     items<S>(index: number, source: S): ContentSourceBinding<S> {
       if (!Number.isSafeInteger(index) || index < 0)
         throw new RangeError("content index must be a nonnegative integer");
@@ -18753,20 +19156,8 @@ export const contentSlots = {
       return { path: ["items", index], source };
     },
   },
-  "model.request.before": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "model.response.after": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
+  "model.request.before": {},
+  "model.response.after": {},
   "model.switch.after": {
     items<S>(index: number, source: S): ContentSourceBinding<S> {
       if (!Number.isSafeInteger(index) || index < 0)
@@ -18788,13 +19179,7 @@ export const contentSlots = {
       return { path: ["items", index], source };
     },
   },
-  "session.start": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
+  "session.start": {},
   "task.change.after": {
     items<S>(index: number, source: S): ContentSourceBinding<S> {
       if (!Number.isSafeInteger(index) || index < 0)
@@ -18819,11 +19204,6 @@ export const contentSlots = {
       if (!Number.isSafeInteger(index) || index < 0)
         throw new RangeError("content index must be a nonnegative integer");
       return { path: ["fileChanges", index, "before"], source };
-    },
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
     },
   },
   "tool.batch.after": {
@@ -18860,52 +19240,18 @@ export const contentSlots = {
         throw new RangeError("content index must be a nonnegative integer");
       return { path: ["items", index], source };
     },
-    partialOutput<S>(source: S): ContentSourceBinding<S> {
-      return { path: ["partialOutput"], source };
-    },
   },
-  "turn.end": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "turn.finish.before": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
+  "turn.end": {},
+  "turn.finish.before": {},
   "turn.progress": {
-    delta<S>(source: S): ContentSourceBinding<S> {
-      return { path: ["delta"], source };
-    },
     items<S>(index: number, source: S): ContentSourceBinding<S> {
       if (!Number.isSafeInteger(index) || index < 0)
         throw new RangeError("content index must be a nonnegative integer");
       return { path: ["items", index], source };
     },
   },
-  "turn.start": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
+  "turn.start": {},
   "user.attention": {
-    attentionMessage<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["attention", "message", index], source };
-    },
-    attentionTitle<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["attention", "title", index], source };
-    },
     items<S>(index: number, source: S): ContentSourceBinding<S> {
       if (!Number.isSafeInteger(index) || index < 0)
         throw new RangeError("content index must be a nonnegative integer");
@@ -18913,9 +19259,6 @@ export const contentSlots = {
     },
   },
   "user.elicitation.request": {
-    elicitationRequest<S>(source: S): ContentSourceBinding<S> {
-      return { path: ["elicitation", "request"], source };
-    },
     items<S>(index: number, source: S): ContentSourceBinding<S> {
       if (!Number.isSafeInteger(index) || index < 0)
         throw new RangeError("content index must be a nonnegative integer");
@@ -18923,9 +19266,6 @@ export const contentSlots = {
     },
   },
   "user.elicitation.result": {
-    elicitationResult<S>(source: S): ContentSourceBinding<S> {
-      return { path: ["elicitation", "result"], source };
-    },
     items<S>(index: number, source: S): ContentSourceBinding<S> {
       if (!Number.isSafeInteger(index) || index < 0)
         throw new RangeError("content index must be a nonnegative integer");
@@ -18938,22 +19278,12 @@ export const contentSlots = {
         throw new RangeError("content index must be a nonnegative integer");
       return { path: ["items", index], source };
     },
-    messageText<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["message", "text", index], source };
-    },
   },
   "user.message.outbound": {
     items<S>(index: number, source: S): ContentSourceBinding<S> {
       if (!Number.isSafeInteger(index) || index < 0)
         throw new RangeError("content index must be a nonnegative integer");
       return { path: ["items", index], source };
-    },
-    messagePayload<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["message", "payload", index], source };
     },
   },
   "workspace.change.after": {
@@ -18971,6 +19301,881 @@ export const contentSlots = {
     },
   },
 } as const;
+
+/** Opaque host-only ownership handle. Wrapping never evaluates or inspects S. */
+declare const ownedAttachmentBrand: unique symbol;
+export interface OwnedAttachment<S> {
+  readonly [ownedAttachmentBrand]: S;
+}
+const ownedAttachmentSources = new WeakMap<object, unknown>();
+export function ownedAttachment<S>(source: S): OwnedAttachment<S> {
+  const handle = Object.freeze({});
+  ownedAttachmentSources.set(handle, source);
+  return handle as OwnedAttachment<S>;
+}
+export type HostTextPart = {
+  kind: "text";
+  text: string;
+  id?: string;
+  category?: string;
+  mediaType?: "text/plain";
+  selection?: "body";
+  synthesized?: boolean;
+};
+export type HostAttachmentPart<S> = {
+  kind: "attachment";
+  mediaType: string;
+  body: OwnedAttachment<S>;
+  id?: string;
+  category?: string;
+  selection?: "body";
+  synthesized?: boolean;
+};
+type HostPartFields =
+  | "id"
+  | "kind"
+  | "mediaType"
+  | "selection"
+  | "category"
+  | "synthesized";
+// Pick explicit keys to keep the host envelope closed even when wire models are open.
+type HostWirePart =
+  | Pick<TextGapPart, HostPartFields | "gap" | "size" | "sha256">
+  | Pick<TextMetadataPart, HostPartFields | "size" | "sha256">
+  | Pick<TextOmittedPart, HostPartFields | "size" | "sha256">
+  | Pick<AttachmentBodyPart, HostPartFields | "body">
+  | Pick<AttachmentGapPart, HostPartFields | "gap" | "size" | "sha256">
+  | Pick<AttachmentMetadataPart, HostPartFields | "size" | "sha256">
+  | Pick<AttachmentOmittedPart, HostPartFields | "size" | "sha256">;
+export type HostContentPart<S> =
+  | HostTextPart
+  | HostAttachmentPart<S>
+  | HostWirePart;
+export interface HostMessage<S> {
+  id?: string;
+  role: "system" | "developer" | "user" | "assistant" | "tool";
+  parts: HostContentPart<S>[];
+  synthesized?: boolean;
+}
+/** Only generated slot paths are replaced; application-owned payload types stay untouched. */
+type HostSlot<T, P extends readonly string[], S> = P extends readonly []
+  ? HostContentPart<S>
+  : P extends readonly ["parts", "*"]
+    ? HostMessage<S>
+    : P extends readonly [infer H extends string, ...infer R extends string[]]
+      ? H extends "*"
+        ? T extends (infer U)[]
+          ? HostSlot<U, R, S>[]
+          : T
+        : T extends object
+          ? { [K in keyof T]: K extends H ? HostSlot<T[K], R, S> : T[K] }
+          : T
+      : T;
+export interface HostEventInputs<S = unknown> {
+  "config.change.after": {
+    change: ConfigChangeAfterInput["change"];
+    extensions?: ConfigChangeAfterInput["extensions"];
+    gaps?: ConfigChangeAfterInput["gaps"];
+    id?: ConfigChangeAfterInput["id"];
+    items?: HostSlot<ConfigChangeAfterInput["items"], ["*"], S>;
+    native?: ConfigChangeAfterInput["native"];
+    parentEventId?: ConfigChangeAfterInput["parentEventId"];
+    session?: ConfigChangeAfterInput["session"];
+    synthesized?: ConfigChangeAfterInput["synthesized"];
+    time?: ConfigChangeAfterInput["time"];
+    turn?: ConfigChangeAfterInput["turn"];
+  };
+  "config.change.before": {
+    change: ConfigChangeBeforeInput["change"];
+    extensions?: ConfigChangeBeforeInput["extensions"];
+    gaps?: ConfigChangeBeforeInput["gaps"];
+    id?: ConfigChangeBeforeInput["id"];
+    items?: HostSlot<ConfigChangeBeforeInput["items"], ["*"], S>;
+    native?: ConfigChangeBeforeInput["native"];
+    parentEventId?: ConfigChangeBeforeInput["parentEventId"];
+    session?: ConfigChangeBeforeInput["session"];
+    synthesized?: ConfigChangeBeforeInput["synthesized"];
+    time?: ConfigChangeBeforeInput["time"];
+    turn?: ConfigChangeBeforeInput["turn"];
+  };
+  "context.compact.after": {
+    execution: ContextCompactAfterInput["execution"];
+    extensions?: ContextCompactAfterInput["extensions"];
+    gaps?: ContextCompactAfterInput["gaps"];
+    id?: ContextCompactAfterInput["id"];
+    items?: HostSlot<ContextCompactAfterInput["items"], ["*", "parts", "*"], S>;
+    native?: ContextCompactAfterInput["native"];
+    parentEventId?: ContextCompactAfterInput["parentEventId"];
+    removed: ContextCompactAfterInput["removed"];
+    session?: ContextCompactAfterInput["session"];
+    summary: ContextCompactAfterInput["summary"];
+    synthesized?: ContextCompactAfterInput["synthesized"];
+    time?: ContextCompactAfterInput["time"];
+    tokenCounts?: ContextCompactAfterInput["tokenCounts"];
+    turn?: ContextCompactAfterInput["turn"];
+  };
+  "context.compact.before": {
+    extensions?: ContextCompactBeforeInput["extensions"];
+    gaps?: ContextCompactBeforeInput["gaps"];
+    id?: ContextCompactBeforeInput["id"];
+    instructions?: ContextCompactBeforeInput["instructions"];
+    items: HostSlot<ContextCompactBeforeInput["items"], ["*", "parts", "*"], S>;
+    native?: ContextCompactBeforeInput["native"];
+    parentEventId?: ContextCompactBeforeInput["parentEventId"];
+    session?: ContextCompactBeforeInput["session"];
+    synthesized?: ContextCompactBeforeInput["synthesized"];
+    time?: ContextCompactBeforeInput["time"];
+    tokenCounts?: ContextCompactBeforeInput["tokenCounts"];
+    trigger: ContextCompactBeforeInput["trigger"];
+    turn?: ContextCompactBeforeInput["turn"];
+  };
+  "file.changed": {
+    changes: HostSlot<
+      HostSlot<FileChangedInput["changes"], ["*", "after"], S>,
+      ["*", "before"],
+      S
+    >;
+    extensions?: FileChangedInput["extensions"];
+    gaps?: FileChangedInput["gaps"];
+    id?: FileChangedInput["id"];
+    items?: HostSlot<FileChangedInput["items"], ["*"], S>;
+    native?: FileChangedInput["native"];
+    parentEventId?: FileChangedInput["parentEventId"];
+    session?: FileChangedInput["session"];
+    synthesized?: FileChangedInput["synthesized"];
+    time?: FileChangedInput["time"];
+    turn?: FileChangedInput["turn"];
+  };
+  "hook.failure": {
+    extensions?: HookFailureInput["extensions"];
+    failure: HookFailureInput["failure"];
+    gaps?: HookFailureInput["gaps"];
+    id?: HookFailureInput["id"];
+    items?: HostSlot<HookFailureInput["items"], ["*"], S>;
+    native?: HookFailureInput["native"];
+    parentEventId: HookFailureInput["parentEventId"];
+    session?: HookFailureInput["session"];
+    synthesized?: HookFailureInput["synthesized"];
+    time?: HookFailureInput["time"];
+    turn?: HookFailureInput["turn"];
+  };
+  "model.error": {
+    attempt: ModelErrorInput["attempt"];
+    error: ModelErrorInput["error"];
+    execution: ModelErrorInput["execution"];
+    extensions?: ModelErrorInput["extensions"];
+    gaps?: ModelErrorInput["gaps"];
+    id?: ModelErrorInput["id"];
+    items?: HostSlot<ModelErrorInput["items"], ["*"], S>;
+    latencyMs?: ModelErrorInput["latencyMs"];
+    model: ModelErrorInput["model"];
+    native?: ModelErrorInput["native"];
+    parentEventId?: ModelErrorInput["parentEventId"];
+    recovery?: ModelErrorInput["recovery"];
+    session?: ModelErrorInput["session"];
+    synthesized?: ModelErrorInput["synthesized"];
+    time?: ModelErrorInput["time"];
+    turn?: ModelErrorInput["turn"];
+    usage?: ModelErrorInput["usage"];
+  };
+  "model.request.before": {
+    attempt: ModelRequestBeforeInput["attempt"];
+    extensions?: ModelRequestBeforeInput["extensions"];
+    gaps?: ModelRequestBeforeInput["gaps"];
+    id?: ModelRequestBeforeInput["id"];
+    items: HostSlot<ModelRequestBeforeInput["items"], ["*", "parts", "*"], S>;
+    model: ModelRequestBeforeInput["model"];
+    native?: ModelRequestBeforeInput["native"];
+    params: ModelRequestBeforeInput["params"];
+    parentEventId?: ModelRequestBeforeInput["parentEventId"];
+    session?: ModelRequestBeforeInput["session"];
+    synthesized?: ModelRequestBeforeInput["synthesized"];
+    time?: ModelRequestBeforeInput["time"];
+    turn?: ModelRequestBeforeInput["turn"];
+  };
+  "model.response.after": {
+    attempt: ModelResponseAfterInput["attempt"];
+    execution: ModelResponseAfterInput["execution"];
+    extensions?: ModelResponseAfterInput["extensions"];
+    finishReason: ModelResponseAfterInput["finishReason"];
+    gaps?: ModelResponseAfterInput["gaps"];
+    id?: ModelResponseAfterInput["id"];
+    items: HostSlot<ModelResponseAfterInput["items"], ["*", "parts", "*"], S>;
+    latencyMs?: ModelResponseAfterInput["latencyMs"];
+    model: ModelResponseAfterInput["model"];
+    native?: ModelResponseAfterInput["native"];
+    parentEventId?: ModelResponseAfterInput["parentEventId"];
+    session?: ModelResponseAfterInput["session"];
+    synthesized?: ModelResponseAfterInput["synthesized"];
+    time?: ModelResponseAfterInput["time"];
+    turn?: ModelResponseAfterInput["turn"];
+    usage?: ModelResponseAfterInput["usage"];
+  };
+  "model.switch.after": {
+    current: ModelSwitchAfterInput["current"];
+    extensions?: ModelSwitchAfterInput["extensions"];
+    gaps?: ModelSwitchAfterInput["gaps"];
+    id?: ModelSwitchAfterInput["id"];
+    items?: HostSlot<ModelSwitchAfterInput["items"], ["*"], S>;
+    native?: ModelSwitchAfterInput["native"];
+    parentEventId?: ModelSwitchAfterInput["parentEventId"];
+    previous: ModelSwitchAfterInput["previous"];
+    reason: ModelSwitchAfterInput["reason"];
+    session?: ModelSwitchAfterInput["session"];
+    synthesized?: ModelSwitchAfterInput["synthesized"];
+    time?: ModelSwitchAfterInput["time"];
+    turn?: ModelSwitchAfterInput["turn"];
+  };
+  "model.switch.before": {
+    current: ModelSwitchBeforeInput["current"];
+    extensions?: ModelSwitchBeforeInput["extensions"];
+    gaps?: ModelSwitchBeforeInput["gaps"];
+    id?: ModelSwitchBeforeInput["id"];
+    items?: HostSlot<ModelSwitchBeforeInput["items"], ["*"], S>;
+    native?: ModelSwitchBeforeInput["native"];
+    parentEventId?: ModelSwitchBeforeInput["parentEventId"];
+    pricing?: ModelSwitchBeforeInput["pricing"];
+    proposed: ModelSwitchBeforeInput["proposed"];
+    reason: ModelSwitchBeforeInput["reason"];
+    session?: ModelSwitchBeforeInput["session"];
+    synthesized?: ModelSwitchBeforeInput["synthesized"];
+    time?: ModelSwitchBeforeInput["time"];
+    turn?: ModelSwitchBeforeInput["turn"];
+  };
+  "session.end": {
+    counters?: SessionEndInput["counters"];
+    extensions?: SessionEndInput["extensions"];
+    gaps?: SessionEndInput["gaps"];
+    id?: SessionEndInput["id"];
+    items?: HostSlot<SessionEndInput["items"], ["*"], S>;
+    native?: SessionEndInput["native"];
+    outcome: SessionEndInput["outcome"];
+    parentEventId?: SessionEndInput["parentEventId"];
+    reason: SessionEndInput["reason"];
+    session: SessionEndInput["session"];
+    synthesized?: SessionEndInput["synthesized"];
+    time?: SessionEndInput["time"];
+    turn?: SessionEndInput["turn"];
+  };
+  "session.start": {
+    extensions?: SessionStartInput["extensions"];
+    gaps?: SessionStartInput["gaps"];
+    harness: SessionStartInput["harness"];
+    id?: SessionStartInput["id"];
+    items: HostSlot<SessionStartInput["items"], ["*", "parts", "*"], S>;
+    native?: SessionStartInput["native"];
+    parentEventId?: SessionStartInput["parentEventId"];
+    permissionMode: SessionStartInput["permissionMode"];
+    resumedFrom?: SessionStartInput["resumedFrom"];
+    session: SessionStartInput["session"];
+    synthesized?: SessionStartInput["synthesized"];
+    time?: SessionStartInput["time"];
+    trigger: SessionStartInput["trigger"];
+    turn?: SessionStartInput["turn"];
+  };
+  "task.change.after": {
+    extensions?: TaskChangeAfterInput["extensions"];
+    gaps?: TaskChangeAfterInput["gaps"];
+    id?: TaskChangeAfterInput["id"];
+    items?: HostSlot<TaskChangeAfterInput["items"], ["*"], S>;
+    native?: TaskChangeAfterInput["native"];
+    parentEventId?: TaskChangeAfterInput["parentEventId"];
+    session?: TaskChangeAfterInput["session"];
+    synthesized?: TaskChangeAfterInput["synthesized"];
+    task: TaskChangeAfterInput["task"];
+    time?: TaskChangeAfterInput["time"];
+    turn?: TaskChangeAfterInput["turn"];
+  };
+  "task.change.before": {
+    extensions?: TaskChangeBeforeInput["extensions"];
+    gaps?: TaskChangeBeforeInput["gaps"];
+    id?: TaskChangeBeforeInput["id"];
+    items?: HostSlot<TaskChangeBeforeInput["items"], ["*"], S>;
+    native?: TaskChangeBeforeInput["native"];
+    parentEventId?: TaskChangeBeforeInput["parentEventId"];
+    session?: TaskChangeBeforeInput["session"];
+    synthesized?: TaskChangeBeforeInput["synthesized"];
+    task: TaskChangeBeforeInput["task"];
+    time?: TaskChangeBeforeInput["time"];
+    turn?: TaskChangeBeforeInput["turn"];
+  };
+  "tool.after": {
+    batch?: ToolAfterInput["batch"];
+    callId: ToolAfterInput["callId"];
+    callSynthesized?: ToolAfterInput["callSynthesized"];
+    durationMs?: ToolAfterInput["durationMs"];
+    error?: ToolAfterInput["error"];
+    execution: ToolAfterInput["execution"];
+    extensions?: ToolAfterInput["extensions"];
+    fileChanges?: HostSlot<
+      HostSlot<ToolAfterInput["fileChanges"], ["*", "after"], S>,
+      ["*", "before"],
+      S
+    >;
+    gaps?: ToolAfterInput["gaps"];
+    id?: ToolAfterInput["id"];
+    items: HostSlot<ToolAfterInput["items"], ["*", "parts", "*"], S>;
+    native?: ToolAfterInput["native"];
+    outcome: ToolAfterInput["outcome"];
+    parentEventId?: ToolAfterInput["parentEventId"];
+    path: ToolAfterInput["path"];
+    session?: ToolAfterInput["session"];
+    synthesized?: ToolAfterInput["synthesized"];
+    time?: ToolAfterInput["time"];
+    input: ToolAfterInput["input"];
+    toolKind?: ToolAfterInput["toolKind"];
+    toolMcp?: ToolAfterInput["toolMcp"];
+    name: ToolAfterInput["name"];
+    origin: ToolAfterInput["origin"];
+    turn?: ToolAfterInput["turn"];
+  };
+  "tool.batch.after": {
+    batch: ToolBatchAfterInput["batch"];
+    calls: ToolBatchAfterInput["calls"];
+    extensions?: ToolBatchAfterInput["extensions"];
+    gaps?: ToolBatchAfterInput["gaps"];
+    id?: ToolBatchAfterInput["id"];
+    items?: HostSlot<ToolBatchAfterInput["items"], ["*"], S>;
+    native?: ToolBatchAfterInput["native"];
+    parentEventId?: ToolBatchAfterInput["parentEventId"];
+    session?: ToolBatchAfterInput["session"];
+    synthesized?: ToolBatchAfterInput["synthesized"];
+    time?: ToolBatchAfterInput["time"];
+    turn?: ToolBatchAfterInput["turn"];
+  };
+  "tool.before": {
+    batch?: ToolBeforeInput["batch"];
+    callId: ToolBeforeInput["callId"];
+    callSynthesized?: ToolBeforeInput["callSynthesized"];
+    extensions?: ToolBeforeInput["extensions"];
+    gaps?: ToolBeforeInput["gaps"];
+    id?: ToolBeforeInput["id"];
+    items?: HostSlot<ToolBeforeInput["items"], ["*"], S>;
+    native?: ToolBeforeInput["native"];
+    parentEventId?: ToolBeforeInput["parentEventId"];
+    path: ToolBeforeInput["path"];
+    session?: ToolBeforeInput["session"];
+    synthesized?: ToolBeforeInput["synthesized"];
+    time?: ToolBeforeInput["time"];
+    input: ToolBeforeInput["input"];
+    toolKind?: ToolBeforeInput["toolKind"];
+    toolMcp?: ToolBeforeInput["toolMcp"];
+    name: ToolBeforeInput["name"];
+    origin: ToolBeforeInput["origin"];
+    turn?: ToolBeforeInput["turn"];
+  };
+  "tool.permission.request": {
+    batch?: ToolPermissionRequestInput["batch"];
+    callId: ToolPermissionRequestInput["callId"];
+    callSynthesized?: ToolPermissionRequestInput["callSynthesized"];
+    extensions?: ToolPermissionRequestInput["extensions"];
+    gaps?: ToolPermissionRequestInput["gaps"];
+    id?: ToolPermissionRequestInput["id"];
+    items?: HostSlot<ToolPermissionRequestInput["items"], ["*"], S>;
+    native?: ToolPermissionRequestInput["native"];
+    parentEventId?: ToolPermissionRequestInput["parentEventId"];
+    path: ToolPermissionRequestInput["path"];
+    sandboxBypass: ToolPermissionRequestInput["sandboxBypass"];
+    session?: ToolPermissionRequestInput["session"];
+    suggestions: ToolPermissionRequestInput["suggestions"];
+    synthesized?: ToolPermissionRequestInput["synthesized"];
+    time?: ToolPermissionRequestInput["time"];
+    input: ToolPermissionRequestInput["input"];
+    toolKind?: ToolPermissionRequestInput["toolKind"];
+    toolMcp?: ToolPermissionRequestInput["toolMcp"];
+    name: ToolPermissionRequestInput["name"];
+    origin: ToolPermissionRequestInput["origin"];
+    turn?: ToolPermissionRequestInput["turn"];
+  };
+  "tool.permission.resolved": {
+    batch?: ToolPermissionResolvedInput["batch"];
+    callId: ToolPermissionResolvedInput["callId"];
+    callSynthesized?: ToolPermissionResolvedInput["callSynthesized"];
+    decidedBy: ToolPermissionResolvedInput["decidedBy"];
+    decision: ToolPermissionResolvedInput["decision"];
+    extensions?: ToolPermissionResolvedInput["extensions"];
+    gaps?: ToolPermissionResolvedInput["gaps"];
+    id?: ToolPermissionResolvedInput["id"];
+    items?: HostSlot<ToolPermissionResolvedInput["items"], ["*"], S>;
+    native?: ToolPermissionResolvedInput["native"];
+    parentEventId?: ToolPermissionResolvedInput["parentEventId"];
+    path: ToolPermissionResolvedInput["path"];
+    session?: ToolPermissionResolvedInput["session"];
+    synthesized?: ToolPermissionResolvedInput["synthesized"];
+    time?: ToolPermissionResolvedInput["time"];
+    input: ToolPermissionResolvedInput["input"];
+    toolKind?: ToolPermissionResolvedInput["toolKind"];
+    toolMcp?: ToolPermissionResolvedInput["toolMcp"];
+    name: ToolPermissionResolvedInput["name"];
+    origin: ToolPermissionResolvedInput["origin"];
+    turn?: ToolPermissionResolvedInput["turn"];
+  };
+  "tool.progress": {
+    backgrounded: ToolProgressInput["backgrounded"];
+    batch?: ToolProgressInput["batch"];
+    callId: ToolProgressInput["callId"];
+    callSynthesized?: ToolProgressInput["callSynthesized"];
+    extensions?: ToolProgressInput["extensions"];
+    gaps?: ToolProgressInput["gaps"];
+    id?: ToolProgressInput["id"];
+    items?: HostSlot<ToolProgressInput["items"], ["*"], S>;
+    native?: ToolProgressInput["native"];
+    parentEventId?: ToolProgressInput["parentEventId"];
+    partialOutput: HostSlot<
+      ToolProgressInput["partialOutput"],
+      ["parts", "*"],
+      S
+    >;
+    path: ToolProgressInput["path"];
+    session?: ToolProgressInput["session"];
+    synthesized?: ToolProgressInput["synthesized"];
+    time?: ToolProgressInput["time"];
+    input: ToolProgressInput["input"];
+    toolKind?: ToolProgressInput["toolKind"];
+    toolMcp?: ToolProgressInput["toolMcp"];
+    name: ToolProgressInput["name"];
+    origin: ToolProgressInput["origin"];
+    turn?: ToolProgressInput["turn"];
+  };
+  "turn.end": {
+    continuationCount: TurnEndInput["continuationCount"];
+    error?: TurnEndInput["error"];
+    extensions?: TurnEndInput["extensions"];
+    gaps?: TurnEndInput["gaps"];
+    id?: TurnEndInput["id"];
+    items: HostSlot<TurnEndInput["items"], ["*", "parts", "*"], S>;
+    lastAssistantItem?: TurnEndInput["lastAssistantItem"];
+    native?: TurnEndInput["native"];
+    outcome: TurnEndInput["outcome"];
+    parentEventId?: TurnEndInput["parentEventId"];
+    session?: TurnEndInput["session"];
+    synthesized?: TurnEndInput["synthesized"];
+    time?: TurnEndInput["time"];
+    turn: TurnEndInput["turn"];
+    usage?: TurnEndInput["usage"];
+  };
+  "turn.finish.before": {
+    continuationCount: TurnFinishBeforeInput["continuationCount"];
+    extensions?: TurnFinishBeforeInput["extensions"];
+    gaps?: TurnFinishBeforeInput["gaps"];
+    id?: TurnFinishBeforeInput["id"];
+    items: HostSlot<TurnFinishBeforeInput["items"], ["*", "parts", "*"], S>;
+    lastAssistantItem?: TurnFinishBeforeInput["lastAssistantItem"];
+    native?: TurnFinishBeforeInput["native"];
+    outcome: TurnFinishBeforeInput["outcome"];
+    parentEventId?: TurnFinishBeforeInput["parentEventId"];
+    session?: TurnFinishBeforeInput["session"];
+    synthesized?: TurnFinishBeforeInput["synthesized"];
+    time?: TurnFinishBeforeInput["time"];
+    turn: TurnFinishBeforeInput["turn"];
+    usage?: TurnFinishBeforeInput["usage"];
+  };
+  "turn.progress": {
+    delta: HostSlot<TurnProgressInput["delta"], ["parts", "*"], S>;
+    extensions?: TurnProgressInput["extensions"];
+    final: TurnProgressInput["final"];
+    gaps?: TurnProgressInput["gaps"];
+    id?: TurnProgressInput["id"];
+    item: TurnProgressInput["item"];
+    items?: HostSlot<TurnProgressInput["items"], ["*"], S>;
+    native?: TurnProgressInput["native"];
+    parentEventId?: TurnProgressInput["parentEventId"];
+    session?: TurnProgressInput["session"];
+    synthesized?: TurnProgressInput["synthesized"];
+    time?: TurnProgressInput["time"];
+    turn: TurnProgressInput["turn"];
+  };
+  "turn.start": {
+    expandedFrom?: TurnStartInput["expandedFrom"];
+    extensions?: TurnStartInput["extensions"];
+    gaps?: TurnStartInput["gaps"];
+    id?: TurnStartInput["id"];
+    items: HostSlot<TurnStartInput["items"], ["*", "parts", "*"], S>;
+    native?: TurnStartInput["native"];
+    parentEventId?: TurnStartInput["parentEventId"];
+    session?: TurnStartInput["session"];
+    synthesized?: TurnStartInput["synthesized"];
+    time?: TurnStartInput["time"];
+    trigger: TurnStartInput["trigger"];
+    turn: TurnStartInput["turn"];
+  };
+  "user.attention": {
+    attention: UserAttentionInput["attention"];
+    extensions?: UserAttentionInput["extensions"];
+    gaps?: UserAttentionInput["gaps"];
+    id?: UserAttentionInput["id"];
+    items?: HostSlot<UserAttentionInput["items"], ["*"], S>;
+    native?: UserAttentionInput["native"];
+    parentEventId?: UserAttentionInput["parentEventId"];
+    session?: UserAttentionInput["session"];
+    synthesized?: UserAttentionInput["synthesized"];
+    time?: UserAttentionInput["time"];
+    turn?: UserAttentionInput["turn"];
+  };
+  "user.elicitation.request": {
+    elicitation: UserElicitationRequestInput["elicitation"];
+    extensions?: UserElicitationRequestInput["extensions"];
+    gaps?: UserElicitationRequestInput["gaps"];
+    id?: UserElicitationRequestInput["id"];
+    items?: HostSlot<UserElicitationRequestInput["items"], ["*"], S>;
+    native?: UserElicitationRequestInput["native"];
+    parentEventId?: UserElicitationRequestInput["parentEventId"];
+    session?: UserElicitationRequestInput["session"];
+    synthesized?: UserElicitationRequestInput["synthesized"];
+    time?: UserElicitationRequestInput["time"];
+    turn?: UserElicitationRequestInput["turn"];
+  };
+  "user.elicitation.result": {
+    elicitation: UserElicitationResultInput["elicitation"];
+    extensions?: UserElicitationResultInput["extensions"];
+    gaps?: UserElicitationResultInput["gaps"];
+    id?: UserElicitationResultInput["id"];
+    items?: HostSlot<UserElicitationResultInput["items"], ["*"], S>;
+    native?: UserElicitationResultInput["native"];
+    parentEventId?: UserElicitationResultInput["parentEventId"];
+    session?: UserElicitationResultInput["session"];
+    synthesized?: UserElicitationResultInput["synthesized"];
+    time?: UserElicitationResultInput["time"];
+    turn?: UserElicitationResultInput["turn"];
+  };
+  "user.message.inbound": {
+    extensions?: UserMessageInboundInput["extensions"];
+    gaps?: UserMessageInboundInput["gaps"];
+    id?: UserMessageInboundInput["id"];
+    items?: HostSlot<UserMessageInboundInput["items"], ["*"], S>;
+    message: HostSlot<
+      UserMessageInboundInput["message"],
+      ["messages", "*", "parts", "*"],
+      S
+    >;
+    native?: UserMessageInboundInput["native"];
+    parentEventId?: UserMessageInboundInput["parentEventId"];
+    session?: UserMessageInboundInput["session"];
+    synthesized?: UserMessageInboundInput["synthesized"];
+    time?: UserMessageInboundInput["time"];
+    turn?: UserMessageInboundInput["turn"];
+  };
+  "user.message.outbound": {
+    extensions?: UserMessageOutboundInput["extensions"];
+    gaps?: UserMessageOutboundInput["gaps"];
+    id?: UserMessageOutboundInput["id"];
+    items?: HostSlot<UserMessageOutboundInput["items"], ["*"], S>;
+    message: HostSlot<
+      UserMessageOutboundInput["message"],
+      ["messages", "*", "parts", "*"],
+      S
+    >;
+    native?: UserMessageOutboundInput["native"];
+    parentEventId?: UserMessageOutboundInput["parentEventId"];
+    session?: UserMessageOutboundInput["session"];
+    synthesized?: UserMessageOutboundInput["synthesized"];
+    time?: UserMessageOutboundInput["time"];
+    turn?: UserMessageOutboundInput["turn"];
+  };
+  "workspace.change.after": {
+    extensions?: WorkspaceChangeAfterInput["extensions"];
+    gaps?: WorkspaceChangeAfterInput["gaps"];
+    id?: WorkspaceChangeAfterInput["id"];
+    items?: HostSlot<WorkspaceChangeAfterInput["items"], ["*"], S>;
+    native?: WorkspaceChangeAfterInput["native"];
+    parentEventId?: WorkspaceChangeAfterInput["parentEventId"];
+    session?: WorkspaceChangeAfterInput["session"];
+    synthesized?: WorkspaceChangeAfterInput["synthesized"];
+    time?: WorkspaceChangeAfterInput["time"];
+    turn?: WorkspaceChangeAfterInput["turn"];
+    workspace: WorkspaceChangeAfterInput["workspace"];
+  };
+  "workspace.change.before": {
+    extensions?: WorkspaceChangeBeforeInput["extensions"];
+    gaps?: WorkspaceChangeBeforeInput["gaps"];
+    id?: WorkspaceChangeBeforeInput["id"];
+    items?: HostSlot<WorkspaceChangeBeforeInput["items"], ["*"], S>;
+    native?: WorkspaceChangeBeforeInput["native"];
+    parentEventId?: WorkspaceChangeBeforeInput["parentEventId"];
+    session?: WorkspaceChangeBeforeInput["session"];
+    synthesized?: WorkspaceChangeBeforeInput["synthesized"];
+    time?: WorkspaceChangeBeforeInput["time"];
+    turn?: WorkspaceChangeBeforeInput["turn"];
+    workspace: WorkspaceChangeBeforeInput["workspace"];
+  };
+}
+const HOST_CONTENT_PATHS: Record<EventType, readonly (readonly string[])[]> = {
+  "config.change.after": [["items", "*"]],
+  "config.change.before": [["items", "*"]],
+  "context.compact.after": [["items", "*", "parts", "*"]],
+  "context.compact.before": [["items", "*", "parts", "*"]],
+  "file.changed": [
+    ["changes", "*", "after"],
+    ["changes", "*", "before"],
+    ["items", "*"],
+  ],
+  "hook.failure": [["items", "*"]],
+  "model.error": [["items", "*"]],
+  "model.request.before": [["items", "*", "parts", "*"]],
+  "model.response.after": [["items", "*", "parts", "*"]],
+  "model.switch.after": [["items", "*"]],
+  "model.switch.before": [["items", "*"]],
+  "session.end": [["items", "*"]],
+  "session.start": [["items", "*", "parts", "*"]],
+  "task.change.after": [["items", "*"]],
+  "task.change.before": [["items", "*"]],
+  "tool.after": [
+    ["fileChanges", "*", "after"],
+    ["fileChanges", "*", "before"],
+    ["items", "*", "parts", "*"],
+  ],
+  "tool.batch.after": [["items", "*"]],
+  "tool.before": [["items", "*"]],
+  "tool.permission.request": [["items", "*"]],
+  "tool.permission.resolved": [["items", "*"]],
+  "tool.progress": [
+    ["items", "*"],
+    ["partialOutput", "parts", "*"],
+  ],
+  "turn.end": [["items", "*", "parts", "*"]],
+  "turn.finish.before": [["items", "*", "parts", "*"]],
+  "turn.progress": [
+    ["delta", "parts", "*"],
+    ["items", "*"],
+  ],
+  "turn.start": [["items", "*", "parts", "*"]],
+  "user.attention": [["items", "*"]],
+  "user.elicitation.request": [["items", "*"]],
+  "user.elicitation.result": [["items", "*"]],
+  "user.message.inbound": [
+    ["items", "*"],
+    ["message", "messages", "*", "parts", "*"],
+  ],
+  "user.message.outbound": [
+    ["items", "*"],
+    ["message", "messages", "*", "parts", "*"],
+  ],
+  "workspace.change.after": [["items", "*"]],
+  "workspace.change.before": [["items", "*"]],
+};
+export interface PendingAttachment {
+  readonly path: readonly (string | number)[];
+  readonly selection: "body";
+}
+/** @internal Runtime planning envelope. */
+export interface HostInputProjection<S> {
+  /** Metadata-only wire facts until the runtime resolves pending attachments. */
+  readonly event: Record<string, JsonValue>;
+  readonly bindings: ContentSourceBinding<S>[];
+  readonly pending: PendingAttachment[];
+}
+const hostObjectIds = new WeakMap<object, string>();
+let hostObjectSequence = 0;
+function hostIdentity(value: Record<string, unknown>): {
+  id: string;
+  synthesized?: boolean;
+} {
+  if (value.synthesized !== undefined && typeof value.synthesized !== "boolean")
+    throw new TypeError("invalid synthesized flag");
+  if (value.id !== undefined) {
+    if (typeof value.id !== "string" || value.id.length === 0)
+      throw new TypeError("invalid content id");
+    return {
+      id: value.id,
+      ...(value.synthesized === undefined
+        ? {}
+        : { synthesized: value.synthesized as boolean }),
+    };
+  }
+  if (value.synthesized === false)
+    throw new TypeError("missing id cannot be explicitly nonsynthesized");
+  let id = hostObjectIds.get(value);
+  if (id === undefined) {
+    id = `host-content-${++hostObjectSequence}`;
+    hostObjectIds.set(value, id);
+  }
+  return { id, synthesized: true };
+}
+function hostRecord(value: unknown): Record<string, unknown> {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    ownedAttachmentSources.has(value)
+  )
+    throw new TypeError("invalid content placement");
+  return value as Record<string, unknown>;
+}
+/** No I/O. The runtime must resolve bindings and replace metadata at pending paths
+ * with body references before delivering a body-selected event. Paths are event-relative,
+ * exactly like contentSlots. Opaque native/tool payloads are not traversed or serialized. */
+/** @internal Runtime conversion hook; applications pass HostEventInputs to runtime methods. */
+export function _projectHostInput<K extends EventType, S = unknown>(
+  type: K,
+  input: HostEventInputs<S>[K],
+): HostInputProjection<S> {
+  const bindings: ContentSourceBinding<S>[] = [];
+  const pending: PendingAttachment[] = [];
+  const event = toEventInput(type, input as unknown as EventInputs[K]);
+  function checkedPart(value: Record<string, unknown>): JsonValue {
+    if (
+      value.size !== undefined &&
+      (typeof value.size !== "number" ||
+        !Number.isSafeInteger(value.size) ||
+        value.size < 0)
+    )
+      throw new TypeError("invalid content size");
+    if (
+      value.sha256 !== undefined &&
+      (typeof value.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.sha256))
+    )
+      throw new TypeError("invalid content hash");
+    if (value.gap !== undefined) {
+      const gap = hostRecord(value.gap);
+      if (
+        typeof gap.reason !== "string" ||
+        gap.reason.length === 0 ||
+        (gap.path !== undefined &&
+          (typeof gap.path !== "string" || gap.path.length === 0))
+      )
+        throw new TypeError("invalid content gap");
+      if (value.body !== undefined)
+        throw new TypeError("content cannot have both body and gap");
+    }
+    const parsed = parseContentItem(value);
+    if (!parsed.ok) throw new TypeError("invalid canonical content part");
+    return value as JsonValue;
+  }
+  function part(value: unknown, path: (string | number)[]): JsonValue {
+    const p = hostRecord(value);
+    for (const [field, entry] of Object.entries(p)) {
+      if (
+        entry !== null &&
+        typeof entry === "object" &&
+        ownedAttachmentSources.has(entry) &&
+        !(p.kind === "attachment" && field === "body")
+      )
+        throw new TypeError("owned attachment in non-body field");
+    }
+    const identity = hostIdentity(p);
+    if (
+      p.category !== undefined &&
+      (typeof p.category !== "string" || p.category.length === 0)
+    )
+      throw new TypeError("invalid content category");
+    const base = {
+      ...identity,
+      ...(p.category === undefined ? {} : { category: p.category as string }),
+    };
+    if (
+      p.kind === "text" &&
+      p.mediaType !== undefined &&
+      p.mediaType !== "text/plain"
+    )
+      throw new TypeError("invalid text media type");
+    if (p.kind === "text" && "text" in p) {
+      if (
+        typeof p.text !== "string" ||
+        (p.mediaType !== undefined && p.mediaType !== "text/plain") ||
+        (p.selection !== undefined && p.selection !== "body") ||
+        ["body", "gap", "size", "sha256"].some((key) => key in p)
+      )
+        throw new TypeError("invalid inline text");
+      return checkedPart({
+        ...p,
+        ...base,
+        kind: "text",
+        mediaType: "text/plain",
+        selection: "body",
+        text: p.text,
+      });
+    }
+    if (p.kind === "attachment") {
+      // MIME parameters are host metadata, not part of media classification.
+      if (
+        typeof p.mediaType !== "string" ||
+        !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+(?:[ \t]*;[ \t]*[!#$%&'*+.^_`|~0-9A-Za-z-]+=(?:[!#$%&'*+.^_`|~0-9A-Za-z-]+|"(?:[^"\\\r\n]|\\[^\r\n])*"))*[ \t]*$/.test(
+          p.mediaType,
+        )
+      )
+        throw new TypeError("invalid attachment media type");
+      const media = p.mediaType.split(";")[0]!.trim().toLowerCase();
+      if (media.startsWith("text/") || /(?:\/json|\+json)$/.test(media))
+        throw new TypeError("text and JSON attachments are forbidden");
+      if (
+        p.body !== null &&
+        typeof p.body === "object" &&
+        ownedAttachmentSources.has(p.body)
+      ) {
+        if (p.selection !== undefined && p.selection !== "body")
+          throw new TypeError("owned attachment requires body selection");
+        if (["text", "ref", "gap", "size", "sha256"].some((key) => key in p))
+          throw new TypeError("invalid owned attachment placement");
+        bindings.push({
+          path: [...path],
+          source: ownedAttachmentSources.get(p.body) as S,
+        });
+        pending.push({ path: [...path], selection: "body" });
+        const { body: _body, ...metadata } = p;
+        return checkedPart({
+          ...metadata,
+          ...base,
+          kind: "attachment",
+          mediaType: p.mediaType,
+          selection: "metadata",
+        });
+      }
+      if (p.body !== undefined) {
+        const body = hostRecord(p.body);
+        if (
+          typeof body.ref !== "string" ||
+          body.ref.length === 0 ||
+          p.selection !== "body"
+        )
+          throw new TypeError("invalid attachment body");
+      }
+    } else if (p.kind !== "text") throw new TypeError("invalid content kind");
+    if (!["body", "metadata", "omit"].includes(p.selection as string))
+      throw new TypeError("invalid content selection");
+    if (p.selection === "body" && p.body === undefined && p.gap === undefined)
+      throw new TypeError("body selection requires text, reference, or gap");
+    if (p.selection !== "body" && ("body" in p || "text" in p || "gap" in p))
+      throw new TypeError("metadata or omitted content cannot have a body");
+    return checkedPart({ ...p, ...base });
+  }
+  function walk(
+    value: unknown,
+    remaining: readonly string[],
+    path: (string | number)[],
+  ): unknown {
+    if (remaining.length === 0) return part(value, path);
+    const [head, ...tail] = remaining;
+    if (head === "*") {
+      if (!Array.isArray(value))
+        throw new TypeError("content slot must be an array");
+      return Array.from(value, (entry, index) =>
+        walk(entry, tail, [...path, index]),
+      );
+    }
+    const record = hostRecord(value);
+    if (head === "parts") {
+      if (
+        !["system", "developer", "user", "assistant", "tool"].includes(
+          record.role as string,
+        ) ||
+        !Array.isArray(record.parts)
+      )
+        throw new TypeError("invalid canonical message");
+      return {
+        ...record,
+        ...hostIdentity(record),
+        parts: walk(record.parts, tail, [...path, "parts"]),
+      };
+    }
+    if (head === undefined) throw new TypeError("empty slot path");
+    if (record[head] === undefined) return record;
+    return { ...record, [head]: walk(record[head], tail, [...path, head]) };
+  }
+  let projected: unknown = event;
+  for (const path of HOST_CONTENT_PATHS[type])
+    projected = walk(projected, path, []);
+  return { event: projected as Record<string, JsonValue>, bindings, pending };
+}
 export enum Permission {
   None = "none",
   Allow = "allow",
@@ -19037,7 +20242,7 @@ export const effects = {
   },
   inject_append(
     deliverAt: OpenString<"now" | "next_turn">,
-    value: JsonValue,
+    value: CanonicalMessages,
   ): Effect {
     return {
       deliverAt,

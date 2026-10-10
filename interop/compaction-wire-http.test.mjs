@@ -5,8 +5,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm, appendFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { UploadStore } from "./content-upload.mjs";
-import { compactionCapabilities } from "./compaction.mjs";
+import { compactionCapabilities, textParts } from "./compaction.mjs";
 
 // Python/Rust's legacy receivers omit the media type; Go's encoder defaults
 // to text/plain. Neither is a canonical AHP HTTP response. Test the actual
@@ -21,33 +20,30 @@ for (const mediaType of [
     { timeout: 10000 },
     async () => {
       const directory = await mkdtemp(join(tmpdir(), "ahp-compaction-http-"));
-      const uploads = new UploadStore(() => "scope");
+      let uploadRequests = 0;
       const effects = [
         {
           type: "modify",
           target: "instructions",
           operation: "replace",
-          value: "base:one",
+          value: textParts("base:one"),
         },
       ];
       const server = createServer(async (request, response) => {
         if (request.url === "/upload") {
-          const result = await uploads.receive(request);
-          response.writeHead(result.status, {
-            "content-type": "application/json",
-          });
-          response.end(
-            JSON.stringify({
-              ref: result.ref,
-              size: result.size,
-              sha256: result.sha256,
-            }),
-          );
+          uploadRequests++;
+          response.writeHead(500).end();
           return;
         }
         const chunks = [];
         for await (const chunk of request) chunks.push(chunk);
         const message = JSON.parse(Buffer.concat(chunks));
+        assert.deepEqual(message.params.event.instructions, textParts("base"));
+        assert.deepEqual(message.params.event.items[0], {
+          id: "chain:context",
+          role: "user",
+          parts: textParts("conversation"),
+        });
         const reply = {
           jsonrpc: "2.0",
           id: message.id,
@@ -94,7 +90,7 @@ for (const mediaType of [
             name: "chain",
             snapshot: {
               boundary: "before",
-              instructions: "base",
+              instructions: textParts("base"),
               capabilities: compactionCapabilities("before"),
             },
           }),
@@ -105,6 +101,7 @@ for (const mediaType of [
         });
         assert.equal(code, 0, stderr);
         const result = JSON.parse(stdout);
+        assert.equal(uploadRequests, 0, "inline text must not use uploads");
         assert.deepEqual(result.wire.response.result.effects, effects);
         assert.equal(result.failed, mediaType !== "application/json");
         if (mediaType === "application/json")

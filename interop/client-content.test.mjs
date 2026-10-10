@@ -15,14 +15,26 @@ const upload = {
   timeoutMs: 1000,
   maxBytes: 100,
 };
-const item = (body, extra = {}) => ({
-  id: "i",
-  kind: "message",
-  mediaType: "text/plain",
-  role: "assistant",
+const attachment = (body, extra = {}) => ({
+  id: "p",
+  kind: "attachment",
+  mediaType: "application/octet-stream",
   body,
   ...extra,
 });
+const text = (value, extra = {}) => ({
+  id: "p",
+  kind: "text",
+  mediaType: "text/plain",
+  text: value,
+  ...extra,
+});
+const selectedAttachment = (selection) => {
+  const { body, ...metadata } = attachment(undefined, { selection });
+  return metadata;
+};
+const message = (...parts) => ({ id: "i", role: "assistant", parts });
+const item = (body, extra = {}) => message(attachment(body, extra));
 function source(bytes = new Uint8Array([0, 255, 128])) {
   let reads = 0,
     cancelled = false;
@@ -65,7 +77,7 @@ function sender(calls = [], ref = "receiver-ref") {
 test("content metadata and omit are lazy cloned views", async () => {
   const manager = new ContentManager();
   const content = source();
-  const event = { items: [item(content.stream)], nested: { untouched: [1] } };
+  const event = { type: "model.response.after", items: [item(content.stream)], nested: { untouched: [1] } };
   for (const mode of ["metadata", "omit"]) {
     const wire = await manager.prepare(
       event,
@@ -75,14 +87,15 @@ test("content metadata and omit are lazy cloned views", async () => {
         throw Error("must not upload");
       },
     );
-    assert.equal(wire.items[0].selection, mode);
-    assert.equal("body" in wire.items[0], false);
+    assert.equal(wire.items[0].parts[0].selection, mode);
+    assert.equal("body" in wire.items[0].parts[0], false);
     assert.equal(wire.items[0].role, "assistant");
-    assert.notEqual(wire.nested, event.nested);
+    assert.deepEqual(wire.nested, event.nested);
+    assert.notEqual(wire.items[0], event.items[0]);
     assert.equal(content.reads, 0);
     assert.equal(content.stream.locked, false);
   }
-  assert.equal(event.items[0].body, content.stream);
+  assert.equal(event.items[0].parts[0].body, content.stream);
   await manager.close();
   assert.equal(content.cancelled, true);
 });
@@ -92,6 +105,7 @@ test("raw snapshot is consumed once, validated and uploaded independently per re
   const content = source(bytes);
   const manager = new ContentManager();
   const event = {
+    type: "model.response.after",
     items: [item(content.stream, { size: 3, sha256: hash(bytes) })],
   };
   const calls = [];
@@ -114,8 +128,8 @@ test("raw snapshot is consumed once, validated and uploaded independently per re
     sender(calls, "two"),
   );
   assert.equal(content.reads, 1);
-  assert.equal(one.items[0].body.ref, "one");
-  assert.equal(two.items[0].body.ref, "two");
+  assert.equal(one.items[0].parts[0].body.ref, "one");
+  assert.equal(two.items[0].parts[0].body.ref, "two");
   assert.deepEqual(calls[1].init.body, bytes);
   assert.equal(calls[0].endpoint, upload.endpoint);
   assert.equal(calls[1].config, receiverTwo);
@@ -126,33 +140,28 @@ test("raw snapshot is consumed once, validated and uploaded independently per re
   await manager.close();
 });
 
-test("reasoning overrides category; explicit category overrides media type", async () => {
+test("reasoning category overrides text media type; explicit category overrides binary media type", async () => {
   const manager = new ContentManager();
-  const a = source(),
-    b = source(),
-    c = source();
+  const b = source(), c = source();
   const wire = await manager.prepare(
     {
+      type: "model.response.after",
       items: [
-        item(a.stream, { kind: "reasoning", category: "text" }),
+        message(text("private reasoning", { category: "reasoning" })),
         item(b.stream, { category: "custom" }),
         item(c.stream, { mediaType: "image/png" }),
+        message(text("visible text")),
       ],
     },
-    {
-      default: "body",
-      reasoning: "omit",
-      custom: "metadata",
-      images: "metadata",
-    },
+    { default: "body", reasoning: "omit", custom: "metadata", images: "metadata" },
     undefined,
-    sender(),
+    () => { throw Error("must not upload inline text or unselected attachments"); },
   );
-  assert.deepEqual(
-    wire.items.map((x) => x.selection),
-    ["omit", "metadata", "metadata"],
-  );
-  assert.equal(a.reads + b.reads + c.reads, 0);
+  assert.deepEqual(wire.items.map((x) => x.parts[0].selection),
+    ["omit", "metadata", "metadata", "body"]);
+  assert.equal("text" in wire.items[0].parts[0], false);
+  assert.equal(wire.items[3].parts[0].text, "visible text");
+  assert.equal(b.reads + c.reads, 0);
   await manager.close();
 });
 
@@ -161,7 +170,7 @@ test("length, digest, memory and upload limits fail without publishing a referen
     const manager = new ContentManager();
     await assert.rejects(
       manager.prepare(
-        { items: [item(source().stream, extra)] },
+        { type: "model.response.after", items: [item(source().stream, extra)] },
         { default: "body" },
         upload,
         () => {
@@ -176,7 +185,7 @@ test("length, digest, memory and upload limits fail without publishing a referen
   const content = source();
   await assert.rejects(
     manager.prepare(
-      { items: [item(content.stream)] },
+      { type: "model.response.after", items: [item(content.stream)] },
       { default: "body" },
       upload,
       sender(),
@@ -187,7 +196,7 @@ test("length, digest, memory and upload limits fail without publishing a referen
   const other = new ContentManager();
   await assert.rejects(
     other.prepare(
-      { items: [item(source().stream)] },
+      { type: "model.response.after", items: [item(source().stream)] },
       { default: "body" },
       { ...upload, maxBytes: 2 },
       sender(),
@@ -199,7 +208,7 @@ test("length, digest, memory and upload limits fail without publishing a referen
 
 test("only a validated 201 confirmation is accepted", async () => {
   const manager = new ContentManager();
-  const event = { items: [item(source().stream)] };
+  const event = { type: "model.response.after", items: [item(source().stream)] };
   for (const [status, ref, type] of [
     [
       202,
@@ -241,7 +250,7 @@ test("close cancels active readers and blocks future preparation", async () => {
   );
   const manager = new ContentManager();
   const preparation = manager.prepare(
-    { items: [item(stream)] },
+    { type: "model.response.after", items: [item(stream)] },
     { default: "body" },
     upload,
     sender(),
@@ -261,12 +270,12 @@ test("empty snapshots retain exact zero framing and unsafe endpoints fail before
   const manager = new ContentManager();
   const calls = [];
   const empty = await manager.prepare(
-    { items: [item(source(new Uint8Array()).stream)] },
+    { type: "model.response.after", items: [item(source(new Uint8Array()).stream)] },
     { default: "body" },
     upload,
     sender(calls),
   );
-  assert.deepEqual(empty.items[0].body, { ref: "receiver-ref" });
+  assert.deepEqual(empty.items[0].parts[0].body, { ref: "receiver-ref" });
   assert.equal(calls[0].init.headers["content-length"], "0");
   const content = source();
   for (const endpoint of [
@@ -276,7 +285,7 @@ test("empty snapshots retain exact zero framing and unsafe endpoints fail before
   ]) {
     await assert.rejects(
       manager.prepare(
-        { items: [item(content.stream)] },
+        { type: "model.response.after", items: [item(content.stream)] },
         { default: "body" },
         { ...upload, endpoint },
         sender(),
@@ -291,7 +300,7 @@ test("empty snapshots retain exact zero framing and unsafe endpoints fail before
 test("readBody reuses preparation snapshots and returns independent byte copies", async () => {
   const manager = new ContentManager();
   const content = source();
-  const event = { items: [item(content.stream)] };
+  const event = { type: "model.response.after", items: [item(content.stream)] };
   await manager.prepare(event, { default: "body" }, upload, sender());
   const first = await manager.readBody(content.stream);
   assert.deepEqual(first, new Uint8Array([0, 255, 128]));
@@ -312,7 +321,7 @@ test("readBody before preparation and composed replacement streams share the man
   );
   const calls = [];
   await manager.prepare(
-    { items: [item(original.stream)] },
+    { type: "model.response.after", items: [item(original.stream)] },
     { default: "body" },
     upload,
     sender(calls),
@@ -320,12 +329,12 @@ test("readBody before preparation and composed replacement streams share the man
   assert.equal(original.reads, 1);
   const replacement = source(new Uint8Array([1, 2, 3]));
   const wire = await manager.prepare(
-    { items: [item(replacement.stream)] },
+    { type: "model.response.after", items: [item(replacement.stream)] },
     { default: "body" },
     upload,
     sender(calls),
   );
-  assert.deepEqual(wire.items[0].body, { ref: "receiver-ref" });
+  assert.deepEqual(wire.items[0].parts[0].body, { ref: "receiver-ref" });
   assert.equal(calls.at(-1).init.headers["ahp-content-sha256"], hash(new Uint8Array([1, 2, 3])));
   assert.deepEqual(
     await manager.readBody(replacement.stream),
@@ -378,7 +387,7 @@ test("readBody honors pre-abort, in-flight abort, and manager close", async () =
     if (action === "abort") controller.abort(new Error("read cancelled"));
     else await manager.close();
     await rejected;
-    assert.equal(cancelled, true);
+    assert.equal(cancelled, action === "close");
   }
   await assert.rejects(manager.readBody(untouched.stream), /closed/);
 });
@@ -402,7 +411,7 @@ test("close never waits for producer cancellation and pending reads release thei
   const unread = makeStream(),
     active = makeStream();
   await manager.prepare(
-    { items: [item(unread)] },
+    { type: "model.response.after", items: [item(unread)] },
     { default: "metadata" },
     undefined,
     sender(),
@@ -430,7 +439,7 @@ test("close never waits for producer cancellation and pending reads release thei
   assert.equal(unread.locked, false);
 });
 
-test("caller abort releases a pending reader even when producer cancellation never settles", async () => {
+test("caller abort releases its wait; manager close releases the pending reader without awaiting producer cancellation", async () => {
   const manager = new ContentManager();
   const stream = new ReadableStream(
     {
@@ -448,15 +457,16 @@ test("caller abort releases a pending reader even when producer cancellation nev
   const rejected = assert.rejects(reading, /caller stopped/);
   controller.abort(new Error("caller stopped"));
   await rejected;
-  assert.equal(stream.locked, false);
+  assert.equal(stream.locked, true);
   await manager.close();
+  assert.equal(stream.locked, false);
 });
 
 test("upload timeout and caller abort bound even an uncooperative callback", async () => {
   const manager = new ContentManager();
   await assert.rejects(
     manager.prepare(
-      { items: [item(source().stream)] },
+      { type: "model.response.after", items: [item(source().stream)] },
       { default: "body" },
       { ...upload, timeoutMs: 10 },
       () => new Promise(() => {}),
@@ -478,7 +488,7 @@ test("upload timeout and caller abort bound even an uncooperative callback", asy
   await manager.close();
 });
 
-test("file.changed bare streams upload once per receiver from reusable snapshots", async () => {
+test("file.changed attachments upload once per receiver from reusable snapshots", async () => {
   const manager = new ContentManager();
   const before = source(new Uint8Array([1])),
     after = source(new Uint8Array([2, 3]));
@@ -489,8 +499,8 @@ test("file.changed bare streams upload once per receiver from reusable snapshots
         operation: "update",
         path: "file.txt",
         agentCaused: true,
-        before: before.stream,
-        after: after.stream,
+        before: attachment(before.stream),
+        after: attachment(after.stream),
       },
     ],
   };
@@ -512,24 +522,24 @@ test("file.changed bare streams upload once per receiver from reusable snapshots
   assert.equal(after.reads, 1);
   assert.equal(calls.length, 4);
   for (const key of ["before", "after"]) {
-    assert.equal(one.changes[0][key].ref, "scope-one");
-    assert.equal(two.changes[0][key].ref, "scope-two");
-    assert.deepEqual(Object.keys(two.changes[0][key]), ["ref"]);
+    assert.equal(one.changes[0][key].body.ref, "scope-one");
+    assert.equal(two.changes[0][key].body.ref, "scope-two");
+    assert.deepEqual(Object.keys(two.changes[0][key].body), ["ref"]);
   }
-  assert.equal(calls[2].init.headers["ahp-content-sha256"], hash(new Uint8Array([1])));
-  assert.equal(calls[3].init.headers["content-length"], "2");
+  assert.deepEqual(calls.slice(2).map((call) => call.init.headers["ahp-content-sha256"]).sort(), [hash(new Uint8Array([1])), hash(new Uint8Array([2, 3]))].sort());
+  assert.deepEqual(calls.slice(2).map((call) => call.init.headers["content-length"]).sort(), ["1", "2"]);
   assert.equal(two.changes[0].path, "file.txt");
-  assert.equal(event.changes[0].before, before.stream);
+  assert.equal(event.changes[0].before.body, before.stream);
   await manager.close();
 });
 
-test("file.changed metadata and omitted references disappear without reading and are cancelled on close", async () => {
+test("file.changed metadata and omitted attachments exclude bodies without reading and are cancelled on close", async () => {
   const manager = new ContentManager();
   const before = source(),
     after = source();
   const event = {
     type: "file.changed",
-    changes: [{ path: "file", before: before.stream, after: after.stream }],
+    changes: [{ path: "file", before: attachment(before.stream), after: attachment(after.stream) }],
   };
   for (const mode of ["metadata", "omit"]) {
     const wire = await manager.prepare(
@@ -542,7 +552,11 @@ test("file.changed metadata and omitted references disappear without reading and
     );
     assert.deepEqual(wire, {
       type: "file.changed",
-      changes: [{ path: "file" }],
+      changes: [{
+        path: "file",
+        before: selectedAttachment(mode),
+        after: selectedAttachment(mode),
+      }],
     });
   }
   assert.equal(before.reads + after.reads, 0);
@@ -551,12 +565,12 @@ test("file.changed metadata and omitted references disappear without reading and
   assert.equal(after.cancelled, true);
 });
 
-test("file.changed never forwards a receiver's existing bare reference", async () => {
+test("file.changed never forwards a receiver's existing attachment reference", async () => {
   const manager = new ContentManager();
   const ref = { ref: "other-scope" };
   const event = {
     type: "file.changed",
-    changes: [{ path: "file", before: ref, after: ref }],
+    changes: [{ path: "file", before: attachment(ref), after: attachment(ref) }],
   };
   await assert.rejects(
     manager.prepare(event, { default: "body" }, upload, sender()),
@@ -565,10 +579,13 @@ test("file.changed never forwards a receiver's existing bare reference", async (
   for (const mode of ["metadata", "omit"]) {
     assert.deepEqual(
       await manager.prepare(event, { default: mode }, undefined, sender()),
-      { type: "file.changed", changes: [{ path: "file" }] },
+      {
+        type: "file.changed",
+        changes: [{ path: "file", before: selectedAttachment(mode), after: selectedAttachment(mode) }],
+      },
     );
   }
-  assert.equal(event.changes[0].before, ref);
+  assert.equal(event.changes[0].before.body, ref);
   await manager.close();
 });
 
@@ -598,53 +615,39 @@ test("only canonical content paths are projected, never opaque descriptor-shaped
       event,
     );
   }
-  const stream = () => item(source().stream);
-  const event = {
-    items: [stream()],
-    instructions: stream(),
-    summary: stream(),
-    partialOutput: stream(),
-    delta: stream(),
-    attention: { title: [stream()], message: [stream()] },
-    message: { text: [stream()], payload: [stream()] },
-    elicitation: { request: stream(), result: stream() },
-    fileChanges: [{ before: stream(), after: stream(), path: "file" }],
-    changes: [
-      { before: { ref: "existing" } },
-    ],
-  };
-  const wire = await manager.prepare(
-    event,
-    { default: "metadata" },
-    undefined,
-    sender(),
-  );
-  const descriptors = [
-    ...wire.items,
-    wire.instructions,
-    wire.summary,
-    wire.partialOutput,
-    wire.delta,
-    ...wire.attention.title,
-    ...wire.attention.message,
-    ...wire.message.text,
-    ...wire.message.payload,
-    wire.elicitation.request,
-    wire.elicitation.result,
-    wire.fileChanges[0].before,
-    wire.fileChanges[0].after,
+  const stream = () => attachment(source().stream);
+  const cases = [
+    ["model.response.after", { items: [message(stream())] }, (wire) => wire.items[0].parts],
+    ["context.compact.before", { instructions: [text("instructions")] }, (wire) => wire.instructions],
+    ["context.compact.after", { summary: [text("summary")] }, (wire) => wire.summary],
+    ["tool.progress", { partialOutput: message(stream()) }, (wire) => wire.partialOutput.parts],
+    ["turn.progress", { delta: message(stream()) }, (wire) => wire.delta.parts],
+    ["user.attention", { attention: { title: [text("title")], message: [text("message")] } }, (wire) => [...wire.attention.title, ...wire.attention.message]],
+    ["user.message.inbound", { message: { messages: [message(text("inbound"))], payload: opaque } }, (wire) => wire.message.messages[0].parts],
+    ["user.elicitation.request", { elicitation: { request: text("request") } }, (wire) => [wire.elicitation.request]],
+    ["user.elicitation.result", { elicitation: { result: text("result") } }, (wire) => [wire.elicitation.result]],
+    ["tool.after", { fileChanges: [{ before: stream(), after: stream(), path: "file" }], changes: [{ before: { ref: "existing" } }] }, (wire) => [wire.fileChanges[0].before, wire.fileChanges[0].after]],
   ];
-  for (const descriptor of descriptors) {
-    assert.equal(descriptor.selection, "metadata");
-    assert.equal("body" in descriptor, false);
+  for (const [type, fields, descriptors] of cases) {
+    const event = { type, ...fields, native: opaque, extensions: { items: [opaque] } };
+    const wire = await manager.prepare(event, { default: "metadata" }, undefined, sender());
+    for (const descriptor of descriptors(wire)) {
+      assert.equal(descriptor.selection, "metadata", type);
+      assert.equal("body" in descriptor, false);
+      assert.equal("text" in descriptor, false);
+    }
+    assert.deepEqual(Object.keys(wire).sort(), Object.keys(event).sort());
+    assert.deepEqual(wire.native, opaque);
+    assert.deepEqual(wire.extensions, event.extensions);
+    if (event.changes) assert.deepEqual(wire.changes, event.changes);
+    if (event.message?.payload) assert.deepEqual(wire.message.payload, opaque);
   }
-  assert.deepEqual(wire.changes, event.changes);
   await manager.close();
 });
 
 test("upload confirmations are bounded, strict UTF-8 JSON and always release readers", async () => {
   const manager = new ContentManager();
-  const event = { items: [item(source().stream)] };
+  const event = { type: "model.response.after", items: [item(source().stream)] };
   for (const [bytes, status, pattern] of [
     [new Uint8Array(1024 * 1024 + 1), 201, /1 MiB/],
     [new Uint8Array([255]), 201, /encoded data|encoding/i],

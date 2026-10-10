@@ -31,10 +31,9 @@ const attempt = { id: "attempt", number: 1 };
 const execution = { status: "executed" };
 const item = {
   id: "item",
-  kind: "message",
+  kind: "text",
   mediaType: "text/plain",
   selection: "metadata",
-  role: "assistant",
 };
 const change = {
   scope: "user",
@@ -77,7 +76,7 @@ const occurrences = {
   "turn.progress": {
     turn: { id: "turn" },
     item: { id: "item" },
-    delta: item,
+    delta: { id: "delta", role: "assistant", parts: [item] },
     final: false,
   },
   "model.request.before": { model, attempt, params: {}, items: [] },
@@ -108,7 +107,7 @@ const occurrences = {
   "tool.permission.resolved": { ...tool, decision: "allow", decidedBy: "user" },
   "tool.progress": {
     ...tool,
-    partialOutput: { ...item, kind: "tool_result", role: "tool" },
+    partialOutput: { id: "partial", role: "tool", parts: [item] },
     backgrounded: false,
   },
   "tool.batch.after": {
@@ -117,7 +116,7 @@ const occurrences = {
   },
   "context.compact.before": { trigger: "auto", items: [] },
   "context.compact.after": {
-    summary: { ...item, role: "system" },
+    summary: [item],
     removed: [],
     execution,
   },
@@ -131,9 +130,9 @@ const occurrences = {
     elicitation: { mode: "form", server: "test", action: "decline" },
   },
   "user.message.inbound": {
-    message: { channel: "chat", sender: "user", text: [] },
+    message: { channel: "chat", sender: "user", messages: [] },
   },
-  "user.message.outbound": { message: { channel: "chat", payload: [] } },
+  "user.message.outbound": { message: { channel: "chat", messages: [] } },
   "workspace.change.before": { workspace },
   "workspace.change.after": { workspace },
   "file.changed": {

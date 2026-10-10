@@ -3,7 +3,6 @@
 import { createRequire } from "node:module";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -15,7 +14,7 @@ const { Hooks, auth } = await import(
   require.resolve("agenthooksprotocol/client")
 );
 /** @type {typeof import("agenthooksprotocol/server")} */
-const { hooks, attachments } = await import(
+const { hooks } = await import(
   require.resolve("agenthooksprotocol/server")
 );
 /** @param {import("node:http").Server} server */
@@ -42,15 +41,24 @@ export function compactionCapabilities(boundary, observeOnly = false) {
         },
       };
 }
-/** @param {string} id @param {string} kind @param {string} text @param {string} role */
-export function contentItem(id, kind, text, role) {
-  return {
-    id,
-    kind,
-    mediaType: "text/plain",
-    role,
-    body: new Blob([text]).stream(),
-  };
+/** @param {string} text */
+export function textParts(text, id = "text") {
+  return [
+    { id, kind: "text", mediaType: "text/plain", selection: "body", text },
+  ];
+}
+/** @param {string} id @param {string} text @param {string} role */
+export function contentItem(id, text, role) {
+  return { id, role, parts: textParts(text) };
+}
+/** @param {{kind: string, text?: string}[]} parts */
+export function inlineText(parts) {
+  if (
+    !Array.isArray(parts) ||
+    parts.some((part) => part.kind !== "text" || typeof part.text !== "string")
+  )
+    throw Error("Text compaction requires inline text parts");
+  return parts.map((part) => part.text).join("");
 }
 export async function runCompaction(
   instructions,
@@ -60,24 +68,20 @@ export async function runCompaction(
 ) {
   const itemId = options.itemId ?? "summary-1";
   const state = {
-    instructions,
+    instructions: typeof instructions === "string" ? textParts(instructions) : structuredClone(instructions),
     candidate: null,
     summary: null,
-    bodies: {},
     messages: [],
     denied: false,
   };
   const seen = [],
     failures = [],
-    uploads = new Map(),
     suppliers = new Map();
   let generated = false,
     applied = false,
     provenance = null;
   function summary(text) {
-    const ref = "urn:ahp:compaction:utf8:" + Buffer.from(text).toString("hex");
-    state.bodies[ref] = text;
-    return { id: itemId, ref };
+    return typeof text === "string" ? textParts(text, itemId) : structuredClone(text);
   }
   const rows = [
     ...before.map((row) => ({ ...row, boundary: "before" })),
@@ -101,24 +105,7 @@ export async function runCompaction(
         body: Buffer.concat(chunks),
       });
       let response;
-      if (req.url === "/upload") {
-        if (req.headers.authorization !== "Bearer fixture-upload") {
-          res.writeHead(401).end();
-          return;
-        }
-        const upload = attachments.parse(request);
-        const bytes = Buffer.from(
-          await new Response(upload.body).arrayBuffer(),
-        );
-        const ref =
-          "urn:fixture:" + createHash("sha256").update(bytes).digest("hex");
-        uploads.set(ref, bytes.toString());
-        response = attachments.response({
-          ref,
-          size: bytes.length,
-          sha256: createHash("sha256").update(bytes).digest("hex"),
-        });
-      } else {
+      {
         if (req.headers.authorization !== "Bearer fixture-event") {
           res.writeHead(401).end();
           return;
@@ -128,17 +115,16 @@ export async function runCompaction(
           const event = message.params.event;
           const snapshot = structuredClone(state);
           if (row.boundary === "before") {
-            snapshot.instructions = uploads.get(event.instructions.body.ref);
+            snapshot.instructions = structuredClone(event.instructions);
             const candidate = message.params.state?.candidate;
             snapshot.candidate = candidate
               ? {
-                  body: candidate.value,
-                  supplier: suppliers.get(candidate.value),
+                  body: structuredClone(candidate.value),
+                  supplier: suppliers.get(JSON.stringify(candidate.value)),
                 }
               : null;
           } else {
-            snapshot.summary = summary(uploads.get(event.summary.body.ref));
-            snapshot.bodies = structuredClone(state.bodies);
+            snapshot.summary = structuredClone(event.summary);
           }
           Object.assign(snapshot, {
             boundary: row.boundary,
@@ -150,22 +136,26 @@ export async function runCompaction(
           if (options.observeOnly && row.boundary === "after")
             Object.assign(snapshot, { applied: true, generated, provenance });
           seen.push(structuredClone(snapshot));
-          const effects = await row.run(snapshot);
-          // This fixture compacts plain text. JSON-valued canonical content is
-          // valid elsewhere but is outside this application's text contract.
+          const suppliedEffects = await row.run(snapshot);
+          const effects = row.bypass !== true && Array.isArray(suppliedEffects)
+            ? suppliedEffects.map(effect => effect.type === "return" && typeof effect.value === "string"
+              ? { ...effect, value: summary(effect.value) } : effect)
+            : suppliedEffects;
+          // This fixture compacts inline text parts; other JSON effect values
+          // are valid elsewhere but outside this application's contract.
           if (
             row.bypass !== true &&
             Array.isArray(effects) &&
             effects.some(
               (effect) =>
-                (effect.type === "modify" || effect.type === "return") &&
-                typeof effect.value !== "string",
+                ((effect.type === "return" || effect.type === "modify") &&
+                  (!Array.isArray(effect.value) ||
+                    effect.value.some(
+                      (part) => part.kind !== "text" || typeof part.text !== "string",
+                    ))),
             )
           )
             throw Error("Text compaction requires text effects");
-          for (const effect of Array.isArray(effects) ? effects : [])
-            if (effect.type === "return")
-              suppliers.set(effect.value, row.supplier);
           return message.method === "hooks/observe" ? undefined : { effects };
         };
         // Explicit adversarial fixture escape hatch, never a positive response path.
@@ -177,6 +167,14 @@ export async function runCompaction(
             result: { protocolVersion: "draft", ...(await invoke(message)) },
           });
         } else response = await hooks.handle(request, invoke);
+        // Attribute only an authenticated, valid emitted response. A rejected
+        // compound must not overwrite the supplier of an equal earlier value.
+        if (row.bypass !== true && response.ok) {
+          const emitted = await response.clone().json().catch(() => null);
+          for (const effect of emitted?.result?.effects ?? [])
+            if (effect.type === "return")
+              suppliers.set(JSON.stringify(effect.value), row.supplier);
+        }
       }
       res.writeHead(response.status, Object.fromEntries(response.headers));
       res.end(Buffer.from(await response.arrayBuffer()));
@@ -215,12 +213,6 @@ export async function runCompaction(
                   timeoutMs: 15000,
                 }),
             content: { default: "body" },
-            upload: {
-              timeoutMs: 15000,
-              maxBytes: 1048576,
-              endpoint: endpoint + "/upload",
-              auth: { type: "bearer", tokenEnv: "UPLOAD" },
-            },
           },
         ],
       })),
@@ -258,18 +250,17 @@ export async function runCompaction(
       })),
     );
     const effects = result.response.result.effects;
-    // Enact accepted effects on host-owned data: original body streams in the
-    // effective event have transferred ownership and cannot be consumed again.
+    // Enact accepted effects on host-owned data.
     for (const effect of effects) {
       if (effect.type === "modify") {
-        if (boundary === "before") state.instructions = effect.value;
-        else state.summary = summary(effect.value);
+        if (boundary === "before") state.instructions = structuredClone(result.event.instructions);
+        else state.summary = structuredClone(result.event.summary);
       } else if (effect.type === "message") state.messages.push(effect.text);
     }
     const candidate = effects.find((effect) => effect.type === "return");
     if (boundary === "before")
       state.candidate = candidate
-        ? { body: candidate.value, supplier: suppliers.get(candidate.value) }
+        ? { body: candidate.value, supplier: suppliers.get(JSON.stringify(candidate.value)) }
         : null;
     state.denied = effects.some((effect) => effect.type === "deny");
     return result;
@@ -285,19 +276,14 @@ export async function runCompaction(
       id: "compaction:before",
       session: { id: "compaction" },
       trigger: "manual",
-      items: [contentItem("context", "user", "conversation", "user")],
-      instructions: contentItem(
-        "instructions",
-        "instructions",
-        instructions,
-        "system",
-      ),
+      items: [contentItem("context", "conversation", "user")],
+      instructions: structuredClone(state.instructions),
     });
     if (!state.denied) {
       const body =
         state.candidate?.body ??
         (options.generate ?? ((value) => "summary:" + value))(
-          state.instructions,
+          inlineText(state.instructions),
         );
       generated = state.candidate === null;
       provenance = generated
@@ -308,7 +294,7 @@ export async function runCompaction(
         id: "compaction:after",
         session: { id: "compaction" },
         parentEventId: "compaction:before",
-        summary: contentItem(itemId, "summary", body, "assistant"),
+        summary: structuredClone(state.summary),
         removed: [{ id: "context" }],
         execution: generated
           ? { status: "executed" }

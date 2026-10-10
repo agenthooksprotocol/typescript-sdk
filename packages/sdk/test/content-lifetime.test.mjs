@@ -1,16 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { Hooks } from "agenthooksprotocol/client";
+import { Attachment, Hooks } from "agenthooksprotocol/client";
 
 const requestType = "user.elicitation.request";
 const resultType = "user.elicitation.result";
-const body = (value) => new ReadableStream({
-  start(c) { c.enqueue(new TextEncoder().encode(JSON.stringify(value))); c.close(); },
+const binary = new Uint8Array([255, 0, 1]);
+const body = () => new ReadableStream({
+  start(c) { c.enqueue(binary.slice()); c.close(); },
 });
-const item = (value) => ({ id: "body", kind: "text", role: "user", mediaType: "application/json", body: body(value) });
+const item = (value) => ({ id: "request-text", kind: "text", mediaType: "text/plain", selection: "body", text: JSON.stringify(value) });
+const attachment = () => ({ id: "body", kind: "attachment", mediaType: "application/octet-stream", body: body() });
 const request = (id, session = "one") => ({
-  id, session: { id: session },
+  id, session: { id: session }, items: [attachment()],
   elicitation: { mode: "form", server: "test", request: item({ message: "Answer?", requestedSchema: { type: "object", properties: {} } }) },
 });
 function client({ effects = () => [], fetchHook, maxContentBytes } = {}) {
@@ -54,12 +56,13 @@ test("4097 terminal invocations release bookkeeping while result views retain ow
       assert.deepEqual(result.errors, []);
       results.push(result);
       empty(hooks);
-      assert.ok(result.event.elicitation.request.body instanceof ReadableStream);
+      assert.equal(typeof result.event.elicitation.request.text, "string");
+      assert.ok(result.event.items[0].body instanceof ReadableStream);
     }
     assert.deepEqual(results[0].response.result.effects, [{ type: "deny", reason: "Policy" }]);
-    assert.equal((await new Response(results[0].event.elicitation.request.body).json()).message, "Answer?");
+    assert.deepEqual(new Uint8Array(await new Response(results[0].event.items[0].body).arrayBuffer()), binary);
   } finally {
-    await Promise.all(results.map(result => result.event.elicitation.request.body.cancel().catch(() => {})));
+    await Promise.all(results.map(result => result.event.items[0].body.cancel().catch(() => {})));
     await hooks.close();
   }
 });
@@ -94,7 +97,7 @@ for (const mode of ["invalid", "aborted", "timeout", "failure"])
       await hooks.dispatch(requestType, request("second"));
       const controller = new AbortController();
       if (mode === "aborted") controller.abort();
-      const input = { id: "result", parentEventId: "first", session: { id: "one" },
+      const input = { items: [], id: "result", parentEventId: "first", session: { id: "one" },
         elicitation: { action: "decline", mode: "form", server: "test", result: item({ action: "decline" }) } };
       if (mode === "invalid") delete input.elicitation;
       const work = hooks.dispatch(resultType, input, { signal: mode === "timeout" ? AbortSignal.timeout(20) : controller.signal });
@@ -139,12 +142,12 @@ test("successful correlated inline replacement survives retirement", async () =>
   try {
     await hooks.dispatch(requestType, request("first"));
     const result = await hooks.dispatch(resultType, {
-      id: "answer", parentEventId: "first", session: { id: "one" },
+      items: [], id: "answer", parentEventId: "first", session: { id: "one" },
       elicitation: { mode: "form", server: "test", action: "accept", result: item({ action: "accept", content: {} }) },
     });
     assert.deepEqual(result.errors, []);
     empty(hooks);
-    assert.deepEqual(await new Response(result.event.elicitation.result.body).json(), { action: "accept", content: { answer: "replacement" } });
+    assert.deepEqual(JSON.parse(result.event.elicitation.result.text), { action: "accept", content: { answer: "replacement" } });
     assert.deepEqual(result.response.result.effects[0].value, { answer: "replacement" });
     replacement.answer = "mutated";
     assert.deepEqual(result.response.result.effects[0].value, { answer: "replacement" });
@@ -201,7 +204,8 @@ for (const mode of ["deny", "failure", "abort", "timeout"])
       assert.equal(manager.attachments.size, 0);
       assert.equal("readers" in manager, false);
       assert.equal("snapshots" in manager, false);
-      assert.ok(result.event.elicitation.request.body instanceof ReadableStream);
+      assert.equal(typeof result.event.elicitation.request.text, "string");
+      assert.ok(result.event.items[0].body instanceof ReadableStream);
     } finally { await hooks.close(); }
   });
 
@@ -211,14 +215,12 @@ function gatedRequest(id, session) {
   const entered = new Promise((resolve) => { enter = resolve; });
   const gate = new Promise((resolve) => { release = resolve; });
   const input = request(id, session);
-  input.elicitation.request.body = new ReadableStream({
+  input.items[0].body = new ReadableStream({
     async pull(controller) {
       enter();
       await gate;
       if (cancelled) return;
-      controller.enqueue(new TextEncoder().encode(JSON.stringify({
-        message: "Answer?", requestedSchema: { type: "object", properties: {} },
-      })));
+      controller.enqueue(binary.slice());
       controller.close();
     },
     cancel() { cancelled = true; },
@@ -272,19 +274,23 @@ for (const retirement of ["discard", "session.end", "session.end-generated", "re
       await hooks.close();
     }
   });
-test('legacy result stream and protocol correlation share one owner until consumed', async () => {
+test('binary result ownership survives inline protocol correlation retirement', async () => {
   const hooks = client();
-  const result = await hooks.dispatch(requestType, request('shared-owner'));
+  const input = request('shared-owner');
+  input.items[0].body = Attachment.fromStream(input.items[0].body);
+  const result = await hooks.dispatch(requestType, input);
   const entry = hooks.elicitations.get('shared-owner');
   assert.equal('bytes' in entry, false);
   let reads = 0;
-  const originalRead = entry.owner.read.bind(entry.owner);
-  entry.owner.read = (...args) => { reads++; return originalRead(...args); };
+  const owner = result.content.bodies.get('body').owner;
+  const originalRead = owner.read.bind(owner);
+  owner.read = (...args) => { reads++; return originalRead(...args); };
   hooks.discardElicitation('shared-owner');
   await hooks.close();
   assert.equal(reads, 0);
-  assert.equal((await new Response(result.event.elicitation.request.body).json()).message, 'Answer?');
+  assert.deepEqual(await result.content.read('body'), binary);
   assert.equal(reads, 1);
+  await result.content.close();
   await assert.rejects(originalRead(), /closed/);
 });
 test('active correlated composition retains its owner after pending exchange retirement', async () => {
@@ -297,12 +303,12 @@ test('active correlated composition retains its owner after pending exchange ret
   });
   const initial = await hooks.dispatch(requestType, request('borrowed'));
   // Remove the result stream lease, leaving only the pending exchange lease.
-  await initial.event.elicitation.request.body.cancel();
+  await initial.event.items[0].body.cancel();
   const result = await hooks.dispatch(resultType, {
-    id: 'answer', parentEventId: 'borrowed', session: { id: 'one' },
+    items: [], id: 'answer', parentEventId: 'borrowed', session: { id: 'one' },
     elicitation: { mode: 'form', server: 'test', action: 'accept', result: item({ action: 'accept', content: {} }) },
   });
   assert.deepEqual(result.errors, []);
   await hooks.close();
-  assert.deepEqual(await new Response(result.event.elicitation.result.body).json(), { action: 'accept', content: { answer: 'retained' } });
+  assert.deepEqual(JSON.parse(result.event.elicitation.result.text), { action: 'accept', content: { answer: 'retained' } });
 });

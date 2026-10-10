@@ -2627,7 +2627,7 @@ export const schemas = [
       },
       native: {
         description:
-          "Opaque implementation-defined JSON, delivered only when includeNative is authorized. AHP does not prescribe its shape, completeness, or construction. Native data cannot replace required normalized fields or bypass content selection, upload-only bodies, permissions, or credential exclusions.",
+          "Opaque implementation-defined JSON, delivered only when includeNative is authorized. AHP does not prescribe its shape, completeness, or construction. Native data cannot replace required normalized fields or bypass content selection, inline text and attachment-only uploads, permissions, or credential exclusions.",
       },
     },
   },
@@ -2638,6 +2638,267 @@ export const schemas = [
     $comment: "Mutable AHP draft. ",
     oneOf: [
       {
+        $ref: "#/$defs/textBodyPart",
+      },
+      {
+        $ref: "#/$defs/textGapPart",
+      },
+      {
+        $ref: "#/$defs/textMetadataPart",
+      },
+      {
+        $ref: "#/$defs/textOmittedPart",
+      },
+      {
+        $ref: "#/$defs/attachmentBodyPart",
+      },
+      {
+        $ref: "#/$defs/attachmentGapPart",
+      },
+      {
+        $ref: "#/$defs/attachmentMetadataPart",
+      },
+      {
+        $ref: "#/$defs/attachmentOmittedPart",
+      },
+    ],
+    description:
+      "Selection-aware ordered content part. Text is inline in text; only immutable non-text, non-JSON media attachments use body references. Message containers own canonical roles and ordered parts. Reasoning and skills are categories, not part kinds. Native opaque payloads cannot replace this normalized representation.",
+    $defs: {
+      message: {
+        type: "object",
+        required: ["id", "role", "parts"],
+        properties: {
+          id: {
+            type: "string",
+            minLength: 1,
+          },
+          role: {
+            enum: ["system", "developer", "user", "assistant", "tool"],
+          },
+          parts: {
+            type: "array",
+            items: {
+              $ref: "content-item.schema.json",
+            },
+          },
+          synthesized: {
+            type: "boolean",
+          },
+        },
+        additionalProperties: false,
+        description:
+          "Canonical message with ordered selection-aware parts. Text is inline; attachments are immutable references.",
+      },
+      modelVisibleItem: {
+        $ref: "content-item.schema.json#/$defs/message",
+        description: "Shared canonical message in a model-visible slot.",
+      },
+      messages: {
+        type: "array",
+        items: {
+          $ref: "content-item.schema.json#/$defs/message",
+        },
+      },
+      textPart: {
+        oneOf: [
+          {
+            $ref: "#/$defs/textBodyPart",
+          },
+          {
+            $ref: "#/$defs/textGapPart",
+          },
+          {
+            $ref: "#/$defs/textMetadataPart",
+          },
+          {
+            $ref: "#/$defs/textOmittedPart",
+          },
+        ],
+      },
+      textParts: {
+        type: "array",
+        items: {
+          $ref: "content-item.schema.json#/$defs/textPart",
+        },
+      },
+      textBodyPart: {
+        type: "object",
+        required: ["id", "kind", "mediaType", "selection", "text"],
+        properties: {
+          id: {
+            type: "string",
+            minLength: 1,
+          },
+          kind: {
+            const: "text",
+          },
+          mediaType: {
+            const: "text/plain",
+          },
+          selection: {
+            const: "body",
+          },
+          category: {
+            type: "string",
+            minLength: 1,
+          },
+          synthesized: {
+            type: "boolean",
+            description:
+              "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
+          },
+          text: {
+            type: "string",
+          },
+        },
+        additionalProperties: false,
+        allOf: [
+          {
+            not: {
+              required: ["size"],
+            },
+          },
+          {
+            not: {
+              required: ["sha256"],
+            },
+          },
+        ],
+      },
+      textGapPart: {
+        type: "object",
+        required: ["id", "kind", "mediaType", "selection", "gap"],
+        properties: {
+          id: {
+            type: "string",
+            minLength: 1,
+          },
+          kind: {
+            const: "text",
+          },
+          mediaType: {
+            const: "text/plain",
+          },
+          selection: {
+            const: "body",
+          },
+          gap: {
+            type: "object",
+            required: ["reason"],
+            properties: {
+              reason: {
+                type: "string",
+                minLength: 1,
+              },
+              path: {
+                type: "string",
+                minLength: 1,
+              },
+            },
+            additionalProperties: false,
+          },
+          category: {
+            type: "string",
+            minLength: 1,
+          },
+          size: {
+            type: "integer",
+            minimum: 0,
+          },
+          sha256: {
+            type: "string",
+            pattern: "^[a-f0-9]{64}$",
+            minLength: 64,
+            maxLength: 64,
+          },
+          synthesized: {
+            type: "boolean",
+            description:
+              "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
+          },
+        },
+        additionalProperties: false,
+      },
+      textMetadataPart: {
+        type: "object",
+        required: ["id", "kind", "mediaType", "selection"],
+        properties: {
+          id: {
+            type: "string",
+            minLength: 1,
+          },
+          kind: {
+            const: "text",
+          },
+          mediaType: {
+            const: "text/plain",
+          },
+          selection: {
+            const: "metadata",
+          },
+          category: {
+            type: "string",
+            minLength: 1,
+          },
+          size: {
+            type: "integer",
+            minimum: 0,
+          },
+          sha256: {
+            type: "string",
+            pattern: "^[a-f0-9]{64}$",
+            minLength: 64,
+            maxLength: 64,
+          },
+          synthesized: {
+            type: "boolean",
+            description:
+              "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
+          },
+        },
+        additionalProperties: false,
+      },
+      textOmittedPart: {
+        type: "object",
+        required: ["id", "kind", "mediaType", "selection"],
+        properties: {
+          id: {
+            type: "string",
+            minLength: 1,
+          },
+          kind: {
+            const: "text",
+          },
+          mediaType: {
+            const: "text/plain",
+          },
+          selection: {
+            const: "omit",
+          },
+          category: {
+            type: "string",
+            minLength: 1,
+          },
+          size: {
+            type: "integer",
+            minimum: 0,
+          },
+          sha256: {
+            type: "string",
+            pattern: "^[a-f0-9]{64}$",
+            minLength: 64,
+            maxLength: 64,
+          },
+          synthesized: {
+            type: "boolean",
+            description:
+              "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
+          },
+        },
+        additionalProperties: false,
+      },
+      attachmentBodyPart: {
         type: "object",
         required: ["id", "kind", "mediaType", "selection", "body"],
         properties: {
@@ -2646,26 +2907,21 @@ export const schemas = [
             minLength: 1,
           },
           kind: {
-            type: "string",
-            minLength: 1,
+            const: "attachment",
           },
           mediaType: {
             type: "string",
             minLength: 1,
+            not: {
+              pattern:
+                "^(?:[Tt][Ee][Xx][Tt]/|[^/]+/(?:[^;]+\\+)?[Jj][Ss][Oo][Nn](?:;|$))",
+            },
           },
           selection: {
             const: "body",
           },
           body: {
             $ref: "content-reference.schema.json",
-          },
-          role: {
-            type: "string",
-            minLength: 1,
-          },
-          parentItemId: {
-            type: "string",
-            minLength: 1,
           },
           category: {
             type: "string",
@@ -2691,7 +2947,7 @@ export const schemas = [
           },
         ],
       },
-      {
+      attachmentGapPart: {
         type: "object",
         required: ["id", "kind", "mediaType", "selection", "gap"],
         properties: {
@@ -2700,12 +2956,15 @@ export const schemas = [
             minLength: 1,
           },
           kind: {
-            type: "string",
-            minLength: 1,
+            const: "attachment",
           },
           mediaType: {
             type: "string",
             minLength: 1,
+            not: {
+              pattern:
+                "^(?:[Tt][Ee][Xx][Tt]/|[^/]+/(?:[^;]+\\+)?[Jj][Ss][Oo][Nn](?:;|$))",
+            },
           },
           selection: {
             const: "body",
@@ -2725,14 +2984,6 @@ export const schemas = [
             },
             additionalProperties: false,
           },
-          role: {
-            type: "string",
-            minLength: 1,
-          },
-          parentItemId: {
-            type: "string",
-            minLength: 1,
-          },
           category: {
             type: "string",
             minLength: 1,
@@ -2755,7 +3006,7 @@ export const schemas = [
         },
         additionalProperties: false,
       },
-      {
+      attachmentMetadataPart: {
         type: "object",
         required: ["id", "kind", "mediaType", "selection"],
         properties: {
@@ -2764,24 +3015,19 @@ export const schemas = [
             minLength: 1,
           },
           kind: {
-            type: "string",
-            minLength: 1,
+            const: "attachment",
           },
           mediaType: {
             type: "string",
             minLength: 1,
+            not: {
+              pattern:
+                "^(?:[Tt][Ee][Xx][Tt]/|[^/]+/(?:[^;]+\\+)?[Jj][Ss][Oo][Nn](?:;|$))",
+            },
           },
           selection: {
             const: "metadata",
           },
-          role: {
-            type: "string",
-            minLength: 1,
-          },
-          parentItemId: {
-            type: "string",
-            minLength: 1,
-          },
           category: {
             type: "string",
             minLength: 1,
@@ -2804,7 +3050,7 @@ export const schemas = [
         },
         additionalProperties: false,
       },
-      {
+      attachmentOmittedPart: {
         type: "object",
         required: ["id", "kind", "mediaType", "selection"],
         properties: {
@@ -2813,23 +3059,18 @@ export const schemas = [
             minLength: 1,
           },
           kind: {
-            type: "string",
-            minLength: 1,
+            const: "attachment",
           },
           mediaType: {
             type: "string",
             minLength: 1,
+            not: {
+              pattern:
+                "^(?:[Tt][Ee][Xx][Tt]/|[^/]+/(?:[^;]+\\+)?[Jj][Ss][Oo][Nn](?:;|$))",
+            },
           },
           selection: {
             const: "omit",
-          },
-          role: {
-            type: "string",
-            minLength: 1,
-          },
-          parentItemId: {
-            type: "string",
-            minLength: 1,
           },
           category: {
             type: "string",
@@ -2852,29 +3093,6 @@ export const schemas = [
           },
         },
         additionalProperties: false,
-      },
-    ],
-    description:
-      "Normalized model-content descriptor. id is durable within event source. kind is semantic (including skill and reasoning); category is the subscription selector, independent of role. Bodies occur only as immutable uploaded references. parentItemId associates a block with its owning message. Native opaque payloads are not normalized descriptors.",
-    $defs: {
-      modelVisibleItem: {
-        allOf: [
-          {
-            $ref: "content-item.schema.json",
-          },
-          {
-            type: "object",
-            required: ["role"],
-            properties: {
-              role: {
-                type: "string",
-                minLength: 1,
-              },
-            },
-          },
-        ],
-        description:
-          "Model-visible item or block. Explicit role is required even for metadata/omit views and child blocks; parentItemId does not prove an owner role.",
       },
     },
   },
@@ -3081,29 +3299,75 @@ export const schemas = [
           operation: {
             enum: ["replace", "merge"],
             description:
-              "replace substitutes the whole object. merge shallowly overwrites top-level keys; nested values replace whole values and null is literal, not deletion.",
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
           },
           value: {},
         },
         allOf: [
           {
             if: {
-              anyOf: [
-                {
-                  properties: {
-                    target: {
-                      const: "input",
-                    },
-                  },
+              properties: {
+                target: {
+                  enum: ["prompt", "request", "response", "output"],
                 },
-                {
-                  properties: {
-                    operation: {
-                      const: "merge",
-                    },
-                  },
+              },
+            },
+            then: {
+              properties: {
+                value: {
+                  $ref: "content-item.schema.json#/$defs/messages",
                 },
-              ],
+              },
+            },
+          },
+          {
+            if: {
+              properties: {
+                target: {
+                  const: "content",
+                },
+              },
+            },
+            then: {
+              properties: {
+                value: {
+                  oneOf: [
+                    {
+                      $ref: "content-item.schema.json#/$defs/messages",
+                    },
+                    {
+                      type: "object",
+                    },
+                  ],
+                  description:
+                    "Canonical messages at user.message.outbound; MCP answer object at user.elicitation.result. The host MUST validate the boundary-specific target contract.",
+                },
+              },
+            },
+          },
+          {
+            if: {
+              properties: {
+                target: {
+                  enum: ["instructions", "summary"],
+                },
+              },
+            },
+            then: {
+              properties: {
+                value: {
+                  $ref: "content-item.schema.json#/$defs/textParts",
+                },
+              },
+            },
+          },
+          {
+            if: {
+              properties: {
+                target: {
+                  enum: ["input", "workspace"],
+                },
+              },
             },
             then: {
               properties: {
@@ -3190,7 +3454,9 @@ export const schemas = [
           deliverAt: {
             enum: ["now", "next_turn"],
           },
-          value: {},
+          value: {
+            $ref: "content-item.schema.json#/$defs/messages",
+          },
         },
         additionalProperties: false,
       },
@@ -5890,7 +6156,7 @@ export const schemas = [
             enum: ["auto", "manual", "hook"],
           },
           instructions: {
-            $ref: "content-item.schema.json",
+            $ref: "content-item.schema.json#/$defs/textParts",
             description:
               "Compaction input, modifiable only at the before boundary when advertised; return(summary) skips generation, not after-boundary controls.",
           },
@@ -6016,7 +6282,7 @@ export const schemas = [
             const: "context.compact.after",
           },
           summary: {
-            $ref: "content-item.schema.json#/$defs/modelVisibleItem",
+            $ref: "content-item.schema.json#/$defs/textParts",
             description:
               "Candidate summary; after-boundary modify(summary) affects subsequent interceptors and downstream context use, not an already installed or consumed result.",
           },
@@ -6229,20 +6495,10 @@ export const schemas = [
                 minLength: 1,
               },
               message: {
-                type: "array",
-                items: {
-                  $ref: "content-item.schema.json",
-                },
-                description:
-                  "Selected authorized content descriptors; bodies use pre-uploaded references, never inline text. Empty when all content is omitted.",
+                $ref: "content-item.schema.json#/$defs/textParts",
               },
               title: {
-                type: "array",
-                items: {
-                  $ref: "content-item.schema.json",
-                },
-                description:
-                  "Selected authorized content descriptors; bodies use pre-uploaded references, never inline text. Empty when all content is omitted.",
+                $ref: "content-item.schema.json#/$defs/textParts",
               },
             },
             additionalProperties: false,
@@ -6268,21 +6524,9 @@ export const schemas = [
                 enum: ["form", "url"],
               },
               request: {
+                $ref: "content-item.schema.json#/$defs/textPart",
                 description:
-                  "Optional singular selection-aware descriptor. Omit when not selected; metadata/omit descriptors contain no body. Selected body bytes are complete unchanged MCP elicitation/create params JSON, validated against mcp-elicitation.schema.json#/$defs/request. Missing requested bytes use an explicit content gap, never inline content.",
-                allOf: [
-                  {
-                    $ref: "content-item.schema.json",
-                  },
-                  {
-                    type: "object",
-                    properties: {
-                      mediaType: {
-                        const: "application/json",
-                      },
-                    },
-                  },
-                ],
+                  "Optional selection-aware ordinary text part. For body selection, text contains serialized complete MCP request JSON, validated after parsing against mcp-elicitation.schema.json. No upload or dedicated JSON content part.",
               },
             },
             additionalProperties: false,
@@ -6308,21 +6552,9 @@ export const schemas = [
                 enum: ["form", "url"],
               },
               result: {
+                $ref: "content-item.schema.json#/$defs/textPart",
                 description:
-                  "Optional singular selection-aware descriptor. Omit when not selected; metadata/omit descriptors contain no body. Selected body bytes are complete unchanged MCP ElicitResult JSON, validated against mcp-elicitation.schema.json#/$defs/result. Missing requested bytes use an explicit content gap, never inline content.",
-                allOf: [
-                  {
-                    $ref: "content-item.schema.json",
-                  },
-                  {
-                    type: "object",
-                    properties: {
-                      mediaType: {
-                        const: "application/json",
-                      },
-                    },
-                  },
-                ],
+                  "Optional selection-aware ordinary text part. For body selection, text contains serialized complete MCP result JSON, validated after parsing against mcp-elicitation.schema.json. No upload or dedicated JSON content part.",
               },
               action: {
                 enum: ["accept", "decline", "cancel"],
@@ -6341,7 +6573,7 @@ export const schemas = [
           },
           message: {
             type: "object",
-            required: ["channel", "sender", "text"],
+            required: ["channel", "sender", "messages"],
             properties: {
               channel: {
                 type: "string",
@@ -6351,13 +6583,22 @@ export const schemas = [
                 type: "string",
                 minLength: 1,
               },
-              text: {
+              messages: {
                 type: "array",
                 items: {
-                  $ref: "content-item.schema.json",
+                  allOf: [
+                    {
+                      $ref: "content-item.schema.json#/$defs/message",
+                    },
+                    {
+                      properties: {
+                        role: {
+                          const: "user",
+                        },
+                      },
+                    },
+                  ],
                 },
-                description:
-                  "Selected authorized content descriptors; bodies use pre-uploaded references, never inline text. Empty when all content is omitted.",
               },
             },
             additionalProperties: false,
@@ -6373,19 +6614,28 @@ export const schemas = [
           },
           message: {
             type: "object",
-            required: ["channel", "payload"],
+            required: ["channel", "messages"],
             properties: {
               channel: {
                 type: "string",
                 minLength: 1,
               },
-              payload: {
+              messages: {
                 type: "array",
                 items: {
-                  $ref: "content-item.schema.json",
+                  allOf: [
+                    {
+                      $ref: "content-item.schema.json#/$defs/message",
+                    },
+                    {
+                      properties: {
+                        role: {
+                          const: "assistant",
+                        },
+                      },
+                    },
+                  ],
                 },
-                description:
-                  "Selected authorized content descriptors; bodies use pre-uploaded references, never inline text. Empty when all content is omitted.",
               },
             },
             additionalProperties: false,
@@ -9059,10 +9309,14 @@ export const schemas = [
                   type: "boolean",
                 },
                 before: {
-                  $ref: "content-reference.schema.json",
+                  $ref: "content-item.schema.json",
+                  description:
+                    "Selection-aware file snapshot: inline ordinary text or an immutable non-text, non-JSON media attachment.",
                 },
                 after: {
-                  $ref: "content-reference.schema.json",
+                  $ref: "content-item.schema.json",
+                  description:
+                    "Selection-aware file snapshot: inline ordinary text or an immutable non-text, non-JSON media attachment.",
                 },
               },
               additionalProperties: false,

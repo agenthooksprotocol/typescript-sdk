@@ -8,6 +8,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+import { canonicalLifecycleFixture } from "./lifecycle-common.mjs";
+
 const names = [
   "cancel-before-reply",
   "cancel-after-reply-before-acceptance",
@@ -23,7 +25,7 @@ const canonical = JSON.parse(
     ),
     "utf8",
   ),
-).scenarios;
+).scenarios.map(canonicalLifecycleFixture);
 
 for (const transport of ["http", "stdio"]) {
   test(

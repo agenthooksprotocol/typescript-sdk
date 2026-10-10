@@ -451,8 +451,8 @@ test("immediate abort returns an interrupted result without auth, delivery or co
     input.items = [
       {
         id: "body",
-        kind: "text",
-        mediaType: "text/plain",
+        kind: "attachment",
+        mediaType: "application/octet-stream",
         body: new ReadableStream(
           {
             pull() {
@@ -498,8 +498,8 @@ test("host validation can inspect effective input without reading content stream
     input.items = [
       {
         id: "body",
-        kind: "text",
-        mediaType: "text/plain",
+        kind: "attachment",
+        mediaType: "application/octet-stream",
         body: new ReadableStream(
           {
             pull() {

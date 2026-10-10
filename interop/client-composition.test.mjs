@@ -191,8 +191,8 @@ test("raw stream references survive unrelated modifications and injection stagin
     items: [
       {
         id: "item",
-        kind: "text",
-        mediaType: "text/plain",
+        kind: "attachment",
+        mediaType: "application/octet-stream",
         selection: "body",
         body,
       },
@@ -213,7 +213,7 @@ test("raw stream references survive unrelated modifications and injection stagin
         target: "context",
         operation: "append",
         deliverAt: "next_turn",
-        value: "context",
+        value: [message("context", "context")],
       },
     ],
   );
@@ -222,7 +222,7 @@ test("raw stream references survive unrelated modifications and injection stagin
   assert.equal(body.locked, false);
 });
 
-test("model and workspace modifications use canonical nested event fields", () => {
+test("model request modifications use canonical message lists", () => {
   const model = {
     ...envelope,
     type: "model.request.before",
@@ -239,7 +239,7 @@ test("model and workspace modifications use canonical nested event fields", () =
         type: "modify",
         target: "request",
         operation: "merge",
-        value: { temperature: 0 },
+        value: [message("request", "new prompt")],
       },
     ],
     {
@@ -247,32 +247,21 @@ test("model and workspace modifications use canonical nested event fields", () =
       modify: { request: { replace: false, merge: true } },
     },
   );
-  assert.equal(modified.event.params.temperature, 0);
+  assert.equal(modified.event.params.temperature, 1);
+  assert.equal(modified.event.items[0].parts[0].text, "new prompt");
   assert.equal(modified.event.request, undefined);
 });
 
 const { composeResponseAsync } = await import(
   require.resolve("agenthooksprotocol/client")
 );
-const streamItem = (id, value, role = "user") => {
-  const bytes = new TextEncoder().encode(
-    typeof value === "string" ? value : JSON.stringify(value),
-  );
-  return {
-    id,
-    kind: "text",
-    role,
-    mediaType: typeof value === "string" ? "text/plain" : "application/json",
-    selection: "body",
-    size: bytes.length,
-    body: new ReadableStream({
-      start(c) {
-        c.enqueue(bytes);
-        c.close();
-      },
-    }),
-  };
-};
+const textPart = (id, value) => ({
+  id, kind: "text", mediaType: "text/plain", selection: "body",
+  text: typeof value === "string" ? value : JSON.stringify(value),
+});
+const message = (id, value, role = "user") => ({
+  id, role, parts: [textPart(`${id}-text`, value)],
+});
 const bodyReader = () => {
   const snapshots = new WeakMap();
   return async (body) => {
@@ -284,16 +273,15 @@ const bodyReader = () => {
     return (await snapshots.get(body)).slice();
   };
 };
-const readText = async (item) =>
-  new TextDecoder().decode(await new Response(item.body).arrayBuffer());
+const readText = async (item) => item.text;
 const modifyCaps = (target) => ({
   effects: ["modify"],
   modify: { [target]: { replace: true, merge: true } },
 });
 
-test("async compaction rewrites inline text into a fresh identity-preserving stream", async () => {
-  const instructions = streamItem("instructions", "original", "system");
-  instructions.sha256 = "0".repeat(64);
+test("async compaction rewrites inline text into identity-preserving parts", async () => {
+  const instructions = [textPart("instructions", "original")];
+  instructions[0].sha256 = "0".repeat(64);
   const event = {
     ...envelope,
     type: "context.compact.before",
@@ -309,21 +297,21 @@ test("async compaction rewrites inline text into a fresh identity-preserving str
         type: "modify",
         target: "instructions",
         operation: "replace",
-        value: "new instructions",
+        value: [textPart("instructions", "new instructions")],
       },
     ]),
     modifyCaps("instructions"),
     { readContent: bodyReader() },
   );
-  assert.equal(result.event.instructions.id, "instructions");
-  assert.equal(result.event.instructions.sha256, undefined);
-  assert.equal(result.event.instructions.size, 16);
-  assert.equal(await readText(result.event.instructions), "new instructions");
+  assert.equal(result.event.instructions[0].id, "instructions");
+  assert.equal(result.event.instructions[0].sha256, undefined);
+  assert.equal(result.event.instructions[0].text.length, 16);
+  assert.equal(await readText(result.event.instructions[0]), "new instructions");
   assert.equal(event.instructions, instructions);
   const after = {
     ...envelope,
     type: "context.compact.after",
-    summary: streamItem("summary", "old", "assistant"),
+    summary: [textPart("summary", "old")],
     removed: [],
     execution: { status: "executed" },
   };
@@ -335,21 +323,21 @@ test("async compaction rewrites inline text into a fresh identity-preserving str
         type: "modify",
         target: "summary",
         operation: "replace",
-        value: "replacement summary",
+        value: [textPart("summary", "replacement summary")],
       },
     ]),
     modifyCaps("summary"),
     { readContent: bodyReader() },
   );
-  assert.equal(summary.event.summary.id, "summary");
-  assert.equal(await readText(summary.event.summary), "replacement summary");
+  assert.equal(summary.event.summary[0].id, "summary");
+  assert.equal(await readText(summary.event.summary[0]), "replacement summary");
 });
 
-test("async JSON output modifications chain and shallow-merge bodies", async () => {
+test("async output list modifications chain and append JSON text messages", async () => {
   const event = {
     ...tool(),
     type: "tool.after",
-    items: [streamItem("out", { a: 1, nested: { old: true } }, "tool")],
+    items: [message("out", { a: 1, nested: { old: true } }, "tool")],
     outcome: "ok",
     execution: { status: "executed" },
   };
@@ -358,9 +346,9 @@ test("async JSON output modifications chain and shallow-merge bodies", async () 
       type: "modify",
       target: "output",
       operation: "merge",
-      value: { nested: null },
+      value: [message("next", { nested: null }, "tool")],
     },
-    { type: "modify", target: "output", operation: "merge", value: { b: 2 } },
+    { type: "modify", target: "output", operation: "merge", value: [message("last", { b: 2 }, "tool")] },
   ];
   const result = await composeResponseAsync(
     event,
@@ -369,11 +357,9 @@ test("async JSON output modifications chain and shallow-merge bodies", async () 
     modifyCaps("output"),
     { readContent: bodyReader() },
   );
-  assert.deepEqual(JSON.parse(await readText(result.event.items[0])), {
-    a: 1,
-    nested: null,
-    b: 2,
-  });
+  assert.deepEqual(result.event.items.map(item => JSON.parse(item.parts[0].text)), [
+    { a: 1, nested: { old: true } }, { nested: null }, { b: 2 },
+  ]);
   assert.deepEqual(result.effects, effects);
   assert.equal(result.event.items[0].id, "out");
 });
@@ -385,24 +371,24 @@ test("async prompt and model response materialization preserve catalogue locatio
     message: {
       sender: "person",
       channel: "chat",
-      text: [streamItem("prompt", "old")],
+      messages: [message("prompt", "old")],
     },
   };
   const result = await composeResponseAsync(
     event,
     [],
     response([
-      { type: "modify", target: "prompt", operation: "replace", value: "new" },
+      { type: "modify", target: "prompt", operation: "replace", value: [message("prompt", "new", "user")] },
     ]),
     modifyCaps("prompt"),
     { readContent: bodyReader() },
   );
-  assert.equal(await readText(result.event.message.text[0]), "new");
-  assert.equal(result.event.message.text[0].id, "prompt");
+  assert.equal(await readText(result.event.message.messages[0].parts[0]), "new");
+  assert.equal(result.event.message.messages[0].id, "prompt");
   const model = {
     ...envelope,
     type: "model.response.after",
-    items: [streamItem("answer", "old", "assistant")],
+    items: [message("answer", "old", "assistant")],
     model: { id: "model", provider: "test" },
     attempt: { id: "attempt", number: 1 },
     execution: { status: "executed" },
@@ -416,13 +402,13 @@ test("async prompt and model response materialization preserve catalogue locatio
         type: "modify",
         target: "response",
         operation: "replace",
-        value: "answer",
+        value: [message("answer", "answer", "assistant")],
       },
     ]),
     modifyCaps("response"),
     { readContent: bodyReader() },
   );
-  assert.equal(await readText(modified.event.items[0]), "answer");
+  assert.equal(await readText(modified.event.items[0].parts[0]), "answer");
 });
 
 const formRequest = () => ({
@@ -432,7 +418,7 @@ const formRequest = () => ({
   elicitation: {
     mode: "form",
     server: "mcp",
-    request: streamItem("request-body", {
+    request: textPart("request-body", {
       message: "Name?",
       requestedSchema: {
         type: "object",
@@ -478,8 +464,8 @@ test("async elicitation accepts validated forms and rejects invalid submitted va
     /requestedSchema/,
   );
   assert.equal(
-    result.event.elicitation.request.body,
-    event.elicitation.request.body,
+    result.event.elicitation.request.text,
+    event.elicitation.request.text,
   );
 });
 
@@ -493,7 +479,7 @@ test("async elicitation result content rewrites the MCP body, not the descriptor
       server: "mcp",
       mode: "form",
       action: "accept",
-      result: streamItem("answer-body", {
+      result: textPart("answer-body", {
         action: "accept",
         content: { name: "Alice", age: 3 },
         _meta: { preserved: true },
@@ -567,7 +553,7 @@ test("async rejection precedes body reads and never publishes partial changes", 
     ),
   );
   assert.equal(reads, 0);
-  assert.equal(event.elicitation.request.body.locked, false);
+  assert.equal(event.elicitation.request.text, formRequest().elicitation.request.text);
 });
 
 test("metadata-only projections never cause body-dependent reads", async () => {
@@ -579,7 +565,7 @@ test("metadata-only projections never cause body-dependent reads", async () => {
       request: {
         id: "request-body",
         kind: "text",
-        mediaType: "application/json",
+        mediaType: "text/plain",
         selection: "metadata",
       },
     },
@@ -605,7 +591,7 @@ test("metadata-only projections never cause body-dependent reads", async () => {
   const output = {
     ...tool(),
     type: "tool.after",
-    items: [streamItem("out", { a: 1 }, "tool")],
+    items: [message("out", { a: 1 }, "tool")],
     outcome: "ok",
     execution: { status: "executed" },
   };
@@ -614,10 +600,8 @@ test("metadata-only projections never cause body-dependent reads", async () => {
     items: [
       {
         id: "out",
-        kind: "text",
         role: "tool",
-        mediaType: "application/json",
-        selection: "metadata",
+        parts: [{ id: "out-text", kind: "text", mediaType: "text/plain", selection: "metadata" }],
       },
     ],
   };
@@ -643,7 +627,7 @@ test("metadata-only projections never cause body-dependent reads", async () => {
       modifyCaps("output"),
       options,
     ),
-    /selected body/,
+    /Invalid intercept response/,
   );
   const replaced = await composeResponseAsync(
     output,
@@ -653,13 +637,13 @@ test("metadata-only projections never cause body-dependent reads", async () => {
         type: "modify",
         target: "output",
         operation: "replace",
-        value: "public replacement",
+        value: [message("out", "public replacement", "tool")],
       },
     ]),
     modifyCaps("output"),
     options,
   );
-  assert.equal(await readText(replaced.event.items[0]), "public replacement");
+  assert.equal(await readText(replaced.event.items[0].parts[0]), "public replacement");
   assert.equal(reads, 0);
 });
 
@@ -671,7 +655,7 @@ test("URL elicitation accepts consent, forbids content, and preserves correlatio
     elicitation: {
       mode: "url",
       server: "mcp",
-      request: streamItem("url", {
+      request: textPart("url", {
         mode: "url",
         message: "Open consent page",
         url: "https://example.test/consent",
@@ -707,7 +691,7 @@ test("URL elicitation accepts consent, forbids content, and preserves correlatio
       mode: "url",
       server: "mcp",
       action: "accept",
-      result: streamItem("result", { action: "accept" }),
+      result: textPart("result", { action: "accept" }),
     },
   };
   await assert.rejects(
@@ -724,11 +708,11 @@ test("URL elicitation accepts consent, forbids content, and preserves correlatio
   );
 });
 
-test("normalized model request rewrites items and params without fabricated usage", async () => {
+test("normalized model request rewrites messages without fabricating params or usage", async () => {
   const event = {
     ...envelope,
     type: "model.request.before",
-    items: [streamItem("prompt", "old")],
+    items: [message("prompt", "old")],
     params: { temperature: 1 },
     attempt: { id: "a", number: 1 },
     model: { id: "m", provider: "test" },
@@ -738,7 +722,7 @@ test("normalized model request rewrites items and params without fabricated usag
       type: "modify",
       target: "request",
       operation: "replace",
-      value: { params: { temperature: 0 }, items: ["new prompt"] },
+      value: [message("prompt", "new prompt")],
     },
   ];
   const result = await composeResponseAsync(
@@ -748,27 +732,27 @@ test("normalized model request rewrites items and params without fabricated usag
     modifyCaps("request"),
     { readContent: bodyReader() },
   );
-  assert.deepEqual(result.event.params, { temperature: 0 });
-  assert.equal(await readText(result.event.items[0]), "new prompt");
+  assert.deepEqual(result.event.params, { temperature: 1 });
+  assert.equal(await readText(result.event.items[0].parts[0]), "new prompt");
   assert.equal(result.event.items[0].id, "prompt");
   assert.deepEqual(result.event.model, event.model);
   assert.equal(result.event.usage, undefined);
 });
 
-test("byte-identical compaction modification preserves an existing candidate", async () => {
+test("identical inline compaction modification preserves an existing candidate", async () => {
   const event = {
     ...envelope,
     type: "context.compact.before",
     trigger: "manual",
     items: [],
-    instructions: streamItem("instructions", "same", "system"),
+    instructions: [textPart("instructions", "same")],
   };
   const effects = [
     {
       type: "modify",
       target: "instructions",
       operation: "replace",
-      value: "same",
+      value: [textPart("instructions", "same")],
     },
   ];
   const result = await composeResponseAsync(
@@ -779,5 +763,5 @@ test("byte-identical compaction modification preserves an existing candidate", a
     { readContent: bodyReader() },
   );
   assert.equal(result.state.candidate.value, "summary");
-  assert.equal(result.event.instructions.body, event.instructions.body);
+  assert.equal(result.event.instructions[0].text, event.instructions[0].text);
 });
