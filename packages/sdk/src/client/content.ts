@@ -1,7 +1,9 @@
+import { isPartPath, localParts, mapParts } from "./content-paths.js";
 import {
   parseContentUploadReceipt,
   type ContentSelection,
   type ContentUpload,
+  type ContentUploadReceipt,
 } from "../draft/generated.js";
 
 /** Compatibility adapter for a native lazy stream. The stream is consumed by
@@ -27,6 +29,7 @@ let ownerAccess: {
   claim(owner: Attachment, invocation: object, budget: Budget): void;
   snapshot(owner: Attachment, signal?: AbortSignal): Promise<Snapshot>;
   peek(owner: Attachment): Promise<Snapshot> | undefined;
+  settled(owner: Attachment): boolean;
   retain(owner: Attachment): () => Promise<void>;
   adapt(stream: ReadableStream<Uint8Array>): Attachment;
 };
@@ -36,6 +39,7 @@ let ownerAccess: {
 export class Attachment extends ContentSource {
   #load: Loader | undefined;
   #snapshot: Promise<Snapshot> | undefined;
+  #settled = false;
   #lifetime = new AbortController();
   #invocation: object | undefined;
   #budget: Budget = { used: 0, limit: 64 * 1024 * 1024 };
@@ -79,6 +83,7 @@ export class Attachment extends ContentSource {
       },
       snapshot: (owner, signal) => owner.#materialize(signal),
       peek: (owner) => owner.#snapshot,
+      settled: (owner) => owner.#settled,
       adapt: (stream) => Attachment.#fromStream(stream),
       retain(owner) {
         owner.#lifetime.signal.throwIfAborted();
@@ -178,8 +183,6 @@ export class Attachment extends ContentSource {
     if (!this.#snapshot) {
       const load = this.#load!;
       this.#load = undefined;
-      const abort = () => this.#lifetime.abort(signal?.reason);
-      signal?.addEventListener("abort", abort, { once: true });
       this.#snapshot = (async () => {
         try {
           const bytes = await abortable(load(this.#lifetime.signal, (size) => {
@@ -200,8 +203,7 @@ export class Attachment extends ContentSource {
           this.#reserved = 0;
           throw error;
         } finally {
-          signal?.removeEventListener("abort", abort);
-          await this.#cleanup();
+          try { await this.#cleanup(); } finally { this.#settled = true; }
         }
       })();
     }
@@ -237,32 +239,17 @@ export class AttachmentContent {
   private readonly owners = new Set<Attachment>();
   private closed: Promise<void> | undefined;
   constructor(event: unknown) {
-    const seen = new WeakSet<object>();
-    const visit = (value: any, path: string): void => {
-      if (!value || typeof value !== "object" || seen.has(value)) return;
-      const stream = sourceStream(value);
-      if (stream) {
-        const owner = ownerAccess.adapt(stream);
-        this.bodies.set(path, { owner });
-        this.owners.add(owner);
-        return;
-      }
-      seen.add(value);
-      const body = sourceStream(value.body);
-      if (typeof value.id === "string" && body) {
-        const owner = ownerAccess.adapt(body);
-        const previous = this.bodies.get(value.id);
-        if (previous && (previous.owner !== owner || previous.size !== value.size || previous.sha256 !== value.sha256))
-          throw new Error("Ambiguous content item id");
-        this.bodies.set(value.id, { owner, size: value.size, sha256: value.sha256 });
-        this.owners.add(owner);
-      }
-      for (const [key, child] of Object.entries(value)) {
-        if (key === "body" && body && typeof value.id === "string") continue;
-        visit(child, path + "/" + key.replaceAll("~", "~0").replaceAll("/", "~1"));
-      }
-    };
-    visit(event, "");
+    for (const { part: value, path } of localParts(event)) {
+      const stream = sourceStream(value?.body);
+      if (!stream) continue;
+      const owner = ownerAccess.adapt(stream);
+      const id = typeof value.id === "string" ? value.id : "/" + path.join("/");
+      const previous = this.bodies.get(id);
+      if (previous && (previous.owner !== owner || previous.size !== value.size || previous.sha256 !== value.sha256))
+        throw new Error("Ambiguous content item id");
+      this.bodies.set(id, { owner, size: value.size, sha256: value.sha256 });
+      this.owners.add(owner);
+    }
   }
   get ids(): readonly string[] { return [...this.bodies.keys()]; }
   /** @internal Transfer cleanup responsibility without copying backing bytes. */
@@ -309,16 +296,60 @@ export type ContentUploadRequest = (
   upload: ContentUpload,
 ) => Promise<Response>;
 
+/** @internal FIFO transfer slots shared by all calls on one Hooks instance.
+ * Holds no content, owners, receipts, or invocation state. Aborted queued waiters
+ * remove themselves; each active transfer releases its slot in finally.
+ */
+export class UploadLimiter {
+  private activeUploads = 0;
+  private readonly uploadQueue: { start: () => void }[] = [];
+
+  constructor(private readonly maxConcurrentUploads = 8) {
+    if (!Number.isSafeInteger(maxConcurrentUploads) || maxConcurrentUploads < 1)
+      throw new Error("Invalid concurrent upload limit");
+  }
+
+  acquire(signal: AbortSignal): Promise<() => void> {
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const entry = { start: () => {
+        signal.removeEventListener("abort", abort);
+        this.activeUploads++;
+        let released = false;
+        resolve(() => {
+          if (released) return;
+          released = true;
+          this.activeUploads--;
+          this.uploadQueue.shift()?.start();
+        });
+      } };
+      const abort = () => {
+        const index = this.uploadQueue.indexOf(entry);
+        if (index >= 0) this.uploadQueue.splice(index, 1);
+        reject(signal.reason);
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      if (this.activeUploads < this.maxConcurrentUploads) entry.start();
+      else this.uploadQueue.push(entry);
+    });
+  }
+
+}
+
 export interface ContentManagerOptions {
   /** Aggregate retained byte limit, not a truncation threshold. Default: 64 MiB.
    * Snapshots are kept until close. Chunk assembly, hashing, and each concurrent
    * request also use bounded copies. Streams exceeding it fail explicitly.
    */
   maxSnapshotBytes?: number;
+  /** Standalone manager transfer limit; Hooks supplies its shared limiter. Default 8. */
+  maxConcurrentUploads?: number;
+  /** @internal Share transfer slots, never content, across invocation managers. */
+  uploadLimiter?: UploadLimiter;
   allowLoopback?: boolean;
 }
 
-function validateSnapshotMetadata(snapshot: Snapshot, metadata: ContentMetadata): void {
+function validateSnapshotMetadata(snapshot: Pick<Snapshot, "size" | "sha256">, metadata: ContentMetadata): void {
   if (metadata.size !== undefined && metadata.size !== snapshot.size)
     throw new Error("Content size mismatch");
   if (metadata.sha256 !== undefined && metadata.sha256 !== snapshot.sha256)
@@ -344,6 +375,27 @@ export class ContentManager {
   private closePromise: Promise<void> | undefined;
   private readonly budget: Budget;
   private readonly allowLoopback: boolean;
+  private readonly uploadLimiter: UploadLimiter;
+  // Per-invocation receiver identity: pending/failed promises or confirmed receipt
+  // metadata only. Immutable bytes remain exclusively in the attachment owner.
+  private readonly receipts = new Map<object, Map<Attachment, Promise<ContentUploadReceipt>>>();
+  private planningFinished = false;
+
+  /** @internal Subsequent projections may consume only preplanned receipts. */
+  finishPlanning(): void { this.planningFinished = true; }
+
+  /** @internal Existing selected attachment references may reorder, never create bytes. */
+  restoreAttachment(part: any, original: any, selected: any): any {
+    if (part?.kind !== "attachment" || sourceStream(part.body) || part.body === undefined) return part;
+    const visible = localParts(selected).find(({ part: candidate }) => candidate?.kind === "attachment" && candidate.id === part.id)?.part;
+    const local = localParts(original).find(({ part: candidate }) => candidate?.kind === "attachment" && candidate.id === part.id)?.part;
+    const stream = sourceStream(local?.body);
+    if (!stream || visible?.selection !== "body" || typeof visible.body?.ref !== "string" ||
+        part.body?.ref !== visible.body.ref || part.mediaType !== visible.mediaType || part.category !== visible.category)
+      throw new Error("Effects cannot create or substitute binary attachment content");
+    return { ...part, body: stream };
+  }
+
 
   /** @internal Detach returned owners; dispose everything else in close(). */
   transfer(content: AttachmentContent): void { content.detachFrom(this.attachments); }
@@ -354,6 +406,7 @@ export class ContentManager {
     if (!Number.isSafeInteger(limit) || limit < 0)
       throw new Error("Invalid snapshot byte limit");
     this.allowLoopback = options.allowLoopback ?? false;
+    this.uploadLimiter = options.uploadLimiter ?? new UploadLimiter(options.maxConcurrentUploads);
   }
 
   /** Take cleanup ownership without selecting or reading any body. Call before
@@ -387,7 +440,7 @@ export class ContentManager {
 
   /** Reads local producer bytes for composition, never remote references.
    * Reuses the same bounded snapshot as prepare; returns an independent copy.
-   * Aborting the initial read cancels the stream and leaves that snapshot failed.
+   * A waiter can cancel its own read without retiring another consumer's source.
    */
   async readBody(
     body: ContentSource | ReadableStream<Uint8Array>,
@@ -431,38 +484,18 @@ export class ContentManager {
     upload: ContentUpload | undefined,
     send: ContentUploadRequest,
     signal?: AbortSignal,
+    receiver: object = {},
   ): Promise<any> {
     this.lifetime.signal.throwIfAborted();
-    this.own(event);
+    this.own(localParts(event).map(({ part }) => part?.body));
     signal?.throwIfAborted();
-    const omitted = Symbol("omitted file content");
     const visit = async (
       value: any,
       path: Array<string | number> = [],
     ): Promise<any> => {
-      if (event?.type === "file.changed" && isFileReferencePath(path)) {
-        // Reuse normalized preparation internally; only the confirmed body is
-        // emitted in this bare-reference slot. Private identity never goes out.
-        const prepared = await visit(
-          {
-            id: "local-file-content",
-            kind: "file",
-            category: "files",
-            mediaType: "application/octet-stream",
-            body: value,
-          },
-          ["instructions"],
-        );
-        return prepared.body ?? omitted;
-      }
       if (value === null || typeof value !== "object") return value;
-      if (Array.isArray(value))
-        return Promise.all(
-          value.map((child, index) => visit(child, [...path, index])),
-        );
-      if (sourceStream(value)) return value;
       if (
-        isContentPath(path) &&
+        isPartPath(event?.type, path) &&
         typeof value.id === "string" &&
         typeof value.kind === "string" &&
         typeof value.mediaType === "string"
@@ -479,11 +512,15 @@ export class ContentManager {
           throw new Error("Unsupported content selection");
         const result: Record<string, unknown> = {};
         for (const [key, child] of Object.entries(value)) {
-          if (key !== "body" && key !== "gap" && key !== "selection")
-            result[key] = await visit(child, [...path, key]);
+          if (key !== "body" && key !== "text" && key !== "gap" && key !== "selection")
+            result[key] = child;
         }
         result.selection = mode;
         if (mode !== "body") return result;
+        if (value.kind === "text" && typeof value.text === "string") {
+          result.text = value.text;
+          return result;
+        }
         if (value.gap !== undefined && value.body === undefined) {
           result.gap = await visit(value.gap, [...path, "gap"]);
           return result;
@@ -495,80 +532,101 @@ export class ContentManager {
         if (!upload)
           throw new Error("Body selection requires upload configuration");
         this.validateUpload(upload);
-        const controller = new AbortController();
-        const abort = () =>
-          controller.abort(signal?.reason ?? this.lifetime.signal.reason);
-        signal?.addEventListener("abort", abort, { once: true });
-        this.lifetime.signal.addEventListener("abort", abort, { once: true });
-        if (signal?.aborted || this.lifetime.signal.aborted) abort();
-        const timeout = setTimeout(
-          () =>
-            controller.abort(
-              new DOMException("Content upload timed out", "TimeoutError"),
-            ),
-          upload.timeoutMs,
-        );
-        try {
-          const snapshot = await abortable(
-            this.snapshot(stream, controller.signal),
-            controller.signal,
-          );
-          validateSnapshotMetadata(snapshot, value);
-          if (snapshot.size > upload.maxBytes)
-            throw new Error("Content exceeds upload maxBytes");
-          const response = await abortable(
-            send(
-              upload.endpoint,
-              {
-                method: "POST",
-                redirect: "error",
-                signal: controller.signal,
-                headers: {
-                  "content-type": "application/octet-stream",
-                  "content-length": String(snapshot.size),
-                  "ahp-content-sha256": snapshot.sha256,
-                },
-                // Never expose the reusable private snapshot to an injected callback.
-                body: snapshot.bytes.slice(),
-              },
-              upload,
-            ).then((response) => {
-              if (controller.signal.aborted) {
-                void response.body?.cancel().catch(() => undefined);
-                controller.signal.throwIfAborted();
-              }
-              return response;
-            }),
-            controller.signal,
-          );
-          const parsed = parseContentUploadReceipt(
-            await readConfirmation(response, controller.signal),
-          );
-          if (
-            !parsed.ok ||
-            parsed.value.size !== snapshot.size ||
-            parsed.value.sha256 !== snapshot.sha256
-          ) {
-            throw new Error("Invalid or mismatched upload reference");
-          }
-          delete result.size;
-          delete result.sha256;
-          result.body = { ref: parsed.value.ref };
-          return result;
-        } finally {
-          clearTimeout(timeout);
-          signal?.removeEventListener("abort", abort);
-          this.lifetime.signal.removeEventListener("abort", abort);
+        const owner = ownerAccess.adapt(stream);
+        let scope = this.receipts.get(receiver);
+        if (!scope) { scope = new Map(); this.receipts.set(receiver, scope); }
+        let receipt = scope.get(owner);
+        if (!receipt) {
+          if (this.planningFinished) throw new Error("Attachment was not selected for this receiver");
+          receipt = this.uploadOwner(owner, upload, send, value, signal);
+          scope.set(owner, receipt);
         }
+        const confirmed = await receipt;
+        validateSnapshotMetadata(confirmed, value);
+        delete result.size;
+        delete result.sha256;
+        result.body = { ref: confirmed.ref };
+        return result;
       }
-      const result: Record<string, unknown> = {};
-      for (const [key, child] of Object.entries(value)) {
-        const prepared = await visit(child, [...path, key]);
-        if (prepared !== omitted) result[key] = prepared;
-      }
-      return result;
+      return value;
     };
-    return visit(event);
+    const settled = await Promise.allSettled(localParts(event).map(async ({ part, path }) => ({
+      path, part: await visit(part, path),
+    })));
+    const prepared = settled.map(result => {
+      if (result.status === "rejected") throw result.reason;
+      return result.value;
+    });
+    const byPath = new Map(prepared.map(({ part, path }) => [JSON.stringify(path), part]));
+    return mapParts(event, (part, path) => byPath.get(JSON.stringify(path)) ?? part);
+  }
+
+  private async uploadOwner(owner: Attachment, upload: ContentUpload, send: ContentUploadRequest, metadata: ContentMetadata, signal?: AbortSignal): Promise<ContentUploadReceipt> {
+    const controller = new AbortController();
+    const abort = () =>
+      controller.abort(signal?.reason ?? this.lifetime.signal.reason);
+    signal?.addEventListener("abort", abort, { once: true });
+    this.lifetime.signal.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted || this.lifetime.signal.aborted) abort();
+    let release: (() => void) | undefined;
+    const timeout = setTimeout(
+      () =>
+        controller.abort(
+          new DOMException("Content upload timed out", "TimeoutError"),
+        ),
+      upload.timeoutMs,
+    );
+    try {
+      release = await this.uploadLimiter.acquire(controller.signal);
+      const snapshot = await abortable(
+        ownerAccess.snapshot(owner, controller.signal),
+        controller.signal,
+      );
+      validateSnapshotMetadata(snapshot, metadata);
+      if (snapshot.size > upload.maxBytes)
+        throw new Error("Content exceeds upload maxBytes");
+      const response = await abortable(
+        send(
+          upload.endpoint,
+          {
+            method: "POST",
+            redirect: "error",
+            signal: controller.signal,
+            headers: {
+              "content-type": "application/octet-stream",
+              "content-length": String(snapshot.size),
+              "ahp-content-sha256": snapshot.sha256,
+            },
+            // Never expose the reusable private snapshot to an injected callback.
+            body: snapshot.bytes.slice(),
+          },
+          upload,
+        ).then((response) => {
+          if (controller.signal.aborted) {
+            void response.body?.cancel().catch(() => undefined);
+            controller.signal.throwIfAborted();
+          }
+          return response;
+        }),
+        controller.signal,
+      );
+      const parsed = parseContentUploadReceipt(
+        await readConfirmation(response, controller.signal),
+      );
+      if (
+        !parsed.ok ||
+        parsed.value.size !== snapshot.size ||
+        parsed.value.sha256 !== snapshot.sha256
+      ) {
+        throw new Error("Invalid or mismatched upload reference");
+      }
+      return parsed.value;
+    } finally {
+      release?.();
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
+      this.lifetime.signal.removeEventListener("abort", abort);
+    }
   }
 
   /** @internal A protocol correlation lease shares the same owner, never bytes. */
@@ -585,7 +643,9 @@ export class ContentManager {
     const owner = ownerAccess.adapt(body);
     if (this.hasAttachments) return owner;
     const pending = ownerAccess.peek(owner);
-    if (!synthesized && !pending) return undefined;
+    // A cancelled/timed-out upload waiter cannot make result construction wait
+    // on unfinished legacy producer work. Unretained sources close with the call.
+    if (!synthesized && (!pending || !ownerAccess.settled(owner))) return undefined;
     try {
       if (synthesized) await ownerAccess.snapshot(owner);
       else await pending;
@@ -611,6 +671,7 @@ export class ContentManager {
     this.lifetime.abort(new Error("Content manager closed"));
     this.closePromise = Promise.all([...this.attachments].map(owner => owner.close())).then(() => {});
     this.attachments.clear();
+    this.receipts.clear();
     return this.closePromise;
   }
 
@@ -638,43 +699,6 @@ export class ContentManager {
   private snapshot(stream: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<Snapshot> {
     return ownerAccess.snapshot(ownerAccess.adapt(stream), signal);
   }
-}
-
-function isFileReferencePath(path: Array<string | number>): boolean {
-  return (
-    path.length === 3 &&
-    path[0] === "changes" &&
-    typeof path[1] === "number" &&
-    (path[2] === "before" || path[2] === "after")
-  );
-}
-
-// Match positions, not descriptor-looking objects in opaque operation data.
-function isContentPath(path: Array<string | number>): boolean {
-  if (path.length === 1)
-    return ["instructions", "summary", "partialOutput", "delta"].includes(
-      String(path[0]),
-    );
-  if (path.length === 2) {
-    return (
-      (path[0] === "items" && typeof path[1] === "number") ||
-      (path[0] === "elicitation" &&
-        ["request", "result"].includes(String(path[1])))
-    );
-  }
-  if (path.length !== 3) return false;
-  return (
-    (path[0] === "attention" &&
-      ["title", "message"].includes(String(path[1])) &&
-      typeof path[2] === "number") ||
-    (path[0] === "message" &&
-      ["text", "payload"].includes(String(path[1])) &&
-      typeof path[2] === "number") ||
-    (path[0] === "fileChanges" &&
-      typeof path[1] === "number" &&
-      ["before", "after"].includes(String(path[2])))
-  );
-  // Bare file.changed references are projected separately above.
 }
 
 async function readConfirmation(

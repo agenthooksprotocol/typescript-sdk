@@ -102,18 +102,15 @@ export function stageBoundary(
         if (!staged.values || !Object.hasOwn(staged.values, target))
           throw Error("Target unavailable");
         const previous = staged.values[target];
-        if (
-          operation === "merge" &&
-          (!object(previous) || !object(effect.value))
-        )
-          throw Error("Merge requires objects");
-        staged.values[target] =
-          operation === "merge"
-            ? {
-                ...(previous as object),
-                ...(structuredClone(effect.value) as object),
-              }
-            : structuredClone(effect.value);
+        if (operation === "replace") {
+          staged.values[target] = structuredClone(effect.value);
+        } else if (Array.isArray(effect.value)) {
+          if (!Array.isArray(previous)) throw Error("Merge requires lists");
+          staged.values[target] = [...previous, ...structuredClone(effect.value)];
+        } else {
+          if (!object(previous) || !object(effect.value)) throw Error("Merge requires objects");
+          staged.values[target] = { ...previous, ...structuredClone(effect.value) };
+        }
       }
     } else ordinary.push(effect);
   }

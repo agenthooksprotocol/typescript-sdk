@@ -1,6 +1,7 @@
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullFormats } from "ajv-formats/dist/formats.js";
 import { schemas } from "../draft/schemas.js";
+import { mapParts } from "./content-paths.js";
 import { validateElicitationAnswer } from "../elicitation.js";
 import { validateEffect, validateInterceptResponse } from "../draft/index.js";
 import type {
@@ -16,26 +17,36 @@ export type ClientEvent = ObserveNotification["params"]["event"];
 type ObjectValue = Record<string, unknown>;
 const object = (v: unknown): v is ObjectValue =>
   v !== null && typeof v === "object" && !Array.isArray(v);
-// Copy containers without consuming or transferring host-owned body streams.
+// Clone only schema-owned containers; opaque host payloads retain identity.
 function cloneEvent<T>(value: T): T {
-  if (value instanceof ReadableStream) return value;
-  if (Array.isArray(value)) return value.map(cloneEvent) as T;
+  const event = mapParts(value, (part) => object(part) ? { ...part } : part);
+  if (object(value) && typeof value.type === "string") {
+    for (const path of Object.values(targets[value.type] ?? {})) {
+      let container = event;
+      for (const key of path.slice(0, -1)) {
+        if (!object(container[key])) break;
+        container[key] = { ...container[key] };
+        container = container[key];
+      }
+    }
+  }
+  return event as T;
+}
+// Incoming effects are validated JSON, not host-owned opaque event payloads.
+function cloneValue<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(cloneValue) as T;
   if (object(value))
     return Object.fromEntries(
-      Object.entries(value).map(([k, v]) => [k, cloneEvent(v)]),
+      Object.entries(value).map(([k, v]) => [k, cloneValue(v)]),
     ) as T;
   return value;
 }
 function metadata(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(metadata);
-  if (!object(value)) return value;
-  if (value.body instanceof ReadableStream) {
-    const { body: _, ...rest } = value;
-    return { ...(metadata(rest) as ObjectValue), selection: "metadata" };
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([k, v]) => [k, metadata(v)]),
-  );
+  return mapParts(value, (part) => {
+    if (!object(part) || !(part.body instanceof ReadableStream)) return part;
+    const { body: _, ...rest } = part;
+    return { ...rest, selection: "metadata" };
+  });
 }
 const base = "https://agenthooksprotocol.org/schemas/draft/";
 let registry: Ajv2020 | undefined;
@@ -53,17 +64,37 @@ function validator() {
   }
   return registry;
 }
-function equal(a: unknown, b: unknown): boolean {
+function equal(a: unknown, b: unknown, key?: string): boolean {
   if (a === b) return true;
+  if (key === "native" || key === "input" || key === "params") {
+    // At most compare direct object-target fields; never inspect nested native data.
+    return key !== "native" && object(a) && object(b) &&
+      Object.keys(a).length === Object.keys(b).length &&
+      Object.keys(a).every(k => Object.hasOwn(b, k) && a[k] === b[k]);
+  }
   if (a instanceof ReadableStream || b instanceof ReadableStream) return false;
   if (Array.isArray(a) && Array.isArray(b))
     return a.length === b.length && a.every((v, i) => equal(v, b[i]));
   return (
     object(a) &&
     object(b) &&
-    Object.keys(a).length === Object.keys(b).length &&
-    Object.keys(a).every((k) => Object.hasOwn(b, k) && equal(a[k], b[k]))
+    Object.keys(a).filter(k => a[k] !== undefined).length ===
+      Object.keys(b).filter(k => b[k] !== undefined).length &&
+    Object.keys(a).every((k) => equal(a[k], b[k], k))
   );
+}
+
+// List merges append in order (including duplicates); object merges are shallow.
+function modifyValue(current: unknown, value: unknown, operation: string): unknown {
+  if (operation === "replace") return cloneValue(value);
+  if (Array.isArray(value)) {
+    if (current !== undefined && !Array.isArray(current))
+      throw new Error("Merge target must be a list");
+    return [...((current ?? []) as unknown[]), ...cloneValue(value)];
+  }
+  if (!object(current) || !object(value))
+    throw new Error("Merge requires object values");
+  return { ...current, ...cloneValue(value) };
 }
 
 // Canonical catalogue payload locations (not synthetic input/output slots).
@@ -73,19 +104,19 @@ const targets: Record<string, Record<string, string[]>> = {
   "tool.after": { output: ["items"] },
   "turn.start": { prompt: ["items"] },
   "turn.finish.before": { response: ["items"] },
-  "model.request.before": { request: ["params"] },
+  "model.request.before": { request: ["items"] },
   "model.response.after": { response: ["items"] },
   "context.compact.before": { instructions: ["instructions"] },
   "context.compact.after": { summary: ["summary"] },
-  "user.message.inbound": { prompt: ["message", "text"] },
-  "user.message.outbound": { content: ["message", "payload"] },
+  "user.message.inbound": { prompt: ["message", "messages"] },
+  "user.message.outbound": { content: ["message", "messages"] },
   "user.elicitation.result": { content: ["elicitation", "result"] },
   "workspace.change.before": { workspace: ["workspace", "change"] },
 };
 
 /** Pure atomic composition. Previous effects are effective decisions, not
  * modifications to replay. No execution, authorization, resolution or upload
- * occurs here. Use composeResponseAsync for inline content/body composition. */
+ * occurs here. Use composeResponseAsync for correlated elicitation validation. */
 export function composeResponse(
   event: ClientEvent,
   previous: Effect[],
@@ -106,6 +137,8 @@ export interface CompositionOptions {
   readContent: (body: ReadableStream<Uint8Array>) => Promise<Uint8Array>;
   /** Register locally synthesized sources before staging can fail. */
   ownContent?: (body: ReadableStream<Uint8Array>) => void;
+  /** Resolve only existing, selected receiver refs to their immutable local owners. */
+  resolveAttachment?: (part: ObjectValue) => ObjectValue;
   /** Raw request event associated by parentEventId, source, session and server. */
   elicitationRequest?: ClientEvent;
   /** Actual subscriber projection. Metadata/omit/gap views do not grant reads. */
@@ -150,9 +183,8 @@ function compose(
       ].includes(effect.type)
     )
       throw new Error("Unknown effect");
-    // Elicitation content is inside an immutable MCP result body, not the
-    // descriptor. It cannot be validated or rewritten synchronously from a
-    // reference/stream. Reject rather than corrupting the catalogue envelope.
+    // Elicitation content is serialized MCP JSON inside an inline text part.
+    // Its correlated request must be validated before rewriting the envelope.
     if (
       !prepared &&
       effect.type === "modify" &&
@@ -199,11 +231,20 @@ function compose(
         advertised[operation] !== true
       )
         throw new Error("Unsupported modification");
-      if (
-        (effect.target === "input" || operation === "merge") &&
-        !object(effect.value)
-      )
-        throw new Error("Modification requires an object");
+      // The shared effect schema permits specialized object-valued targets.
+      // Boundary context determines the actual shape; ordinary message targets
+      // remain canonical lists for both replacement and ordered append.
+      const objectTarget = ["input", "workspace"].includes(effect.target) ||
+        (event.type === "user.elicitation.result" && effect.target === "content");
+      if (objectTarget) {
+        if (!object(effect.value)) throw new Error("Modification requires an object");
+      } else {
+        const definition = ["instructions", "summary"].includes(effect.target)
+          ? "textParts" : "messages";
+        if (!Array.isArray(effect.value) || !ajv.validate(
+          `${base}content-item.schema.json#/$defs/${definition}`, effect.value,
+        )) throw new Error("Modification requires a canonical list");
+      }
     }
     if (effect.type === "flow") {
       if (!capabilities.flow?.operations.includes(effect.operation))
@@ -245,10 +286,7 @@ function compose(
     }
     const key = path[path.length - 1]!;
     const current = container[key];
-    if (effect.operation === "merge") {
-      if (!object(current)) throw new Error("Merge target must be an object");
-      container[key] = { ...current, ...(effect.value as ObjectValue) };
-    } else container[key] = structuredClone(effect.value);
+    container[key] = modifyValue(current, effect.value, effect.operation);
   }
   const eventSchema =
     event.type === "tool.before"
@@ -373,8 +411,8 @@ export function normalizeEffects(
   return { effects, state, shortCircuit: denied || stopped };
 }
 
-/** Compose inline effect bodies into fresh local streams before the next hook.
- * Only the returned event publishes those streams; failed responses leave the
+/** Compose canonical inline lists before the next hook without reading attachments.
+ * Only the returned event publishes edits; failed responses leave the
  * caller's containers and previous effective decisions unchanged.
  */
 export async function composeResponseAsync(
@@ -384,8 +422,8 @@ export async function composeResponseAsync(
   capabilities: Capabilities,
   options: CompositionOptions,
 ): Promise<CompositionResult> {
-  // Validate the complete list before reading or materializing any body. The
-  // prepared-event path suppresses only body-dependent checks until staging.
+  // Validate the complete list before staging edits. The prepared-event path
+  // postpones correlated elicitation checks until its inline JSON is parsed.
   compose(event, previous, response, capabilities, event, true, options.state);
   const staged = cloneEvent(event) as ObjectValue;
   const effects = response.result.effects;
@@ -397,130 +435,33 @@ export async function composeResponseAsync(
   const selectedBody = (value: unknown): boolean =>
     object(value) &&
     value.selection === "body" &&
-    value.body !== undefined &&
+    typeof value.text === "string" &&
     value.gap === undefined;
   const ajv = validator();
   const readJson = async (item: unknown): Promise<ObjectValue> => {
     if (
       !object(item) ||
-      item.mediaType !== "application/json" ||
-      !(item.body instanceof ReadableStream)
+      item.kind !== "text" ||
+      item.selection !== "body" ||
+      item.gap !== undefined ||
+      typeof item.text !== "string"
     )
-      throw new Error("A raw application/json body is required");
-    const bytes = await options.readContent(
-      item.body as ReadableStream<Uint8Array>,
-    );
-    const value: unknown = JSON.parse(
-      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-    );
+      throw new Error("An inline text body is required");
+    const value: unknown = JSON.parse(item.text);
     if (!object(value)) throw new Error("Expected a JSON object body");
     return value;
   };
-  const merge = (
-    current: unknown,
-    value: unknown,
-    operation: string,
-  ): unknown => {
-    if (operation === "replace") return cloneEvent(value);
-    if (!object(current) || !object(value))
-      throw new Error("Merge requires object values");
-    return { ...current, ...cloneEvent(value) };
-  };
-  const bodyItem = (
-    old: unknown,
-    value: unknown,
-    role: string,
-  ): ObjectValue => {
+  const bodyItem = (old: unknown, value: unknown): ObjectValue => {
     const oldItem = object(old) ? old : {};
-    const {
-      body: _body,
-      gap: _gap,
-      size: _size,
-      sha256: _sha256,
-      selection: _selection,
-      ...rest
-    } = oldItem;
-    const text = typeof value === "string" ? value : JSON.stringify(value);
-    const bytes = new TextEncoder().encode(text);
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(bytes);
-        controller.close();
-      },
-    });
-    try {
-      options.ownContent?.(body);
-    } catch (error) {
-      void body.cancel().catch(() => undefined);
-      throw error;
-    }
     return {
-      ...rest,
-      ...(typeof oldItem.id === "string"
-        ? {}
-        : { id: crypto.randomUUID(), synthesized: true }),
-      kind: typeof oldItem.kind === "string" ? oldItem.kind : "text",
-      role: typeof oldItem.role === "string" ? oldItem.role : role,
-      mediaType: typeof value === "string" ? "text/plain" : "application/json",
+      id: typeof oldItem.id === "string" ? oldItem.id : crypto.randomUUID(),
+      ...(typeof oldItem.id === "string" ? {} : { synthesized: true }),
+      kind: "text",
+      mediaType: "text/plain",
       selection: "body",
-      size: bytes.byteLength,
-      body,
+      text: JSON.stringify(value),
+      ...(oldItem.category !== undefined ? { category: oldItem.category } : {}),
     };
-  };
-  const materialize = async (
-    current: unknown,
-    value: unknown,
-    operation: string,
-    role: string,
-    array: boolean,
-    mayRead = true,
-  ): Promise<unknown> => {
-    const old = array && Array.isArray(current) ? current[0] : current;
-    // Descriptor arrays remain portable metadata (not receiver-owned body refs).
-    // Inline effect bodies are otherwise encoded as one logical content item.
-    if (
-      operation === "replace" &&
-      Array.isArray(value) &&
-      value.every(
-        (v) =>
-          object(v) &&
-          (v.selection === "metadata" || v.selection === "omit") &&
-          ajv.validate(`${base}content-item.schema.json`, v),
-      )
-    ) {
-      if (!array) throw new Error("Expected one content item");
-      return cloneEvent(value);
-    }
-    let next = value;
-    if (operation === "merge") {
-      if (!mayRead)
-        throw new Error("Object merge requires selected body content");
-      if (array && Array.isArray(current) && current.length !== 1)
-        throw new Error("Object merge requires one JSON content body");
-      next = merge(await readJson(old), value, operation);
-    }
-    // Bind authorization to semantic content, not a freshly allocated stream.
-    // A byte-identical rewrite retains the original item and pending decision.
-    if (
-      mayRead &&
-      object(old) &&
-      old.body instanceof ReadableStream &&
-      (!array || (Array.isArray(current) && current.length === 1))
-    ) {
-      const oldBytes = await options.readContent(
-        old.body as ReadableStream<Uint8Array>,
-      );
-      const nextBytes = new TextEncoder().encode(
-        typeof next === "string" ? next : JSON.stringify(next),
-      );
-      if (
-        oldBytes.length === nextBytes.length &&
-        oldBytes.every((v, i) => v === nextBytes[i])
-      )
-        return current;
-    }
-    const item = bodyItem(old, next, role);
-    return array ? [item] : item;
   };
   // Elicitation validation needs the original request, not an inferred form.
   const elicitationChanged = effects.some(
@@ -610,7 +551,7 @@ export async function composeResponseAsync(
     if (event.type === "user.elicitation.result") {
       elicitationResult = {
         ...elicitationResult,
-        content: merge(
+        content: modifyValue(
           elicitationResult?.content,
           effect.value,
           effect.operation,
@@ -627,90 +568,27 @@ export async function composeResponseAsync(
     }
     const key = path[path.length - 1]!;
     const current = container[key];
-    if (
-      effect.target === "request" &&
-      object(effect.value) &&
-      (Object.hasOwn(effect.value, "params") ||
-        Object.hasOwn(effect.value, "items"))
-    ) {
-      // The normalized request form lets a backend replace both model-bound
-      // items and provider params. A plain opaque object remains native params.
-      const request = merge(
-        { params: staged.params, items: staged.items },
-        effect.value,
-        effect.operation,
-      ) as ObjectValue;
-      staged.params = request.params;
-      if (!Array.isArray(request.items))
-        throw new Error("Normalized request requires an items array");
-      if (request.items === staged.items) continue;
-      const oldItems = Array.isArray(staged.items) ? staged.items : [];
-      staged.items = await Promise.all(
-        request.items.map(async (value, i) => {
-          if (
-            object(value) &&
-            (value.selection === "metadata" || value.selection === "omit") &&
-            ajv.validate(`${base}content-item.schema.json`, value)
-          )
-            return cloneEvent(value);
-          const selected = selectedAt(["items"]);
-          return materialize(
-            oldItems[i],
-            value,
-            "replace",
-            "user",
-            false,
-            !options.selectedEvent ||
-              (Array.isArray(selected) && selectedBody(selected[i])),
-          );
-        }),
-      );
-    } else if (["input", "workspace", "request"].includes(effect.target)) {
-      container[key] = merge(current, effect.value, effect.operation);
-    } else {
-      const array = !["instructions", "summary"].includes(effect.target);
-      const role =
-        effect.target === "prompt"
-          ? "user"
-          : effect.target === "instructions"
-            ? "system"
-            : event.type === "tool.after"
-              ? "tool"
-              : "assistant";
-      const selected = selectedAt(path);
-      const mayRead =
-        !options.selectedEvent ||
-        (array
-          ? Array.isArray(selected) &&
-            selected.length === 1 &&
-            selectedBody(selected[0])
-          : selectedBody(selected));
-      container[key] = await materialize(
-        current,
-        effect.value,
-        effect.operation,
-        role,
-        array,
-        mayRead,
-      );
-    }
+    container[key] = modifyValue(current, effect.value, effect.operation);
   }
   if (elicitationResult) {
     validateAnswer(elicitationResult);
     const meta = staged.elicitation as ObjectValue;
-    meta.result = bodyItem(meta.result, elicitationResult, "user");
+    meta.result = bodyItem(meta.result, elicitationResult);
     meta.action = elicitationResult.action;
   }
   if (elicitationRequest) {
     for (const effect of effects)
       if (effect.type === "return") validateAnswer(effect.value);
   }
+  const resolved = options.resolveAttachment
+    ? mapParts(staged, (part) => object(part) && part.kind === "attachment" ? options.resolveAttachment!(part) : part)
+    : staged;
   return compose(
     event,
     previous,
     response,
     capabilities,
-    staged as ClientEvent,
+    resolved as ClientEvent,
     false,
     options.state,
   );

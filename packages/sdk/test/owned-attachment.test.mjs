@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { Attachment, Hooks, contentSlots } from 'agenthooksprotocol/client';
+import { Attachment, Hooks } from 'agenthooksprotocol/client';
 
-const type = 'context.compact.before';
-const item = (body) => ({ id: 'instructions', kind: 'text', mediaType: 'text/plain', body });
-const input = (body) => ({ trigger: "manual", items: [], session: { id: 'session' }, instructions: item(body) });
+const type = 'turn.start';
+const item = (body) => ({ id: 'instructions', kind: 'attachment', mediaType: 'application/octet-stream', body });
+const input = (body) => ({ trigger: "user", turn: { id: "turn" }, items: [{ id: "message", role: "user", parts: [item(body)] }], session: { id: 'session' } });
 function client(mode, extra = {}) {
   return new Hooks({ protocolVersion: 'draft', hooks: [1, 2].map(n => ({
     id: `example.consumer${n}`, transport: { type: 'http', url: 'https://example.test/hooks' },
@@ -95,8 +95,8 @@ test('typed source binding preserves owned attachment identity', async () => {
   const hooks = client();
   const attachment = Attachment.bytes(new Uint8Array([9]));
   const { body, ...metadata } = item(attachment);
-  const result = await hooks.contextCompactBefore({ trigger: 'manual', items: [], instructions: metadata }, {
-    contentSources: [contentSlots[type].instructions(attachment)],
+  const result = await hooks.turnStart({ trigger: 'user', turn: { id: 'turn' }, items: [{ id: 'message', role: 'user', parts: [{ ...metadata, selection: "metadata" }] }] }, {
+    contentSources: [{ path: ["items", 0, "parts", 0], source: attachment }],
   });
   await hooks.close();
   assert.deepEqual(await result.content.read('instructions'), new Uint8Array([9]));
@@ -130,9 +130,7 @@ test('conflicting ownership still disposes fresh later sources', async () => {
   const reused = Attachment.bytes(new Uint8Array([1]));
   const result = await hooks.dispatch(type, input(reused));
   let closes = 0;
-  await assert.rejects(hooks.dispatch(type, { ...input(reused), native: {
-    later: Attachment.lazy(() => { throw Error('unexpected'); }, () => { closes++; }),
-  } }), /another invocation/);
+  await assert.rejects(hooks.dispatch(type, { ...input(reused), items: [{ id: 'message', role: 'user', parts: [item(reused), { ...item(Attachment.lazy(() => { throw Error('unexpected'); }, () => { closes++; })), id: 'later' }] }] }), /another invocation/);
   assert.equal(closes, 1);
   assert.deepEqual(await result.content.read('instructions'), new Uint8Array([1]));
   await result.content.close();
@@ -148,15 +146,16 @@ test('throwing disposer cannot retain invocation bookkeeping', async () => {
 test('result accessor reflects accepted text edits without mutating original input', async () => {
   const original = input(Attachment.bytes(new TextEncoder().encode('original')));
   const hooks = client('metadata', {
-    capabilities: { [type]: { effects: ['modify'], modify: { instructions: { replace: true, merge: false } } } },
+    capabilities: { [type]: { effects: ['modify'], modify: { prompt: { replace: true, merge: false } } } },
     fetch: async (_, init) => Response.json({ jsonrpc: '2.0', id: JSON.parse(init.body).id,
-      result: { protocolVersion: 'draft', effects: [{ type: 'modify', target: 'instructions', operation: 'replace', value: 'replacement' }] } }),
+      result: { protocolVersion: 'draft', effects: [{ type: 'modify', target: 'prompt', operation: 'replace', value: [{ id: 'replacement-message', role: 'user', parts: [{ id: 'instructions', kind: 'text', mediaType: 'text/plain', selection: 'body', text: 'replacement' }] }] }] } }),
   });
   const result = await hooks.dispatch(type, original);
   assert.deepEqual(result.errors, []);
-  assert.ok(original.instructions.body instanceof Attachment);
+  assert.ok(original.items[0].parts[0].body instanceof Attachment);
   await hooks.close();
-  assert.equal(new TextDecoder().decode(await result.content.read('instructions')), 'replacement');
+  assert.equal(result.event.items[0].parts[0].text, 'replacement');
+  await assert.rejects(result.content.read('instructions'), /Unknown local content item id/);
   await result.content.close();
 });
 test('closing a result cancels an in-flight lazy read', async () => {
@@ -186,14 +185,14 @@ for (const mode of [undefined, 'metadata']) {
       const bytes = new Uint8Array([1, 2]);
       const event = input(Attachment.lazy(() => { opens++; return bytes; }));
       const valid = { size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
-      Object.assign(event.instructions, valid, { [field]: field === 'size' ? 99 : '0'.repeat(64) });
+      Object.assign(event.items[0].parts[0], valid, { [field]: field === 'size' ? 99 : '0'.repeat(64) });
       const hooks = client(mode);
       const result = await hooks.dispatch(type, event);
       await hooks.close();
       assert.equal(opens, 0);
       // Neither producer mutations nor compatibility event mutations can relax validation.
-      Object.assign(event.instructions, valid);
-      Object.assign(result.event.instructions, valid);
+      Object.assign(event.items[0].parts[0], valid);
+      Object.assign(result.event.items[0].parts[0], valid);
       try {
         for (let i = 0; i < 2; i++) {
           await assert.rejects(result.content.read('instructions'), field === 'size' ? /Content size mismatch/ : /Content SHA-256 mismatch/);
@@ -206,7 +205,7 @@ for (const mode of [undefined, 'metadata']) {
 test('matching result metadata allows repeated independent reads after shutdown', async () => {
   const bytes = new Uint8Array([1, 2]);
   const event = input(Attachment.bytes(bytes));
-  Object.assign(event.instructions, { size: 2, sha256: createHash('sha256').update(bytes).digest('hex') });
+  Object.assign(event.items[0].parts[0], { size: 2, sha256: createHash('sha256').update(bytes).digest('hex') });
   const hooks = client('metadata');
   const result = await hooks.dispatch(type, event);
   await hooks.close();
@@ -237,7 +236,7 @@ test('selected uploads and returned content retain the exact attachment owner wi
   const result = await hooks.dispatch(type, input(attachment));
   assert.deepEqual(result.errors, []);
   assert.equal(uploads, 2);
-  assert.equal(result.event.instructions.body, attachment);
+  assert.equal(result.event.items[0].parts[0].body, attachment);
   assert.equal(result.content.bodies.get('instructions').owner, attachment);
   await hooks.close();
   assert.equal(new TextDecoder().decode(await result.content.read('instructions')), 'one owner');
@@ -256,7 +255,7 @@ test('explicit native-stream attachments retain the same unopened owner', async 
   const hooks = client();
   const result = await hooks.dispatch(type, input(attachment));
   assert.equal(pulls, 0);
-  assert.equal(result.event.instructions.body, attachment);
+  assert.equal(result.event.items[0].parts[0].body, attachment);
   await hooks.close();
   assert.deepEqual(await result.content.read('instructions'), new Uint8Array([7]));
   assert.equal(pulls, 1);
@@ -265,15 +264,19 @@ test('explicit native-stream attachments retain the same unopened owner', async 
 test('failed cleanup before result handoff also releases detached result owners', async () => {
   let replacement;
   const hooks = client('metadata', {
-    capabilities: { [type]: { effects: ['modify'], modify: { instructions: { replace: true, merge: false } } } },
+    capabilities: { [type]: { effects: ['modify'], modify: { prompt: { replace: true, merge: false } } } },
     fetch: async (_, init) => {
       const manager = [...hooks.managers][0];
       manager.transfer = content => {
-        replacement = content.bodies.get('instructions').owner;
+        // Simulate an owned replacement during handoff without uploading text.
+        replacement = Attachment.bytes(new TextEncoder().encode('replacement'));
+        manager.own(replacement);
+        content.bodies.set('instructions', { owner: replacement });
+        content.owners.add(replacement);
         content.detachFrom(manager.attachments);
       };
       return Response.json({ jsonrpc: '2.0', id: JSON.parse(init.body).id,
-        result: { protocolVersion: 'draft', effects: [{ type: 'modify', target: 'instructions', operation: 'replace', value: 'replacement' }] } });
+        result: { protocolVersion: 'draft', effects: [{ type: 'modify', target: 'prompt', operation: 'replace', value: [{ id: 'replacement-message', role: 'user', parts: [{ id: 'instructions', kind: 'text', mediaType: 'text/plain', selection: 'body', text: 'replacement' }] }] }] } });
     },
   });
   // The replaced owner is not in effective content, but still must be disposed.

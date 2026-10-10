@@ -167,11 +167,11 @@ test("HTTP authorization is independent of JSON-RPC correlation and event identi
         message: {
           channel: "chat",
           sender: "user",
-          text: [
+          messages: [{ id: "upload-message", role: "user", parts: [
             {
               id: "upload-text",
-              kind: "message",
-              mediaType: "text/plain",
+              kind: "attachment",
+              mediaType: "application/octet-stream",
               body: new ReadableStream<Uint8Array>({
                 start(controller) {
                   controller.enqueue(
@@ -181,7 +181,7 @@ test("HTTP authorization is independent of JSON-RPC correlation and event identi
                 },
               }),
             },
-          ],
+          ] }],
         },
       });
       assert.deepEqual(result.errors, []);

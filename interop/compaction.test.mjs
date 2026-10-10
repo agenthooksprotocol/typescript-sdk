@@ -1,12 +1,12 @@
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runCompaction, compactionCapabilities } from "./compaction.mjs";
+import { runCompaction, compactionCapabilities, inlineText, textParts } from "./compaction.mjs";
 const modify = (target, value) => ({
   type: "modify",
   target,
   operation: "replace",
-  value,
+  value: textParts(value),
 });
 const hook = (supplier, run, failurePolicy = "fail-closed") => ({
   supplier,
@@ -25,11 +25,11 @@ test("compaction callbacks and generator see accepted inputs and results", async
     ],
     [
       hook("redact", (snapshot) => [
-        modify("summary", snapshot.bodies[snapshot.summary.ref] + ":redacted"),
+        modify("summary", inlineText(snapshot.summary.parts) + ":redacted"),
       ]),
       hook("watch", (snapshot) => {
         assert.equal(
-          snapshot.bodies[snapshot.summary.ref],
+          inlineText(snapshot.summary.parts),
           "generated:new:redacted",
         );
         return [];
@@ -46,8 +46,8 @@ test("compaction callbacks and generator see accepted inputs and results", async
   assert.deepEqual(r.failures, []);
   assert.equal(r.applied, true);
   assert.equal(r.seen[1].summary.id, r.summary.id);
-  assert.notEqual(r.seen[1].summary.ref, r.summary.ref);
-  assert.equal(Object.keys(r.bodies).length, 2);
+  assert.notEqual(inlineText(r.seen[1].summary.parts), inlineText(r.summary.parts));
+  assert.equal(inlineText(r.seen[1].summary.parts), "generated:new");
 });
 test("failed compound preserves candidate, messages and input; supplied summary still redacted", async () => {
   const r = await runCompaction(
@@ -73,7 +73,7 @@ test("failed compound preserves candidate, messages and input; supplied summary 
   );
   assert.equal(r.instructions, "old");
   assert.deepEqual(r.messages, []);
-  assert.equal(r.bodies[r.summary.ref], "safe");
+  assert.equal(inlineText(r.summary.parts), "safe");
   assert.deepEqual(r.provenance, { kind: "supplied", supplier: "cache" });
   assert.equal(r.applied, true);
 });
@@ -89,7 +89,7 @@ test("after failure prevents delivery; observation does not advertise control", 
     ],
   );
   assert.equal(r.applied, false);
-  assert.equal(Object.values(r.bodies).includes("leak"), false);
+  assert.equal(inlineText(r.summary.parts).includes("leak"), false);
   assert.deepEqual(compactionCapabilities("after", true), {
     effects: [],
     modify: {},
@@ -155,11 +155,11 @@ test(
       release();
       const r = await work;
       await finished;
-      const downstream = r.applied ? [r.bodies[r.summary.ref]] : [];
+      const downstream = r.applied ? [inlineText(r.summary.parts)] : [];
       assert.deepEqual(downstream, ["summary:base"]);
       assert.deepEqual(r.failures, []);
       const saved = structuredClone(r);
-      snapshot.bodies = { late: "mutation" };
+      snapshot.summary.parts[0].text = "late mutation";
       snapshot.summary = "forbidden";
       await new Promise((resolve) => setImmediate(resolve));
       assert.deepEqual(r, saved);
@@ -192,7 +192,7 @@ test(
             snapshot = value;
             notify();
             await gate;
-            value.bodies = {};
+            value.summary.parts[0].text = "mutation";
             return [modify("summary", "forbidden")];
           }),
         ],
@@ -211,10 +211,10 @@ test(
       assert.deepEqual(snapshot.capabilities, { effects: [], modify: {} });
       release();
       const r = await work;
-      const downstream = r.applied ? [r.bodies[r.summary.ref]] : [];
+      const downstream = r.applied ? [inlineText(r.summary.parts)] : [];
       assert.deepEqual(downstream, ["summary:base"]);
       assert.deepEqual(r.failures, []);
-      assert.equal(r.bodies[r.summary.ref], "summary:base");
+      assert.equal(inlineText(r.summary.parts), "summary:base");
       const saved = structuredClone(r);
       snapshot.summary = "late mutation";
       await new Promise((resolve) => setImmediate(resolve));
@@ -226,7 +226,7 @@ test(
 );
 
 test(
-  "wire receiver scopes uploads and events by independent credentials, never correlation IDs",
+  "wire receiver scopes attachment uploads and inline-text events by independent credentials, never correlation IDs",
   { timeout: 15000 },
   async () => {
     const { spawn } = await import("node:child_process");
@@ -320,14 +320,7 @@ test(
         type: "context.compact.before",
         trigger: "manual",
         items: [],
-        instructions: {
-          id: "instructions",
-          kind: "instructions",
-          mediaType: "text/plain",
-          role: "system",
-          selection: "body",
-          body: { ref: descriptor.ref },
-        },
+        instructions: textParts("base"),
       };
       const request = {
         jsonrpc: "2.0",
@@ -354,22 +347,33 @@ test(
         await denied.arrayBuffer();
       }
       const accepted = await (await send("event-one")).json();
-      assert.equal(accepted.result.effects[0].value, "base:one");
+      assert.equal(inlineText(accepted.result.effects[0].value), "base:one");
+      const legacy = structuredClone(request);
+      legacy.params.event.instructions = {
+        id: "instructions",
+        kind: "instructions",
+        mediaType: "text/plain",
+        role: "system",
+        selection: "body",
+        body: { ref: descriptor.ref },
+      };
+      const rejectedLegacy = await (await send("event-one", legacy)).json();
+      assert.equal(rejectedLegacy.error.code, -32602);
       const crossScope = await (await send("event-two")).json();
-      assert.equal(crossScope.error.code, -32602);
+      assert.equal(inlineText(crossScope.result.effects[0].value), "base:two");
       const second = await upload("upload-two");
       assert.equal(second.status, 201);
       const secondDescriptor = await second.json();
       assert.notEqual(secondDescriptor.ref, descriptor.ref);
       const other = structuredClone(request);
-      other.params.event.instructions.body = { ref: secondDescriptor.ref };
+      other.params.event.instructions = textParts("base");
       const scoped = await (await send("event-two", other)).json();
-      assert.equal(scoped.result.effects[0].value, "base:two");
+      assert.equal(inlineText(scoped.result.effects[0].value), "base:two");
       other.id = "unrelated-id";
       other.params.event.id = other.id;
       const correlated = await (await send("event-two", other)).json();
       assert.equal(correlated.id, other.id);
-      assert.equal(correlated.result.effects[0].value, "base:two");
+      assert.equal(inlineText(correlated.result.effects[0].value), "base:two");
     } finally {
       lines.close();
       child.kill();
@@ -401,7 +405,7 @@ test("wire sender refuses plans missing independent upload credentials", () => {
 test("empty hook plans still use a valid public Hooks registration", async () => {
   const result = await runCompaction("base");
   assert.equal(result.applied, true);
-  assert.equal(result.bodies[result.summary.ref], "summary:base");
+  assert.equal(inlineText(result.summary.parts), "summary:base");
   assert.deepEqual(result.seen, []);
   assert.deepEqual(result.failures, []);
 });
@@ -419,5 +423,26 @@ test("explicit malformed-response bypass exercises SDK rejection", async () => {
     { boundary: "before", supplier: "malformed" },
   ]);
   assert.equal(result.applied, true);
-  assert.equal(result.bodies[result.summary.ref], "summary:base");
+  assert.equal(inlineText(result.summary.parts), "summary:base");
+});
+
+
+test("compaction composes all inline text parts before generation", async () => {
+  const result = await runCompaction("base", [
+    hook("parts", () => [{
+      type: "modify",
+      target: "instructions",
+      operation: "replace",
+      value: [
+        { ...textParts("first")[0], id: "first" },
+        { ...textParts(":second")[0], id: "second" },
+      ],
+    }]),
+    hook("watch", (snapshot) => {
+      assert.equal(snapshot.instructions, "first:second");
+      return [];
+    }),
+  ]);
+  assert.deepEqual(result.failures, []);
+  assert.equal(inlineText(result.summary.parts), "summary:first:second");
 });

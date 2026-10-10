@@ -1,6 +1,6 @@
 import {
-  toEventInput,
-  contentSlots,
+  _projectHostInput,
+  ownedAttachment,
   CapabilityBuilder,
   Permission,
 } from "../draft/generated.js";
@@ -22,8 +22,9 @@ import {
   validateInterceptRequest,
   validateInterceptResponse,
 } from "../draft/index.js";
+import { isPartPath, localParts, mapParts } from "./content-paths.js";
 import { BackendTransport } from "./transport.js";
-import { Attachment, ContentManager, ContentSource } from "./content.js";
+import { Attachment, ContentManager, ContentSource, UploadLimiter } from "./content.js";
 import { composeResponseAsync, normalizeEffects } from "./composition.js";
 import { auth } from "./auth.js";
 import { validateWire } from "./validation.js";
@@ -107,6 +108,18 @@ const matches = (selector: string, type: string) =>
   selector === type ||
   (selector.endsWith(".*") && selector.slice(0, -2) === type.split(".")[0]);
 
+// Filters are exact optimization hints. Missing projections must never exclude
+// an otherwise authorized route (notably tools whose kind is unknown).
+function matchesFilters(subscription: Subscription, event: any): boolean {
+  for (const [values, actual] of [
+    [subscription.filters?.paths, event.path],
+    [subscription.filters?.toolKinds, event.tool?.kind],
+  ] as const) {
+    if (Array.isArray(values) && typeof actual === "string" && !values.includes(actual)) return false;
+  }
+  return true;
+}
+
 type ElicitationLifetime = {
   id: string;
   sessionId: string | undefined;
@@ -122,12 +135,13 @@ export class Hooks {
   private readonly managers = new Set<ContentManager>();
   private readonly pending = new Set<Promise<unknown>>();
   private readonly provider;
+  private readonly uploadLimiter: UploadLimiter;
   private readonly authContexts = new Map<string, any>();
   private manifest!: StaticCapabilityManifest;
   private closed?: Promise<void>;
   private readonly elicitations = new Map<
     string,
-    { event: any; owner: Attachment; size: number; release: () => Promise<void> }
+    { event: any; size: number }
   >();
   private elicitationBytes = 0;
   // Tokens exist only for active calls, including preparation before any bytes
@@ -135,6 +149,10 @@ export class Hooks {
   private readonly activeElicitations = new Set<ElicitationLifetime>();
 
   constructor(config: unknown, options: HooksOptions) {
+    if (options.maxConcurrentUploads !== undefined &&
+        (!Number.isSafeInteger(options.maxConcurrentUploads) || options.maxConcurrentUploads <= 0))
+      throw new ConfigurationError([{ path: "maxConcurrentUploads", code: "INVALID_LIMIT" }]);
+    this.uploadLimiter = new UploadLimiter(options.maxConcurrentUploads);
     this.options = {
       ...options,
       capabilities: structuredClone(
@@ -164,7 +182,7 @@ export class Hooks {
       path,
       code: "INVALID_REGISTRATION",
     }));
-    for (const key of ["maxContentBytes", "observationTimeoutMs"] as const) {
+    for (const key of ["maxContentBytes", "observationTimeoutMs", "maxConcurrentUploads"] as const) {
       const value = this.options[key];
       if (
         value !== undefined &&
@@ -439,9 +457,10 @@ export class Hooks {
           ? this.options.maxContentBytes!
           : 64 * 1024 * 1024,
       allowLoopback: true,
+      uploadLimiter: this.uploadLimiter,
     });
     try {
-      manager.own([input, options.contentSources]);
+      manager.own([localParts({ ...input, type }).map(({ part }) => part?.body), options.contentSources?.map(binding => binding.source)]);
     } catch (error) {
       await manager.close().catch(() => {});
       throw error;
@@ -564,7 +583,7 @@ export class Hooks {
         interrupted: true,
       } as BoundaryResult<K>;
     const localSources = new Set<ReadableStream<Uint8Array>>();
-    let correlation: { event: Event; owner: Attachment; release: () => Promise<void> } | undefined;
+    let correlation: { event: Event; release: () => Promise<void> } | undefined;
     let originalRequest: Event | undefined;
 
     let effects: Effect[] = [];
@@ -610,10 +629,11 @@ export class Hooks {
     const matching = this.routes.filter(
       (r) =>
         r.subscription.events.some((s) => matches(s, type)) &&
-        advertised.modes.includes(r.subscription.mode),
+        advertised.modes.includes(r.subscription.mode) &&
+        matchesFilters(r.subscription, event),
     );
     try {
-      correlation = this.elicitationFor(event, manager);
+      correlation = this.elicitationFor(event);
       originalRequest = correlation?.event;
       // Validate a metadata-only view before any delivery (this does not consume bytes).
       const metadata = await manager.prepare(
@@ -653,9 +673,27 @@ export class Hooks {
             code: "INVALID_BOUNDARY_STATE",
           })),
         );
+      // Plan from the admitted input, before any serial receiver can remove or
+      // reorder attachments. Failures remain local until that route is delivered.
+      const preparationFailures = new Map<Route, unknown>();
+      await Promise.all(matching.map(async route => {
+        const s = route.subscription;
+        const budget = s.mode === "observe"
+          ? deadlineAfter(this.options.observationTimeoutMs ?? 15000, signal) : undefined;
+        const preparationSignal = budget?.signal ?? signal;
+        try {
+          await raceAbort(manager.prepare(
+            projectNative(event, s.includeNative), s.content, s.upload,
+            (url, init, upload) => this.fetchAuthenticated(url, init, upload.auth, "upload", route.backend.id),
+            preparationSignal, route,
+          ), preparationSignal);
+        } catch (cause) { preparationFailures.set(route, cause); }
+        finally { budget?.dispose(); }
+      }));
+      manager.finishPlanning();
       for (const route of matching) {
         if (route.subscription.mode !== "intercept" || shortCircuit) continue;
-        if (signal.aborted) {
+        if (signal.aborted && !preparationFailures.has(route)) {
           interrupted = true;
           break;
         }
@@ -666,6 +704,7 @@ export class Hooks {
         let received = false;
         let budget: ReturnType<typeof deadlineAfter> | undefined;
         try {
+          if (preparationFailures.has(route)) throw preparationFailures.get(route);
           const projected = await raceAbort(
             manager.prepare(
               projectNative(event, s.includeNative),
@@ -680,16 +719,17 @@ export class Hooks {
                   route.backend.id,
                 ),
               signal,
+              route,
             ),
             signal,
           );
           if (
             type === "user.elicitation.request" &&
             projected.elicitation?.request?.selection === "body" &&
-            event.elicitation?.request?.body instanceof ReadableStream
+            typeof event.elicitation?.request?.text === "string"
           ) {
-            const retained = await manager.retainBody(event.elicitation.request.body, signal);
-            this.rememberElicitation(event, retained, exchange!);
+            const size = new TextEncoder().encode(event.elicitation.request.text).byteLength;
+            this.rememberElicitation(event, size, exchange!);
           }
           const request = {
             jsonrpc: "2.0",
@@ -736,7 +776,7 @@ export class Hooks {
               (effect) => effect.type === "return" || effect.type === "deny",
             ) &&
             (projected.elicitation?.request?.selection !== "body" ||
-              !projected.elicitation.request.body ||
+              typeof projected.elicitation.request.text !== "string" ||
               projected.elicitation.request.gap !== undefined)
           )
             throw new Error(
@@ -744,14 +784,13 @@ export class Hooks {
             );
           const staged = await raceAbort(
             composeResponseAsync(event, effects, decoded.value, caps, {
-              readContent: (body) => originalRequest && body === (originalRequest as any).elicitation.request.body
-                ? correlation!.owner.read(deadline)
-                : manager.readBody(body, deadline),
+              readContent: (body) => manager.readBody(body, deadline),
               ownContent: (body) => {
                 manager.own(body);
                 localSources.add(body);
               },
               selectedEvent: projected,
+              resolveAttachment: (part) => manager.restoreAttachment(part, event, projected),
               state,
               ...(originalRequest
                 ? { elicitationRequest: originalRequest }
@@ -828,7 +867,7 @@ export class Hooks {
       if (!signal.aborted && observations.length) {
         const snapshot = cloneInput(event);
         const jobs = observations.map((route) =>
-          this.observe(route, snapshot, manager, signal),
+          this.observe(route, snapshot, manager, signal, preparationFailures),
         );
         observed = Promise.all(jobs).then((results) =>
           results.filter(
@@ -887,6 +926,7 @@ export class Hooks {
     event: any,
     manager: ContentManager,
     parentSignal: AbortSignal,
+    preparationFailures: Map<Route, unknown>,
   ): Promise<DeliveryError | undefined> {
     const budget = deadlineAfter(
       this.options.observationTimeoutMs ?? 15000,
@@ -896,6 +936,7 @@ export class Hooks {
     let preparing = true;
     try {
       const s = route.subscription;
+      if (preparationFailures.has(route)) throw preparationFailures.get(route);
       const projected = await raceAbort(
         manager.prepare(
           projectNative(event, s.includeNative),
@@ -910,6 +951,7 @@ export class Hooks {
               route.backend.id,
             ),
           signal,
+          route,
         ),
         signal,
       );
@@ -946,26 +988,23 @@ export class Hooks {
 
   private rememberElicitation(
     event: any,
-    retained: { owner: Attachment; size: number; release: () => Promise<void> },
+    size: number,
     exchange: ElicitationLifetime,
   ): void {
     if (exchange.retired || this.lifetime.signal.aborted || this.elicitations.has(event.id)) {
-      void retained.release().catch(() => {});
       return;
     }
     const limit = this.options.maxContentBytes ?? 64 * 1024 * 1024;
-    if (retained.size > limit) {
-      void retained.release().catch(() => {});
+    if (size > limit) {
       throw new Error("Elicitation request exceeds retention budget");
     }
     if (
-      this.elicitationBytes + retained.size > limit ||
+      this.elicitationBytes + size > limit ||
       this.elicitations.size >= 128
     ) {
-      void retained.release().catch(() => {});
       throw new Error("Active elicitation exchanges exceed retention budget");
     }
-    // Pending exchanges retain correlation facts and a lease on the same owner.
+    // Pending exchanges retain only the selected inline request and correlation facts.
     const stored = {
       type: event.type,
       id: event.id,
@@ -974,21 +1013,20 @@ export class Hooks {
       elicitation: {
         mode: event.elicitation.mode,
         server: event.elicitation.server,
-        request: { mediaType: event.elicitation.request.mediaType },
+        request: { ...event.elicitation.request },
       },
     };
-    this.elicitations.set(event.id, { event: stored, ...retained });
-    this.elicitationBytes += retained.size;
+    this.elicitations.set(event.id, { event: stored, size });
+    this.elicitationBytes += size;
   }
-  private elicitationFor(event: any, manager: ContentManager): {
-    event: Event; owner: Attachment; release: () => Promise<void>;
+  private elicitationFor(event: any): {
+    event: Event; release: () => Promise<void>;
   } | undefined {
     if (event.type !== "user.elicitation.result") return undefined;
     const entry = this.elicitations.get(event.parentEventId);
     if (!entry) return undefined;
     const copy = cloneInput(entry.event);
-    copy.elicitation.request.body = entry.owner.stream;
-    return { event: copy, owner: entry.owner, release: manager.lease(entry.owner) };
+    return { event: copy, release: async () => {} };
   }
   /** End an abandoned host elicitation exchange without delivering a result. */
   discardElicitation(requestEventId: string): void {
@@ -1008,7 +1046,6 @@ export class Hooks {
     const entry = this.elicitations.get(id);
     if (entry) {
       this.elicitationBytes -= entry.size;
-      void entry.release().catch(() => {});
     }
     this.elicitations.delete(id);
   }
@@ -1028,7 +1065,6 @@ export class Hooks {
         await Promise.allSettled([...this.managers].map((m) => m.close()));
         await Promise.allSettled([...this.pending]);
         this.authContexts.clear();
-        await Promise.allSettled([...this.elicitations.values()].map(entry => entry.release()));
         this.elicitations.clear();
         this.elicitationBytes = 0;
       })();
@@ -1040,13 +1076,24 @@ export class Hooks {
     input: EventInput<K>,
     options?: BoundaryOptions,
   ): Promise<BoundaryResult<K>> {
-    // Generated projection preserves owned source identities; dispatch clones
-    // host facts, owns cleanup, and validates the canonical request before I/O.
-    return this.dispatch(
-      type,
-      toEventInput(type, input as any) as unknown as BoundaryInput<K>,
-      options,
-    );
+    // Conversion is schema-bounded and has no I/O. Restore pending owners only
+    // inside the runtime, before selection replaces them with confirmed refs.
+    try {
+      const host = mapParts({ ...input, type }, (part) =>
+        part?.kind === "attachment" && part.body instanceof Attachment
+          ? { ...part, body: ownedAttachment(part.body) } : part);
+      const projection = _projectHostInput(type, host as any);
+      bindContentSources(type, projection.event, projection.bindings as any);
+      return this.dispatch(type, projection.event as unknown as BoundaryInput<K>, options);
+    } catch (error) {
+      const owners = new Set(localParts({ ...input, type }).map(({ part }) => part?.body).filter(body => body instanceof Attachment));
+      // Admit cleanup ownership through the same synchronous nominal claim as
+      // dispatch. Conflicting/read owners stay with their existing owner; own()
+      // still admits every fresh source before reporting a conflict.
+      const cleanup = new ContentManager();
+      try { cleanup.own([...owners]); } catch { /* Never close an owner whose claim failed. */ }
+      return cleanup.close().then(() => { throw error; });
+    }
   }
 
   toolBefore(
@@ -1250,42 +1297,29 @@ async function resultEvent(
   manager: ContentManager,
   localSources = new Set<ReadableStream<Uint8Array>>(),
 ): Promise<any> {
-  if (value instanceof ContentSource) value = value.stream;
-  if (value instanceof ReadableStream) {
-    return manager.resultBody(value, localSources.has(value));
-  }
-  if (Array.isArray(value))
-    return Promise.all(
-      value.map((child) => resultEvent(child, manager, localSources)),
-    );
-  if (value && typeof value === "object") {
-    const entries = await Promise.all(
-      Object.entries(value).map(async ([key, child]) =>
-        [key, await resultEvent(child, manager, localSources)] as const),
-    );
-    const copy = Object.fromEntries(
-      entries.filter(([, child]) => child !== undefined),
-    );
-    if (
-      (value.body instanceof ReadableStream || value.body instanceof ContentSource) &&
-      !copy.body
-    )
-      copy.selection = "metadata";
-    return copy;
-  }
-  return value;
+  const prepared = await Promise.all(localParts(value).map(async ({ part, path }) => {
+    const body = part?.body;
+    const stream = body instanceof ContentSource ? body.stream : body;
+    if (!(stream instanceof ReadableStream)) return { path, part };
+    const result = await manager.resultBody(stream, localSources.has(stream));
+    const copy = { ...part };
+    if (result) copy.body = result;
+    else { delete copy.body; copy.selection = "metadata"; }
+    return { path, part: copy };
+  }));
+  const byPath = new Map(prepared.map(({ path, part }) => [JSON.stringify(path), part]));
+  return mapParts(value, (part, path) => byPath.get(JSON.stringify(path)) ?? part);
 }
 
 function cloneInput(value: any): any {
-  if (value instanceof ContentSource) return value.stream;
-  if (value instanceof ReadableStream) return value;
-  if (Array.isArray(value)) return value.map(cloneInput);
-  if (value && typeof value === "object")
-    return Object.fromEntries(
-      Object.entries(value).map(([k, v]) => [k, cloneInput(v)]),
-    );
-  return value;
+  return mapParts(value, (part) => {
+    if (part === null || typeof part !== "object") return part;
+    const copy = { ...part };
+    if (copy.body instanceof ContentSource) copy.body = copy.body.stream;
+    return copy;
+  });
 }
+
 function projectNative(event: any, includeNative?: boolean): any {
   const copy = cloneInput(event);
   if (includeNative !== true) delete copy.native;
@@ -1454,21 +1488,7 @@ function bindContentSources(
     if (!(source instanceof ReadableStream))
       throw new TypeError("Expected an owned content source");
     const path = binding.path;
-    const allowed = Object.values(contentSlots[type]).some((factory) => {
-      const bind = factory as (...args: any[]) => {
-        path: readonly (string | number)[];
-      };
-      const expected = (factory.length === 2 ? bind(0, source) : bind(source))
-        .path;
-      return (
-        path.length === expected.length &&
-        expected.every((part, index) =>
-          typeof part === "number"
-            ? Number.isSafeInteger(path[index]) && Number(path[index]) >= 0
-            : path[index] === part,
-        )
-      );
-    });
+    const allowed = isPartPath(type, path);
     const key = JSON.stringify(path);
     if (!allowed || used.has(key))
       throw new TypeError("Invalid or duplicate content source slot");
@@ -1481,16 +1501,11 @@ function bindContentSources(
     }
     const last = path[path.length - 1]!;
     const descriptor = parent[last];
-    if (descriptor && typeof descriptor === "object" && "kind" in descriptor) {
-      if (descriptor.body !== undefined)
-        throw new TypeError("Content source conflicts with an existing body");
-      descriptor.body = source;
-    } else {
-      if (descriptor !== undefined)
-        throw new TypeError(
-          "Content source conflicts with an existing reference",
-        );
-      parent[last] = source;
-    }
+    if (!descriptor || typeof descriptor !== "object" || descriptor.kind !== "attachment")
+      throw new TypeError("Only binary attachment descriptors accept owned sources");
+    if (descriptor.body !== undefined)
+      throw new TypeError("Content source conflicts with an existing body");
+    descriptor.body = source;
+    descriptor.selection = "body";
   }
 }

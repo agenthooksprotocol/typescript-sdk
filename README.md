@@ -153,37 +153,35 @@ resources, is repeatable, and rejects subsequent calls. It does not close shared
 providers or injected HTTP adapters. Await active calls first if graceful completion
 is wanted; close does not implicitly drain normal observation processing.
 
-Wrap owned streams as `new ContentSource(stream)` (imported from the client entry
-point), then place the source in a content item's `body`. Construction does no I/O.
-Metadata/omit/unmatched routes do not read bytes; selected body deliveries snapshot
-once under the configured limit and upload independently to authorized destinations.
-The SDK computes size/hash and verifies receiver descriptors before publishing the
-event. Calling a boundary transfers read/cancel ownership, including unused and
-failed-call paths. Native raw streams and canonical references are also supported.
-Keep host execution data separately from these owned delivery sources.
-Returned body streams are lazy views of their attachment owner. Consume or cancel
-these streams to release their owner leases; unselected stream sources become
-metadata without being read. Owned attachments expose `result.content.close()`.
-Accepted inline replacement values are available in `result.response.result.effects`.
+Canonical messages contain a role and ordered `parts`. Text is inline in a
+`{ kind: "text", text: "..." }` part. Serialize structured text with
+`JSON.stringify(value)`; JSON is text, not an attachment part. Binary attachment
+parts carry `kind: "attachment"`, a non-text/non-JSON `mediaType`, and an
+`Attachment` in `body`. Normal named `Hooks` methods construct canonical identity
+and collect attachment ownership internally; callers do not create wire refs or
+project host inputs.
 
-An unfinished elicitation exchange retains correlation facts and a lease on its
-selected request owner. A request `return` can be followed by a correlated result.
-Denial, failed or interrupted delivery, a result
-attempt (including validation failure), session end, and `close()` retire that
-exchange. If the host abandons a pending exchange without a result, call
-`hooks.discardElicitation(requestEventId)`. Retirement also prevents requests already
-in preparation from retaining correlation bytes later. This uses only active-call
-tokens; each call has its own lifetime. Retiring an exchange releases its lease
-without invalidating returned content or an already-running correlated invocation.
-Other pending exchanges are not evicted:
-exceeding the active exchange count or byte budget reports a preparation failure.
+Body-selected text is delivered inline. Metadata and omit selections remove both
+text and attachment bodies. Unmatched routes do not open attachments. Each
+body-selected destination uploads from the exact attachment owner and receives a
+verified receiver-allocated reference. The owner materializes at most once under
+the invocation's aggregate byte limit. Conversion performs no reads or uploads.
+Only schema-owned slots are inspected; native and provider-specific payloads are
+opaque. Calling a boundary transfers attachment cleanup ownership, including
+unused and failed-call paths. Keep host execution data separately.
 
+`user.elicitation.request` and `user.elicitation.result` carry JSON serialized in
+inline text parts. Selected requests retain bounded correlation facts for matching
+results by parent event, source, session, mode, and server. Denial, failed or
+interrupted delivery, a result attempt, session end, and `close()` retire the
+exchange. Call `hooks.discardElicitation(requestEventId)` when abandoning a pending
+exchange. Other pending exchanges are not evicted when the exchange count or byte
+budget is exceeded.
 
-Alternatively, keep a metadata descriptor in a generated input and pass
-`contentSources: [contentSlots[events.toolBefore].items(0, source)]` as boundary
-options. The generated slot binds the owned source to that descriptor without a
-caller-created ref. Only authorized body selection promotes it to a verified
-receiver-allocated reference; metadata and omit selections never read it.
+Message and text-list replacement substitutes the supplied list; merge appends
+in order. Object-target merge is shallow. Each response is admitted atomically,
+and later interceptors receive the effective event after accepted edits. Binary
+attachment bodies are immutable and are not text-edit targets.
 
 ### Harness-owned authentication
 
@@ -358,58 +356,74 @@ Local dispatch IDs and harness state must not be copied into protocol payloads.
 
 Apache-2.0
 
-### Owned attachments
+## Owned attachments
 
-Import `Attachment` from `agenthooksprotocol/client` for invocation-owned local
-content without a backing store, upload scope, staging, or reference resolution:
+Import `Attachment` from `agenthooksprotocol/client` for invocation-owned binary
+content. Use a normal boundary method with direct host facts:
 
 ```ts
+import { Attachment, Hooks } from "agenthooksprotocol/client";
+
+// hooks is a configured Hooks instance with explicit turn.start grants.
 const attachment = Attachment.bytes(new Uint8Array([1, 2, 3]));
-const lazy = Attachment.lazy(async (signal) => readFile(path, { signal }));
+const result = await hooks.turnStart({
+  turn: { id: "turn-1" },
+  trigger: "user",
+  items: [{
+    role: "user",
+    parts: [
+      { kind: "text", text: "Inspect this binary document." },
+      { id: "document", kind: "attachment", mediaType: "application/octet-stream", body: attachment },
+    ],
+  }],
+});
+try {
+  if (result.interrupted || result.permission === "deny") throw new Error("Turn not permitted");
+  await hooks.close();
+  const bytes = await result.content?.read("document");
+} finally {
+  await result.content?.close();
+}
 ```
 
-`bytes` defensively copies its input. `lazy(open, dispose?)` calls `open` at most
-once, on actual byte demand; it must return a `Uint8Array` or its promise. An
-optional asynchronous `dispose` releases producer resources even when never
-opened. Cleanup must finish promptly, and `open` should honor its abort signal.
-
-Use `Attachment.fromStream(stream)` to take ownership of a native stream.
-`Attachment.read(signal?)` returns a defensive copy, and `Attachment.close()`
-releases ownership. Once an attachment is passed to a boundary, let the returned
-content accessor manage its lifetime. Do not read a standalone attachment before
-handing it to an invocation.
-
+`Attachment.bytes` defensively copies its input. `Attachment.lazy(open, dispose?)`
+opens at most once on byte demand; `open` returns a `Uint8Array` or its promise and
+must honor its abort signal. The optional asynchronous `dispose` releases producer
+resources, including unopened sources, and must finish promptly.
+`Attachment.fromStream(stream)` takes read/cancel ownership of a native stream.
 Apply producer-side bounds when loading files: `maxContentBytes` bounds retained
-SDK snapshots, not allocations inside a caller's loader.
+SDK bytes, not allocations inside a caller's loader.
 
-Use attachments in typed content-item `body` fields, or in generated
-`contentSlots[eventType]` bindings. Metadata stays on the content item. The
-invocation owns the attachment and shares one immutable snapshot among selected
-consumers; no-match, metadata, and omit delivery do not open it. The same handle
-may appear multiple times in one invocation, but reuse in another invocation is
-rejected. `ContentSource`, raw streams, and reference APIs are also supported.
+Authorized attachment body selections are planned before the serial interceptor
+chain. Each immutable owner is materialized once and uploaded concurrently to its
+requesting subscriptions. `HooksOptions.maxConcurrentUploads` is a positive integer
+with default `8` (the shared SDK option is `max_concurrent_uploads` /
+`maxConcurrentUploads`). The limit is shared across all concurrent calls on the same
+`Hooks` instance. Each slot covers upload preparation (including materialization)
+through transfer and receipt confirmation. Local result reads do not acquire
+upload slots. Confirmed references are isolated by backend and subscription,
+even when upload URLs are equal. Inline text does not upload; metadata-only, omitted,
+and unmatched attachments remain unread. Removing an attachment during interception
+does not undo its planned upload. Preparation failures are handled at the affected
+subscription's delivery point, using its failure policy; observers are best effort.
 
-Results from successful owned-attachment invocations include `result.content`:
+Overlapping reads join the same immutable result or source error. Cancelling one
+waiter does not cancel another waiter's materialization. Invocation or last-owner
+cleanup releases the source. Results remain readable after `hooks.close()` until
+`result.content.close()`.
 
-- `ids` lists local effective content item IDs (reference-only slots instead use
-  JSON pointers such as `/changes/0/after`). Content item IDs must be unambiguous.
-- `read(id, signal?)` returns a fresh byte copy, materializing an unread source
-  only on demand, subject to the invocation's aggregate byte limit.
-- `close()` is asynchronous and idempotent. Always await it in `finally`, even if
-  no bytes were read. It releases snapshots and disposes unopened sources.
+`Attachment.read(signal?)` returns a defensive copy. Do not read an attachment
+before handing it to an invocation, or reuse it in another invocation. Once passed
+to a boundary, let `result.content` manage cleanup. Explicit IDs must be
+unambiguous; omitted message and part IDs receive synthesized canonical identities.
 
-The accessor owns effective local bytes and sources independently of
-`Hooks.close()`. Thrown invocations and interrupted boundaries clean up their
-sources instead of transferring usable ownership. There is no session archive
-or automatic cross-invocation handle reuse. Opaque remote references are not
-resolved by this accessor. It also owns local streams in the same result.
-For owned attachments, `result.event` body fields reference the same attachment
-owners, including unopened sources. Use `result.content` for metadata-validated
-reads and collective disposal. Returned body streams retain the same owner and
-provide a defensive copy when consumed.
-
-Edits require canonical text/JSON composition rules and capability grants.
-Binary attachments are delivery inputs, not editable effect targets.
+A successful non-interrupted result retains the actual owners, including unread
+sources, independently of `Hooks.close()`. `result.event` attachment bodies refer
+to those same owners. `result.content.ids` indexes local attachment IDs, and
+`read(id, signal?)` checks metadata and returns a fresh byte copy. Always await
+`result.content.close()` in `finally`, even when no bytes are read. Interrupted or
+thrown calls clean up sources instead of transferring usable owners. Remote refs
+are not resolved by the local content accessor.
 
 See the standalone [file attachment example](packages/sdk/examples/file-attachment.mjs)
-for lazy file loading, typed source binding, and reading after shutdown.
+for lazy file loading, direct host construction, and reading after shutdown.

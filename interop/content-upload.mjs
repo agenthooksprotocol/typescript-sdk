@@ -122,7 +122,7 @@ export async function uploadBytes(
       items: [
         {
           id: "bytes",
-          kind: "text",
+          kind: "attachment",
           mediaType: "application/octet-stream",
           body: new ReadableStream({
             start(controller) {

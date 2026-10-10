@@ -60,7 +60,7 @@ test("flow and injection are atomic, stop wins, denial is independent, continuat
       target: "context",
       operation: "append",
       deliverAt: "next_turn",
-      value: "context",
+      value: [{ id: "context", role: "system", parts: [{ id: "text", kind: "text", mediaType: "text/plain", selection: "body", text: "context" }] }],
     },
     { type: "message", text: "hidden" },
     { type: "flow", operation: "continue", instruction: "again" },
@@ -78,7 +78,7 @@ test("flow and injection are atomic, stop wins, denial is independent, continuat
         target: "context",
         operation: "append",
         deliverAt: "now",
-        value: "context",
+        value: [{ id: "context", role: "system", parts: [{ id: "text", kind: "text", mediaType: "text/plain", selection: "body", text: "context" }] }],
       },
     ],
     caps,
@@ -131,7 +131,7 @@ test("request-scoped targets and operations reject rather than downgrade; permis
     permission: "allow" as const,
     approval: "approved" as const,
     candidate: { value: "cached", supplier: "a", input: { task: 123 } },
-    values: { output: "old" },
+    values: { output: outputText("old") },
   };
   const next = stageBoundary(
     before,
@@ -142,7 +142,7 @@ test("request-scoped targets and operations reject rather than downgrade; permis
         operation: "merge",
         value: { task: 124 },
       },
-      { type: "modify", target: "output", operation: "replace", value: "new" },
+      { type: "modify", target: "output", operation: "replace", value: outputText("new") },
     ],
     caps,
     "b",
@@ -150,7 +150,7 @@ test("request-scoped targets and operations reject rather than downgrade; permis
   assert.equal(next.permission, "native");
   assert.equal(next.approval, "pending");
   assert.equal(next.candidate, null);
-  assert.equal(next.values?.output, "new");
+  assert.deepEqual(next.values?.output, outputText("new"));
   rejects(() =>
     stageBoundary(
       before,
@@ -559,4 +559,19 @@ test("observation routing stays local and never adds subscription identity to th
       method: "hooks/observe",
       params: { protocolVersion: "draft", event },
     });
+});
+
+function outputText(text: string) {
+  return [{ id: "output", role: "tool", parts: [{ id: "output-text", kind: "text", mediaType: "text/plain", selection: "body", text }] }];
+}
+
+test("canonical output list merge appends without deduplicating and replace substitutes", () => {
+  const before = { ...state(), values: { output: outputText("old") } };
+  const grants = { effects: ["modify"], modify: { output: { replace: true, merge: true } } };
+  const next = stageBoundary(before, [
+    { type: "modify", target: "output", operation: "replace", value: outputText("new") },
+    { type: "modify", target: "output", operation: "merge", value: outputText("new") },
+  ], grants, "test");
+  assert.deepEqual(next.values?.output, [...outputText("new"), ...outputText("new")]);
+  assert.deepEqual(before.values?.output, outputText("old"));
 });

@@ -3,12 +3,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { matches } from "./evaluator.mjs";
 import { evaluate } from "./raw-fixture-oracle.mjs";
-import { sdkDraft } from "./common.mjs";
+import { sdkDraft, canonicalFixtureInjections } from "./common.mjs";
 test("central canonical scenarios are independently evaluated with strict expected-key comparison", async () => {
   const { scenarios } = JSON.parse(
     await readFile("../agent-hooks-protocol/interop/scenarios.json", "utf8"),
   );
   for (const scenario of scenarios) {
+    canonicalFixtureInjections(scenario);
     if (scenario.expectError)
       assert.throws(
         () => evaluate(scenario.request, scenario.response),

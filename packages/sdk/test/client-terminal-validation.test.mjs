@@ -89,21 +89,11 @@ async function dispatch(
               request: {
                 id: "request",
                 kind: "text",
-                role: "user",
-                mediaType: "application/json",
+                mediaType: "text/plain",
                 selection: "body",
-                body: new ReadableStream({
-                  start(controller) {
-                    controller.enqueue(
-                      new TextEncoder().encode(
-                        JSON.stringify({
-                          message: "Answer?",
-                          requestedSchema: { type: "object", properties: {} },
-                        }),
-                      ),
-                    );
-                    controller.close();
-                  },
+                text: JSON.stringify({
+                  message: "Answer?",
+                  requestedSchema: { type: "object", properties: {} },
                 }),
               },
             },

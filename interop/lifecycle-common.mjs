@@ -2,6 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { isDeepStrictEqual } from "node:util";
+import { canonicalFixtureInjections } from "./common.mjs";
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
@@ -100,6 +101,31 @@ export function dispatchLifecycle(client, event, state, signal) {
   });
 }
 
+/** Adapt pinned lifecycle producer fixtures, leaving malformed wire probes intact. */
+export function canonicalLifecycleFixture(row) {
+  for (const [key, response] of Object.entries(row.responses ?? {})) {
+    canonicalFixtureInjections({ id: `${row.id}:${key}`, response });
+    for (const response of row.responseSequences?.[key] ?? [])
+      canonicalFixtureInjections({ id: `${row.id}:${key}`, response });
+  }
+  const migrateItems = (items) => {
+    for (const item of items ?? []) {
+      // These fixtures exercise immutable uploaded bytes, not inline text.
+      if (["text", "reasoning", "skill", "native"].includes(item.kind) &&
+          (typeof item.body?.ref === "string" || item.gap)) {
+        if (item.kind !== "text") item.category ??= item.kind;
+        item.kind = "attachment";
+        if (item.mediaType === "text/plain") item.mediaType = "application/octet-stream";
+      }
+    }
+  };
+  for (const request of Object.values(row.requests ?? {}))
+    migrateItems(request.params?.event?.items);
+  for (const step of row.steps ?? [])
+    if (step.bypassSDK !== true) migrateItems(step.items);
+  return row;
+}
+
 /** Lifecycle/catalogue rows contain request maps and controller steps, unlike core rows.
  * @param {string} path
  */
@@ -113,7 +139,7 @@ export async function lifecycleScenarios(path) {
     )
   )
     throw Error("Invalid lifecycle scenario file");
-  return value.scenarios;
+  return value.scenarios.map(canonicalLifecycleFixture);
 }
 
 /** Compatibility network binding: route SDK-produced messages without constructing

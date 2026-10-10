@@ -1,11 +1,12 @@
 import type {
-  EventInputs,
+  HostEventInputs,
+  OwnedAttachment,
   EventType,
   Permission,
   ContentSourceBinding,
   DeliveryDiagnosticCode,
 } from "../draft/generated.js";
-import type { AttachmentContent, ContentSource } from "./content.js";
+import type { Attachment, AttachmentContent, ContentSource } from "./content.js";
 import type {
   Capabilities,
   ContentReference,
@@ -62,8 +63,12 @@ export type BoundaryInput<K extends EventType> = K extends EventType
       time?: string;
     }
   : never;
-/** Generated, flattened host facts for named boundary calls. */
-export type EventInput<K extends EventType> = HarnessValue<EventInputs[K]>;
+/** Generated schema-owned host facts with direct Attachment bodies. */
+type DirectHostValue<T> = T extends OwnedAttachment<unknown>
+  ? Attachment
+  : T extends readonly (infer V)[] ? DirectHostValue<V>[]
+  : T extends object ? { [P in keyof T]: DirectHostValue<T[P]> } : T;
+export type EventInput<K extends EventType> = DirectHostValue<HostEventInputs<Attachment>[K]>;
 /** Explicit delivery authority for one event. Effects remain separately granted. */
 export interface EventGrant {
   modes: ("intercept" | "observe")[];
@@ -87,6 +92,9 @@ export interface HooksOptions {
   fetch?: typeof globalThis.fetch;
   /** Bound the immutable raw-content snapshot held by each boundary. */
   maxContentBytes?: number;
+  /** Authorized attachment transfer concurrency across all calls on this Hooks
+   * instance. Includes upload preparation, not result reads. Positive integer; default 8. */
+  maxConcurrentUploads?: number;
   /** Best-effort observation budget, bounded by the operation signal. */
   observationTimeoutMs?: number;
 }

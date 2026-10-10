@@ -61,36 +61,22 @@ function inspectTool(result: BoundaryResult<"tool.before">): void {
 }
 void inspectTool;
 
-const stream = new ReadableStream<Uint8Array>();
-// The harness supplies raw bytes; delivery selection and the wire ref are SDK-owned.
+// Text is inline; only binary attachment parts carry owned bytes.
 const rawMessage: BoundaryInput<"user.message.inbound"> = {
   message: {
-    channel: "chat",
-    sender: "user",
-    text: [
-      {
-        id: "message-1",
-        kind: "message",
-        mediaType: "text/plain",
-        body: stream,
-      },
-    ],
+    channel: "chat", sender: "user",
+    messages: [{ id: "message-1", role: "user", parts: [
+      { id: "text-1", kind: "text", mediaType: "text/plain", selection: "body", text: "Hello" },
+    ] }],
   },
 };
 void hooks.dispatch("user.message.inbound", rawMessage);
 void hooks.dispatch("model.request.before", {
   model: { id: "model", provider: "provider" },
-  attempt: { id: "attempt", number: 1 },
-  params: {},
-  items: [
-    {
-      id: "prompt-1",
-      kind: "message",
-      mediaType: "text/plain",
-      role: "user",
-      body: stream,
-    },
-  ],
+  attempt: { id: "attempt", number: 1 }, params: {},
+  items: [{ id: "prompt-1", role: "user", parts: [
+    { id: "prompt-text", kind: "text", mediaType: "text/plain", selection: "body", text: "Hello" },
+  ] }],
 });
 void hooks.dispatch("session.start", {
   session: { id: "session-1" },
@@ -140,34 +126,24 @@ void hooks.dispatch("tool.before", {
 // @ts-expect-error The method owns the canonical type discriminator.
 void hooks.dispatch("tool.before", { ...minimalTool, type: "tool.after" });
 void hooks.dispatch("user.message.inbound", {
-  message: {
-    channel: "chat",
-    sender: "user",
-    text: [
-      {
-        id: "bad",
-        kind: "message",
-        mediaType: "text/plain",
-        // @ts-expect-error Body bytes must be a byte stream or a canonical content reference, not a string.
-        body: "not a stream",
-      },
-    ],
-  },
+  message: { channel: "chat", sender: "user", messages: [{
+    id: "message", role: "user",
+    // @ts-expect-error Binary body must be owned bytes, a byte stream or a canonical reference.
+    parts: [{
+      id: "bad", kind: "attachment", mediaType: "application/octet-stream", selection: "body",
+      body: "not a stream",
+    }],
+  }] },
 });
 void hooks.dispatch("user.message.inbound", {
-  message: {
-    channel: "chat",
-    sender: "user",
-    text: [
-      {
-        id: "bad",
-        kind: "message",
-        mediaType: "text/plain",
-        // @ts-expect-error A text stream is not a byte stream.
-        body: new ReadableStream<string>(),
-      },
-    ],
-  },
+  message: { channel: "chat", sender: "user", messages: [{
+    id: "message", role: "user",
+    // @ts-expect-error Binary body must be owned bytes, a byte stream or a canonical reference.
+    parts: [{
+      id: "bad", kind: "attachment", mediaType: "application/octet-stream", selection: "body",
+      body: new ReadableStream<string>(),
+    }],
+  }] },
 });
 // @ts-expect-error Boundary cancellation requires an AbortSignal.
 void hooks.dispatch("tool.before", minimalTool, { signal: "cancel" });
@@ -178,7 +154,7 @@ import {
   Permission,
   state,
   effects,
-  ContentSource,
+  Attachment,
   type EventInput,
   type ToolBeforeInput,
   type DeliveryDiagnosticCode,
@@ -201,9 +177,9 @@ const lazyFacts: EventInput<"tool.before"> = {
   items: [
     {
       id: "body",
-      kind: "text",
-      mediaType: "text/plain",
-      body: new ContentSource(new ReadableStream<Uint8Array>()),
+      kind: "attachment",
+      mediaType: "application/octet-stream", selection: "body",
+      body: Attachment.fromStream(new ReadableStream<Uint8Array>()),
     },
   ],
 };
@@ -218,7 +194,7 @@ void hooks.toolBefore({
   path: "native",
 });
 // @ts-expect-error A replacement payload is required.
-void effects.modify_input.replace();
+void effects.modify("replace", "input");
 const credentialProvider: DeliveryAuthProvider = {
   credential(context) {
     return context.authentication

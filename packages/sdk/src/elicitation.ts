@@ -1,5 +1,4 @@
-/** MCP 2025-11-25 body binding. Host-owned resolver must verify upload ownership,
- * length and digest before returning bytes. Identity comes from authentication,
+/** MCP 2025-11-25 inline-text binding. Identity comes from authentication,
  * never event.source or elicitation.server. */
 export function validateElicitationExchange(
   request: any,
@@ -216,13 +215,12 @@ export function readSelectedElicitation(
   const item = meta[stage];
   if (item === undefined) return null;
   validate("content-item", item);
-  if (item.mediaType !== "application/json")
-    throw Error("MCP body must be application/json");
+  if (item.kind !== "text" || item.mediaType !== "text/plain")
+    throw Error("MCP body must be an ordinary text part");
   if (item.selection !== "body") return null;
-  if (!item.body) throw Error("Selected body unavailable (fail closed)");
-  const payload = JSON.parse(
-    new TextDecoder("utf-8", { fatal: true }).decode(resolve(item.body)),
-  );
+  if (item.gap !== undefined || typeof item.text !== "string")
+    throw Error("Selected text unavailable (fail closed)");
+  const payload = JSON.parse(item.text);
   validate("mcp-elicitation#" + stage, payload);
   if (stage === "request" && meta.mode !== (payload.mode ?? "form"))
     throw Error("Mode mismatch");

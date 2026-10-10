@@ -64,7 +64,7 @@ test("canonical validation rejects extra fields on every strict effect branch", 
       target: "context",
       operation: "append",
       deliverAt: "next_turn",
-      value: { arbitrary: true },
+      value: [{ id: "context", role: "system", parts: [{ id: "text", kind: "text", mediaType: "text/plain", selection: "body", text: "context" }] }],
     },
   ];
   for (const effect of effects) {
@@ -360,5 +360,27 @@ test("elicitation capabilities accept unknown fields while validating recognized
       rejected = true;
     }
     assert.equal(rejected, true);
+  }
+});
+
+test("canonical inline messages reject legacy bodies and JSON parts", () => {
+  const part = {
+    id: "text", kind: "text", mediaType: "text/plain",
+    selection: "body", text: "Zażółć 🚀",
+  };
+  assert.equal(draftCodecs.parseContentItem(part).ok, true);
+  assert.equal(draftCodecs.parseContentItem({ ...part, text: undefined, body: { ref: "legacy" } }).ok, false);
+  assert.equal(draftCodecs.parseContentItem({ ...part, kind: "json", mediaType: "application/json" }).ok, false);
+  const inject = (value: unknown) => response([{
+    type: "inject", target: "context", operation: "append", deliverAt: "now", value,
+  }]);
+  const message = { id: "message", role: "system", parts: [part] };
+  assert.equal(validateInterceptResponse(inject([message])).ok, true);
+  for (const invalid of [
+    { id: "message", parts: [part] },
+    { id: "message", role: "system", text: [part] },
+    { ...message, parts: [{ ...part, kind: "json", mediaType: "application/json" }] },
+  ]) {
+    assert.equal(validateInterceptResponse(inject([invalid])).ok, false);
   }
 });

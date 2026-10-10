@@ -25,7 +25,7 @@ const { hooks } = await import(
   require.resolve("agenthooksprotocol/server")
 );
 
-const { validateInterceptRequest } = await import(require.resolve("agenthooksprotocol/draft"));
+const { validateInterceptRequest, draftCodecs } = await import(require.resolve("agenthooksprotocol/draft"));
 
 // Raw probes explicitly opt out of client normalization and retain arbitrary bytes.
 /**
@@ -155,13 +155,8 @@ if (process.argv[2] === "client") {
       const adapter = createContentAdapter(plan.contentSources ?? [], fetch, [
         config.hooks[0].subscriptions[0].upload.endpoint,
       ]);
-      // The shared helper hydrates content items in place; elicitation carries
-      // those same items under named request/result slots rather than items.
-      adapter.hydrate({
-        items: [event.elicitation.request, event.elicitation.result].filter(
-          Boolean,
-        ),
-      });
+      // Elicitation request/result are inline text; source descriptors and
+      // upload streams must never replace these protocol-owned slots.
       const client = new Hooks(config, {
         ...clientOptions(
           event.source,
@@ -222,6 +217,11 @@ if (process.argv[2] === "client") {
       JSON.parse(readFileSync(process.argv[3] + "/" + name, "utf8")),
     );
   const validate = (name, value) => {
+    if (name === "intercept-request" || name === "content-item") {
+      const result = name === "intercept-request" ? validateInterceptRequest(value) : draftCodecs.parseContentItem(value);
+      if (!result.ok) throw Error("Schema rejected");
+      return;
+    }
     if (name === "form-answer") {
       if (!ajv.compile(value.schema)(value.value))
         throw Error("Submitted form rejected");
@@ -338,42 +338,25 @@ if (process.argv[2] === "client") {
       try {
         const results = [];
         for (const message of messages) {
-          const hydrated = structuredClone(message);
-          for (const stage of ["request", "result"]) {
-            const item = hydrated.params.event.elicitation[stage];
-            if (item?.body) {
-              const bytes = resolve(item.body);
-              item.body = new ReadableStream({
-                start(controller) {
-                  controller.enqueue(bytes);
-                  controller.close();
-                },
-              });
-            }
-          }
-          results.push(await dispatch(client, hydrated));
+          results.push(await dispatch(client, structuredClone(message)));
         }
         return results;
       } finally {
         await client.close();
       }
     };
-    // Presentation only: request bytes are host-owned fixture snapshots; result
-    // bodies and decisions come from the actual accepted SDK boundary. No second
+    // Presentation only: request text is a host-owned fixture snapshot; result
+    // text and decisions come from the actual accepted SDK boundary. No second
     // effect interpreter or semantic validator participates in acceptance.
     const presentAtomic = async (c, accepted) => {
       const acceptedEffects = accepted.response.result.effects;
       const result = c.result
-        ? await new Response(accepted.event.elicitation.result.body).json()
+        ? JSON.parse(accepted.event.elicitation.result.text)
         : acceptedEffects.some((effect) => effect.type === "deny")
           ? { action: "decline" }
           : acceptedEffects.find((effect) => effect.type === "return").value;
       return {
-        request: JSON.parse(
-          store
-            .get(c.request.params.event.elicitation.request.body.ref)
-            .toString("utf8"),
-        ),
+        request: JSON.parse(c.request.params.event.elicitation.request.text),
         result,
         provenance: {
           kind: "hook",
@@ -551,7 +534,7 @@ if (process.argv[2] === "client") {
                 body =
                   payload === null
                     ? Buffer.alloc(0)
-                    : resolve(meta.request.body);
+                    : Buffer.from(meta.request.text, "utf8");
                 pending.set(key, message);
                 summary =
                   payload === null
@@ -565,8 +548,8 @@ if (process.argv[2] === "client") {
                   validate,
                   principal,
                 );
-                body = meta.result?.body
-                  ? resolve(meta.result.body)
+                body = meta.result?.text !== undefined
+                  ? Buffer.from(meta.result.text, "utf8")
                   : Buffer.alloc(0);
                 pending.delete(key);
               } else throw Error("Not elicitation");

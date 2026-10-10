@@ -75,7 +75,7 @@ test(
             items: [
               {
                 id: "item",
-                kind: "text",
+                kind: "attachment",
                 mediaType: "application/octet-stream",
                 selection: "body",
                 body: { ref: receipt.ref },

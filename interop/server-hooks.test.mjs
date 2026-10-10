@@ -89,7 +89,7 @@ test("server accepts complete supported compound without applying it to host sta
       target: "context",
       operation: "append",
       deliverAt: "now",
-      value: "context",
+      value: [{ id: "context", role: "system", parts: [{ id: "context-text", kind: "text", mediaType: "text/plain", selection: "body", text: "context" }] }],
     },
     { type: "flow", operation: "stop", reason: "done" },
   ];

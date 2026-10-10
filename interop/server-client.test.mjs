@@ -143,7 +143,7 @@ test(
         items: [
           {
             id: "item",
-            kind: "text",
+            kind: "attachment",
             mediaType: "application/octet-stream",
             body: new ReadableStream({
               start(controller) {

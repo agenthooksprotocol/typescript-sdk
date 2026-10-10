@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { sdkClient, sdkDraft } from "./common.mjs";
+import { sdkClient, sdkDraft, canonicalFixtureInjections } from "./common.mjs";
 import { summarizeAccepted, matches } from "./evaluator.mjs";
 const { Hooks } = sdkClient;
 
@@ -10,6 +10,7 @@ test("canonical summaries distinguish SDK protocol rejection from userland tool-
     await readFile("../agent-hooks-protocol/interop/scenarios.json", "utf8"),
   );
   for (const row of scenarios) {
+    canonicalFixtureInjections(row);
     row.request = sdkDraft.validateInterceptRequest(row.request).value;
     const event = row.request.params.event;
     const client = new Hooks(

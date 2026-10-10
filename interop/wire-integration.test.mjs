@@ -419,7 +419,7 @@ for (const [transport, mode, authenticatedUpload] of [
             items: [
               {
                 id: "item-" + status,
-                kind: "image",
+                kind: "attachment",
                 mediaType: "application/octet-stream",
                 body: new ReadableStream({
                   start(stream) {
@@ -497,7 +497,8 @@ for (const [transport, mode, authenticatedUpload] of [
           observed.map((note) => note.params.event.id),
           ["normal", "denied", "stopped"],
         );
-        assert.equal(stored.size, 7);
+        // The interrupted call also preuploads its authorized observer body.
+        assert.equal(stored.size, 8);
         if (mode === "oauth") assert.ok(tokenRequests > 0);
       } finally {
         await client?.close();

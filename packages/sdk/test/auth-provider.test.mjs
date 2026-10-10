@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import ts from "typescript";
 import { fileURLToPath } from "node:url";
-import { auth, Hooks } from "agenthooksprotocol/client";
+import { auth, Hooks, Attachment } from "agenthooksprotocol/client";
 import { createHash } from "node:crypto";
 
 test("delivery provider public types support registration context and opaque attempts", () => {
@@ -346,17 +346,17 @@ for (const uploadAuth of [
       input.items = [
         {
           id: "content",
-          kind: "text",
-          mediaType: "text/plain",
-          body: new ReadableStream({
-            start(controller) {
-              controller.enqueue(new TextEncoder().encode("payload"));
-              controller.close();
-            },
-          }),
+          kind: "attachment",
+          mediaType: "application/octet-stream",
+          selection: "body",
+          body: Attachment.bytes(new Uint8Array([0, 1, 2])),
         },
       ];
-      const result = await hooks.dispatch("tool.before", input);
+      const result = await hooks.toolBefore({
+        callId: input.call.id, path: input.path,
+        name: input.tool.name, origin: input.tool.origin,
+        input: input.tool.input, items: input.items,
+      });
       assert.deepEqual(result.errors, []);
       assert.deepEqual(
         contexts.map((context) => context.purpose),
@@ -371,6 +371,7 @@ for (const uploadAuth of [
         { url: uploadUrl, authorization: uploadAuth ? "Bearer upload" : null },
         { url: eventUrl, authorization: "Bearer event" },
       ]);
+      await result.content?.close();
     } finally {
       await hooks.close();
     }
@@ -433,6 +434,7 @@ for (const binding of bindings) {
       assert.equal(deliveries, 0);
       assert.equal(result.errors.length, 1);
       assert.equal(result.errors[0].syntheticDenial, true);
+    await result.content?.close();
     } finally {
       await hooks.close();
     }
@@ -519,6 +521,7 @@ test("Hooks never retries a challenge anonymously when the provider still has no
     assert.equal(acquisitions, 2);
     assert.equal(result.errors.length, 1);
     assert.equal(result.errors[0].syntheticDenial, true);
+    await result.content?.close();
   } finally {
     await hooks.close();
   }
@@ -556,22 +559,23 @@ test("Hooks cannot substitute event credentials for missing configured upload cr
     input.items = [
       {
         id: "content",
-        kind: "text",
-        mediaType: "text/plain",
-        body: new ReadableStream({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode("payload"));
-            controller.close();
-          },
-        }),
+        kind: "attachment",
+        mediaType: "application/octet-stream",
+        selection: "body",
+        body: Attachment.bytes(new Uint8Array([0, 1, 2])),
       },
     ];
-    const result = await hooks.dispatch("tool.before", input);
+    const result = await hooks.toolBefore({
+      callId: input.call.id, path: input.path,
+      name: input.tool.name, origin: input.tool.origin,
+      input: input.tool.input, items: input.items,
+    });
     assert.deepEqual(purposes, ["upload"]);
     assert.equal(deliveries, 0);
     assert.equal(result.errors.length, 1);
     assert.equal(result.errors[0].phase, "preparation");
     assert.equal(result.errors[0].syntheticDenial, true);
+    await result.content?.close();
   } finally {
     await hooks.close();
   }

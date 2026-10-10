@@ -18,10 +18,9 @@ const descriptor = {
 const item = () => ({
   id: "request",
   kind: "text",
-  role: "user",
-  mediaType: "application/json",
+  mediaType: "text/plain",
   selection: "body",
-  body: { ref: descriptor.ref },
+  text: bytes.toString("utf8"),
 });
 function message() {
   return {
@@ -61,7 +60,7 @@ function run(plan, args = ["client"]) {
   });
 }
 
-test("elicitation sender hydrates exact sources and reports real upload confirmations; bypass stays raw", async () => {
+test("elicitation sender preserves inline text without uploads; bypass keeps legacy refs raw", async () => {
   const uploads = [],
     messages = [];
   const confirmed = { ...descriptor, ref: "urn:test:confirmed" };
@@ -104,18 +103,20 @@ test("elicitation sender hydrates exact sources and reports real upload confirma
   try {
     const positive = await run(plan);
     assert.equal(positive.code, 0, positive.stderr);
-    assert.deepEqual(JSON.parse(positive.stdout)[0].contentUploads, [
-      { sourceRef: descriptor.ref, descriptor: confirmed },
-    ]);
-    assert.deepEqual(uploads, [bytes]);
-    assert.deepEqual(
-      messages[0].params.event.elicitation.request.body,
-      { ref: confirmed.ref },
+    assert.deepEqual(JSON.parse(positive.stdout)[0].contentUploads, []);
+    assert.deepEqual(uploads, []);
+    assert.equal(
+      messages[0].params.event.elicitation.request.text,
+      bytes.toString("utf8"),
     );
+    assert.equal(messages[0].params.event.elicitation.request.body, undefined);
+    const legacy = message();
+    delete legacy.params.event.elicitation.request.text;
+    legacy.params.event.elicitation.request.body = { ref: descriptor.ref };
     const raw = await run({
       ...plan,
       contentSources: [],
-      steps: [{ ...plan.steps[0], bypass: true }],
+      steps: [{ ...plan.steps[0], bytes: Buffer.from(JSON.stringify(legacy)).toString("base64"), bypass: true }],
     });
     assert.equal(raw.code, 0, raw.stderr);
     assert.equal(JSON.parse(raw.stdout)[0].contentUploads, undefined);
@@ -123,7 +124,7 @@ test("elicitation sender hydrates exact sources and reports real upload confirma
       messages[1].params.event.elicitation.request.body,
       { ref: descriptor.ref },
     );
-    assert.equal(uploads.length, 1);
+    assert.equal(uploads.length, 0);
     for (const contentSources of [
       [],
       [
@@ -134,10 +135,14 @@ test("elicitation sender hydrates exact sources and reports real upload confirma
       ],
       [{ descriptor, bytes: Buffer.from("wrong bytes").toString("base64") }],
     ]) {
-      const invalid = await run({ ...plan, contentSources });
+      const invalid = await run({
+        ...plan,
+        contentSources,
+        steps: [{ ...plan.steps[0], bytes: Buffer.from(JSON.stringify(legacy)).toString("base64") }],
+      });
       assert.notEqual(invalid.code, 0);
       assert.equal(messages.length, 2);
-      assert.equal(uploads.length, 1);
+      assert.equal(uploads.length, 0);
     }
   } finally {
     await new Promise((resolve) => server.close(resolve));
@@ -148,16 +153,16 @@ test("atomic elicitation preserves absent, empty, and other-mode AHP grants", as
   const answerBytes = Buffer.from(
     JSON.stringify({ action: "accept", content: {} }),
   );
-  const answerDescriptor = {
-    ref: "urn:test:answer",
-    size: answerBytes.length,
-    sha256: createHash("sha256").update(answerBytes).digest("hex"),
-  };
   const rows = [];
   for (const effect of [
     { type: "return", value: { action: "decline" } },
     { type: "deny", reason: "Policy" },
-    { type: "modify", target: "content", operation: "replace", value: {} },
+    {
+      type: "modify",
+      target: "content",
+      operation: "replace",
+      value: {},
+    },
   ]) {
     for (const grant of [null, {}, { url: {} }, { form: {} }]) {
       const request = message();
@@ -170,7 +175,7 @@ test("atomic elicitation preserves absent, empty, and other-mode AHP grants", as
         mode: "form",
         server: "test",
         action: "accept",
-        result: { ...item(), id: "answer", body: { ref: answerDescriptor.ref } },
+        result: { ...item(), id: "answer", text: answerBytes.toString("utf8") },
       };
       const boundary = effect.type === "modify" ? result : request;
       boundary.params.capabilities = {
@@ -185,10 +190,6 @@ test("atomic elicitation preserves absent, empty, and other-mode AHP grants", as
         request,
         result: effect.type === "modify" ? result : null,
         effects: [effect],
-        uploads: [
-          { ref: descriptor.ref, bytes: bytes.toString("base64") },
-          { ref: answerDescriptor.ref, bytes: answerBytes.toString("base64") },
-        ],
       });
     }
   }
@@ -226,7 +227,6 @@ test("atomic elicitation presentation uses SDK effects and never disguises prese
     op: "apply",
     request,
     result: null,
-    uploads: [{ ref: descriptor.ref, bytes: bytes.toString("base64") }],
   };
   const returned = { type: "return", value: { action: "decline" } };
   const denied = { type: "deny", reason: "Policy" };
@@ -265,7 +265,7 @@ test("atomic elicitation presentation uses SDK effects and never disguises prese
   assert.equal(malformedPresentation.stdout, "");
 });
 
-test("actual elicitation endpoint rejects forbidden ref metadata before resolving stored bytes", { timeout: 15000 }, async () => {
+test("actual elicitation endpoint rejects legacy text refs and metadata before reading inline text", { timeout: 15000 }, async () => {
   const child = spawn(process.execPath, ["interop/elicitation.mjs", "server", "../agent-hooks-protocol/schema/draft", "test-principal"], {
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, AHP_ELICITATION_TOKEN: "event-secret", AHP_ELICITATION_UPLOAD_TOKEN: "upload-secret" },
@@ -292,8 +292,9 @@ test("actual elicitation endpoint rejects forbidden ref metadata before resolvin
     const send = (wire) => fetch(endpoint + "/hooks/intercept", {
       method: "POST", headers: { authorization: "Bearer event-secret", "content-type": "application/json" }, body: JSON.stringify(wire),
     });
-    for (const extra of [{ sha256: "0".repeat(64) }, { sha256: null }, { size: bytes.length }, { size: null }]) {
+    for (const extra of [{}, { sha256: "0".repeat(64) }, { sha256: null }, { size: bytes.length }, { size: null }]) {
       const wire = message();
+      delete wire.params.event.elicitation.request.text;
       wire.params.event.elicitation.request.body = { ref: receipt.ref, ...extra };
       const rejected = await send(wire);
       assert.equal(rejected.status, 400);
@@ -302,10 +303,16 @@ test("actual elicitation endpoint rejects forbidden ref metadata before resolvin
     const receipts = await fetch(endpoint + "/receipts", { headers: { authorization: "Bearer event-secret" } });
     assert.deepEqual(await receipts.json(), []);
     const valid = message();
-    valid.params.event.elicitation.request.body = { ref: receipt.ref };
     const accepted = await send(valid);
     assert.equal(accepted.status, 200);
     assert.deepEqual((await accepted.json()).result.effects, []);
+    const inlineReceipts = await fetch(endpoint + "/receipts", {
+      headers: { authorization: "Bearer event-secret" },
+    });
+    const rows = await inlineReceipts.json();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].bytes, bytes.toString("base64"));
+    assert.deepEqual(rows[0].summary.request, JSON.parse(bytes.toString("utf8")));
   } finally {
     child.kill();
     await new Promise((resolve) => {
