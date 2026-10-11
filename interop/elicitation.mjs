@@ -157,6 +157,8 @@ if (process.argv[2] === "client") {
       ]);
       // Elicitation request/result are inline text; source descriptors and
       // upload streams must never replace these protocol-owned slots.
+      /** @type {Response | undefined} */
+      let wireResponse;
       const client = new Hooks(config, {
         ...clientOptions(
           event.source,
@@ -164,13 +166,20 @@ if (process.argv[2] === "client") {
           plan.token,
           plan.uploadToken,
         ),
-        fetch: adapter.fetch,
+        fetch: async (input, init) => {
+          const response = await adapter.fetch(input, init);
+          // Preserve the actual HTTP envelope without consuming the SDK stream.
+          if (new Request(input, init).url === plan.endpoint + step.path)
+            wireResponse = response.clone();
+          return response;
+        },
       });
       try {
-        const result = await dispatch(client, message);
+        await dispatch(client, message);
+        if (!wireResponse) throw Error("Missing intercept wire response");
         results.push({
-          status: 200,
-          body: JSON.stringify(result.acceptedResponses[0].result),
+          status: wireResponse.status,
+          body: await wireResponse.text(),
           contentUploads: adapter.contentUploads,
         });
       } finally {

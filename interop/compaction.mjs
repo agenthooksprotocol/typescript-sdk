@@ -205,7 +205,8 @@ export async function runCompaction(
       capabilities: {
         "context.compact.before": compactionCapabilities("before"),
         "context.compact.after": {
-          modes: options.observeOnly ? ["observe"] : ["intercept", "observe"],
+          modes: options.observeOnly ? ["observe"]
+            : options.observers?.length ? ["intercept", "observe"] : ["intercept"],
           ...(!options.observeOnly ? { capabilities: compactionCapabilities("after") } : {}),
         },
         "session.end": { modes: ["observe"] },
@@ -313,11 +314,14 @@ async function receive(request) {
           return row.effects;
         },
       }));
+    // The synthetic request declares after-boundary disposition explicitly.
+    // Configure notification subscriptions, not control callbacks, for observe-only.
     const result = await runCompaction(
       p.instructions,
       hooks("before"),
-      hooks("after"),
-      { itemId: p.itemId, observeOnly: p.observeOnly },
+      p.observeOnly ? [] : hooks("after"),
+      { itemId: p.itemId, observeOnly: p.observeOnly,
+        observers: p.observeOnly ? hooks("after") : [] },
     );
     return { jsonrpc: "2.0", id: request.id ?? null, result };
   } catch {

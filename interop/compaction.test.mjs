@@ -87,8 +87,10 @@ test("after failure prevents delivery; observation does not advertise control", 
         modify("summary", "leak"),
         modify("instructions", "wrong"),
       ]),
+      hook("unreachable", () => { assert.fail("fail-closed must stop later after interceptors"); }),
     ],
   );
+  assert.equal(r.seen.length, 1);
   assert.equal(r.applied, false);
   assert.equal(inlineText(r.summary).includes("leak"), false);
   assert.deepEqual(compactionCapabilities("after", true), {
@@ -458,4 +460,29 @@ test("multipart supplied summaries retain canonical order, identities, and suppl
   assert.deepEqual(result.failures, []);
   assert.deepEqual(result.summary, supplied);
   assert.deepEqual(result.provenance, { kind: "supplied", supplier: "cache" });
+});
+
+test("synthetic observe-only requests configure explicit notifications without applying returned controls", () => {
+  const request = { jsonrpc: "2.0", id: "observe-only", method: "compaction/run", params: {
+    instructions: textParts("base"), observeOnly: true, before: [], after: [
+      { supplier: "attempted-edit", effects: [modify("summary", "leaked")] },
+      { supplier: "watch", effects: [] },
+    ],
+  } };
+  const run = spawnSync(process.execPath, [new URL("./compaction.mjs", import.meta.url).pathname, "stdio"], {
+    input: JSON.stringify(request) + "\n", encoding: "utf8",
+  });
+  assert.equal(run.status, 0, run.stderr);
+  const response = JSON.parse(run.stdout);
+  assert.equal(response.id, request.id);
+  assert.equal(Object.hasOwn(response, "error"), false);
+  assert.equal(response.result.applied, true);
+  assert.equal(inlineText(response.result.summary), "summary:base");
+  assert.deepEqual(response.result.failures, []);
+  assert.equal(response.result.seen.length, 2);
+  for (const snapshot of response.result.seen) {
+    assert.deepEqual(snapshot.capabilities, { effects: [], modify: {} });
+    assert.equal(snapshot.applied, true);
+    assert.equal(inlineText(snapshot.summary), "summary:base");
+  }
 });
