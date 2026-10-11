@@ -197,7 +197,8 @@ test("ignores unknown envelope fields in otherwise valid responses", async () =>
   assert.equal(result.decision, "deny");
   assert.equal(result.denial?.reason, "Unknown fields tolerated");
   assert.equal(result.denial?.code, "com.example.denied");
-  assert.deepEqual(result.denial?.extensions, { "com.example.detail": true });
+  // Wire extension data is independent of decoder object prototypes.
+  assert.deepEqual(structuredClone(result.denial?.extensions), { "com.example.detail": true });
   assert.deepEqual(result.failures, []);
 });
 

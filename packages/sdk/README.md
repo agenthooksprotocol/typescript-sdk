@@ -18,11 +18,62 @@ console.log(result.value.effects);
 
 Use `agenthooksprotocol/client` for the configuration-driven `Hooks` API,
 `agenthooksprotocol/server` for hook backends, and `agenthooksprotocol/draft`
-for canonical validation and reference boundary helpers.
+for canonical validation and reference boundary helpers. `/generated` exposes
+the filtered codecs for those same current draft contracts; it is not a separate
+wire version.
 
 See the [SDK documentation and examples](https://github.com/agenthooksprotocol/typescript-sdk#readme)
 for all entrypoints and integration guidance. The testing and conformance
 workspace packages are not published.
+
+## Typed caller contracts
+
+Use `Type`, `contract`, and `form` from `agenthooksprotocol/client` to declare
+application payloads. Schema inference stays attached to the contract; call its
+`decode` method when admitting application data directly.
+
+```ts
+import { Hooks, Type, contract, form } from "agenthooksprotocol/client";
+
+const argumentsContract = contract(Type.Object({ count: Type.Integer() }));
+const resultContract = contract(Type.Object({ answer: Type.String() }));
+const argumentsValue = argumentsContract.decode({ count: 1 });
+
+// hooks is a configured Hooks instance with explicit tool.before grants.
+declare const hooks: Hooks;
+const result = await hooks.toolBefore({
+  callId: "call-1", name: "read", path: "native", origin: "native",
+  input: argumentsValue,
+}, { contracts: { arguments: argumentsContract, result: resultContract } });
+const count: number = result.input.count;
+if (result.state.candidate !== null) {
+  const answer: string = result.state.candidate.value.answer;
+}
+
+const approval = form(Type.Object({ approved: Type.Boolean() }));
+const answer = approval.decode({ action: "accept", content: { approved: true } });
+```
+
+`ToolBeforeInput<Arguments>` and `ToolBeforeResult<Arguments, Result, Provenance>`
+name these typed boundary values. Canonical wire models and structural codecs
+remain available from `/draft` and `/generated`.
+
+### Advanced delivery APIs
+
+`ContentManager` and `BackendTransport` are intentional advanced `/client` APIs
+for hosts implementing their own delivery orchestration. Prefer `Hooks` for normal
+boundary calls. A `ContentManager` coordinates one invocation's attachment owners,
+byte budget, uploads, and cleanup; immutable bytes and lazy sources belong to
+`Attachment`, not to the manager. Close the manager after the invocation. Transfer
+returned content ownership before closing when results must outlive delivery.
+`ContentManagerOptions` configures `maxSnapshotBytes`, `maxConcurrentUploads`
+(default `8`), and `allowLoopback`. Standalone managers have independent upload
+limits; `Hooks` shares its upload limit across its concurrent invocations.
+
+`BackendTransport` implements HTTP/stdio delivery for a canonical `Backend` and a
+caller-supplied fetch adapter. The adapter owns network policy and authentication;
+close the transport to release its processes and pending requests. Transport
+handling validates envelopes, not application contracts or boundary admission.
 
 ## License
 

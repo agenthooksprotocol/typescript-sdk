@@ -94,10 +94,14 @@ test("raw fixture oracle retains stop, instructions and injections", async () =>
     assert.equal(accepted.executed, false);
     const next = structuredClone(first),
       injection = {
+        type: "inject",
         target: "context",
         operation: "append",
         deliverAt: "next_turn",
-        value: { text: "accepted context" },
+        value: [{
+          id: "context", role: "system",
+          parts: [{ id: "context:text", kind: "text", mediaType: "text/plain", selection: "body", text: "accepted context" }],
+        }],
       };
     next.params.state = {
       permission: "none",

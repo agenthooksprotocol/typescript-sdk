@@ -15,9 +15,9 @@ export type {
   ObserveNotification,
   CapabilitiesRequest,
   Effect,
-} from "../draft/generated.js";
+} from "../draft/types.js";
 
-export { effects } from "../draft/generated.js";
+export { effects } from "../draft/public.js";
 
-export { effectNames, supports } from "../draft/generated.js";
-export type { EffectName } from "../draft/generated.js";
+export { effectNames, supports } from "../draft/public.js";
+export type { EffectName } from "../draft/types.js";

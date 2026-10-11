@@ -1,3 +1,4 @@
+import { parseJson as parseLosslessJson } from "./json.js";
 import { HookOperationalError } from "./errors.js";
 import {
   INTERCEPT_METHOD,
@@ -75,6 +76,7 @@ function assertJsonValueInner(
 ): void {
   if (value === null || typeof value === "string" || typeof value === "boolean")
     return;
+  if (typeof value === "bigint") return;
   if (typeof value === "number" && Number.isFinite(value)) return;
   if (typeof value !== "object")
     throw new HookOperationalError(
@@ -165,7 +167,7 @@ function assertExtensions(
 
 export function parseJson(line: string): unknown {
   try {
-    return JSON.parse(line) as unknown;
+    return parseLosslessJson(line);
   } catch (error) {
     throw new HookOperationalError(
       "MALFORMED_JSON",
@@ -314,19 +316,20 @@ export function parseInterceptResponse(
       "INCOMPATIBLE_VERSION",
       "Backend protocolVersion is not draft",
     );
-  if (!Array.isArray(result.effects))
+  const effects = Object.hasOwn(result, "effects") ? result.effects : [];
+  if (!Array.isArray(effects))
     throw new HookOperationalError(
       "MALFORMED_JSON_RPC",
       "response.result.effects must be an array",
     );
-  if (result.effects.length > 1)
+  if (effects.length > 1)
     throw new HookOperationalError(
       "MULTIPLE_EFFECTS",
       "tool.before permits at most one effect",
     );
-  if (result.effects.length === 0)
+  if (effects.length === 0)
     return { protocolVersion: PROTOCOL_VERSION, effects: [] };
-  const effect = record(result.effects[0], "response.result.effects[0]");
+  const effect = record(effects[0], "response.result.effects[0]");
   if (effect.type !== "deny")
     throw new HookOperationalError(
       "UNSUPPORTED_EFFECT",

@@ -1,3 +1,4 @@
+import { draftCodecs } from "agenthooksprotocol/draft";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import process from "node:process";
@@ -9,12 +10,13 @@ import {
 } from "agenthooksprotocol/client";
 import {
   parseInterceptResponse,
-  type PendingState,
   type Capabilities,
   type InterceptRequest,
   type JsonValue,
   type Effect,
+  reference,
 } from "agenthooksprotocol/draft";
+type PendingState = reference.PendingState;
 
 interface Subscriber {
   id: string;
@@ -106,7 +108,7 @@ export async function runAtomicInterop(): Promise<AtomicRow[]> {
             response.end(replies[index]);
             return;
           }
-          const scripted = parseInterceptResponse(replies[index]!);
+          const scripted = draftCodecs.responseForRequest("tool.before", replies[index]!);
           if (!scripted.ok)
             throw new Error("Invalid positive fixture response");
           // Public server callbacks provide effects, never protocol envelopes.
@@ -284,7 +286,7 @@ function enact(
     if (!accepted.ok)
       throw new Error("SDK accepted an invalid fixture response");
     trace.push(`accept:${subscriber.id}`);
-    for (const effect of accepted.value.result.effects) {
+    for (const effect of (accepted.value.result.effects ?? [])) {
       switch (effect.type) {
         case "return":
           state.candidate = {

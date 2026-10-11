@@ -4,9 +4,9 @@ import process from "node:process";
 import { createInterface } from "node:readline";
 import {
   hooks,
-  type Effect,
   type Message,
 } from "agenthooksprotocol/server";
+import type { ToolBeforeEffect } from "agenthooksprotocol/client";
 
 export function barrier() {
   let resolve!: () => void;
@@ -16,7 +16,7 @@ export function barrier() {
   return { promise, resolve };
 }
 export interface Script {
-  effects: Effect[];
+  effects: ToolBeforeEffect[];
   /** Raw bytes are reserved for deliberately invalid backend responses. */
   raw?: string | undefined;
   received: ReturnType<typeof barrier>;
@@ -69,7 +69,7 @@ export async function openBackend() {
   return {
     url,
     requests,
-    configure(id: string, effects: Effect[], raw?: string): Script {
+    configure(id: string, effects: ToolBeforeEffect[], raw?: string): Script {
       if (scripts.has(id)) throw new Error("Duplicate script");
       const script = {
         effects,

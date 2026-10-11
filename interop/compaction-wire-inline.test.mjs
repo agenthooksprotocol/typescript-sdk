@@ -70,7 +70,7 @@ test("wire host reports canonical arrays without leaking compound effects or sup
   const accepted = [part("left", "base"), part("right", ":accepted")];
   const config = {
     edit: { effects: [modify("instructions", accepted)] },
-    cache: { effects: [{ type: "return", value: "cached" }] },
+    cache: { effects: [{ type: "return", value: textParts("cached") }] },
     beforeBad: { bypass: true, effects: [modify("instructions", textParts("leaked")), { type: "message", text: "leaked" }, modify("summary", textParts("wrong"))] },
     beforeWatch: { effects: [] },
     redact: { kind: "append", target: "summary", suffix: ":safe" },

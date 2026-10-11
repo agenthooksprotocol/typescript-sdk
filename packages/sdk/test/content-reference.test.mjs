@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { draftCodecs, contentReference, ContentReceiver } from "agenthooksprotocol/draft";
+import { draftCodecs, reference } from "agenthooksprotocol/draft";
 import { validateWire } from "../dist/src/client/validation.js";
 
+const { contentReference, ContentReceiver } = reference;
 const digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 const receipt = { ref: "stored", size: 3, sha256: digest };
 const item = { id: "item", kind: "attachment", mediaType: "application/octet-stream", selection: "body", body: { ref: "stored" } };

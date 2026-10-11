@@ -232,7 +232,7 @@ export async function runInterop(): Promise<{
       const result = parseInterceptResponse(line);
       if (!result.ok || result.value.id !== "synthetic-request")
         throw Error("Invalid canonical response");
-      return result.value.result.effects.length === 0
+      return (result.value.result.effects ?? []).length === 0
         ? "no-effect"
         : "unexpected-effect";
     };

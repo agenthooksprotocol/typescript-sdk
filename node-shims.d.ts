@@ -2,14 +2,16 @@
 declare module "node:fs/promises" {
   export function readFile(path: string, encoding: "utf8"): Promise<string>;
 }
-declare class Buffer extends Uint8Array {
-  static alloc(size: number): Buffer;
-  static concat(chunks: readonly Uint8Array[]): Buffer;
-  static from(value: string, encoding?: string): Buffer;
+interface Buffer extends Uint8Array<ArrayBuffer> {
   includes(value: number): boolean;
   indexOf(value: number): number;
   subarray(start?: number, end?: number): Buffer;
 }
+declare const Buffer: {
+  alloc(size: number): Buffer;
+  concat(chunks: readonly Uint8Array[]): Buffer;
+  from(value: string, encoding?: string): Buffer;
+};
 
 declare const process: {
   argv: string[];

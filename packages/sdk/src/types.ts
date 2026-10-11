@@ -12,7 +12,7 @@ export const TOOL_KINDS = [
   "other",
 ] as const;
 
-export type JsonPrimitive = null | boolean | number | string;
+export type JsonPrimitive = null | boolean | number | bigint | string;
 export type JsonValue = JsonPrimitive | JsonValue[] | JsonObject;
 export type JsonObject = { [key: string]: JsonValue };
 export type ToolKind = (typeof TOOL_KINDS)[number];

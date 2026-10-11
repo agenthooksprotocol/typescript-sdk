@@ -60,7 +60,7 @@ test("named boundaries project generated flattened host facts into canonical wir
       result: {
         protocolVersion: "draft",
         effects: [
-          serverEffects.modify("replace", "input", { path: "accepted" }),
+          serverEffects.modify_input_effect("replace", { path: "accepted" }),
           effects.allow(),
         ],
       },

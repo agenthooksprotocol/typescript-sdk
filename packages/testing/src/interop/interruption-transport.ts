@@ -7,7 +7,7 @@ import {
   type BoundaryResult,
   type BoundaryInput,
   type Capabilities,
-  type Effect,
+  type ToolBeforeEffect,
 } from "agenthooksprotocol/client";
 import { openBackend } from "./interruption-server.js";
 
@@ -19,7 +19,7 @@ export interface InterruptionOperation {
   routes: { received: Promise<void>; release(): Promise<void> }[];
 }
 export interface RouteScript {
-  effects: Effect[];
+  effects: ToolBeforeEffect[];
   raw?: string;
   hold?: boolean;
 }
@@ -77,7 +77,7 @@ export async function openInterruptionTransport(
     start(
       id: string,
       input: BoundaryInput<"tool.before">["tool"]["input"],
-      effects: Effect[],
+      effects: ToolBeforeEffect[],
       raw?: string,
       laterRoutes: RouteScript[] = [],
     ): InterruptionOperation {

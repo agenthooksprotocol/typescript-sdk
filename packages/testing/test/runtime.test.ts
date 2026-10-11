@@ -1,16 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  stageBoundary,
-  dispatchBoundary,
-  dispatchObservations,
-  ContentReceiver,
-  prepareContent,
-  Lineage,
-  actualTaskChange,
-  type BoundaryState,
-  type BoundaryCapabilities,
-} from "agenthooksprotocol/draft";
+import { reference } from "agenthooksprotocol/draft";
+const { stageBoundary, dispatchBoundary, dispatchObservations, ContentReceiver, prepareContent, Lineage, actualTaskChange } = reference;
+type BoundaryState = reference.BoundaryState;
+type BoundaryCapabilities = reference.BoundaryCapabilities;
+
 import { Hooks, auth } from "agenthooksprotocol/client";
 import { hooks } from "agenthooksprotocol/server";
 
