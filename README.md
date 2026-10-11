@@ -142,6 +142,26 @@ omitted fields, opaque extras, and injection delivery timing. Invalid responses
 publish no edits or effects; prior accepted responses remain available. Do not
 replay responses to reconstruct `result.event` or `result.state`.
 
+### Static subscription interest
+
+Call `hooks.subscribes(event)` before expensive occurrence or content preparation.
+The synchronous lookup uses validated event selectors and the host's configured
+modes, including observe-only subscriptions. Exact names, `*`, and family selectors
+such as `tool.*` follow the dispatch matcher. Payload filters are not evaluated:
+a matching subscription remains interesting even if its filters might reject the
+completed occurrence. Unknown or unconfigured events return `false`.
+
+The lookup performs no delivery, authentication, uploads, or input preparation.
+It reports static interest, not permission or a delivery guarantee. A `false`
+result means no eligible intercept or observation subscription can consume that
+event under this configuration.
+
+```ts
+if (hooks.subscribes("tool.before")) {
+  // Prepare occurrence facts and content, then call hooks.toolBefore(...).
+}
+```
+
 ### Operation and resource ownership
 
 Awaiting a boundary also waits for its selected, bounded observation deliveries.

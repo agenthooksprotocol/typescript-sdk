@@ -161,3 +161,7 @@ void hooks.toolBefore(input).then(result => {
   void result.permission;
   for (const effect of result.effects) { const family: string = effect.type; void family; }
 });
+
+const staticInterest: boolean = hooks.subscribes('tool.before');
+const unknownInterest: boolean = hooks.subscribes('future.event');
+void [staticInterest, unknownInterest];

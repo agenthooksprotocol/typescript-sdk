@@ -31,6 +31,26 @@ effects remain in `acceptedResponses`. Local attachment bytes are read through `
 callers close that content owner explicitly. The testing and conformance
 workspace packages are not published.
 
+## Static subscription interest
+
+Call `hooks.subscribes(event)` before expensive occurrence or content preparation.
+The synchronous lookup uses validated event selectors and the host's configured
+modes, including observe-only subscriptions. Exact names, `*`, and family selectors
+such as `tool.*` follow the dispatch matcher. Payload filters are not evaluated:
+a matching subscription remains interesting even if its filters might reject the
+completed occurrence. Unknown or unconfigured events return `false`.
+
+The lookup performs no delivery, authentication, uploads, or input preparation.
+It reports static interest, not permission or a delivery guarantee. A `false`
+result means no eligible intercept or observation subscription can consume that
+event under this configuration.
+
+```ts
+if (hooks.subscribes("tool.before")) {
+  // Prepare occurrence facts and content, then call hooks.toolBefore(...).
+}
+```
+
 ## Typed caller contracts
 
 Use `Type`, `contract`, and `form` from `agenthooksprotocol/client` to declare

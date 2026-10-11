@@ -145,6 +145,7 @@ export class Hooks {
   private readonly uploadLimiter: UploadLimiter;
   private readonly authContexts = new Map<string, any>();
   private manifest!: StaticCapabilityManifest;
+  private configured = false;
   private closed?: Promise<void>;
   private readonly elicitations = new Map<
     string,
@@ -179,9 +180,27 @@ export class Hooks {
     };
     this.provider = options.auth ?? auth();
     // No credentials or processes are acquired until a matching boundary needs them.
-    this.initialized = Promise.resolve().then(() => this.initialize(config));
+    // Resolve static routing synchronously so interest can be queried before
+    // preparing host input. Configuration failures retain the Promise contract.
+    try {
+      this.initialize(config);
+      this.configured = true;
+      this.initialized = Promise.resolve();
+    } catch (error) {
+      this.initialized = Promise.reject(error);
+    }
     // An optional initialized wait must not cause an unhandled rejection.
     void this.initialized.catch(() => {});
+  }
+
+  /** Static subscription interest, not permission or a delivery guarantee.
+   * Filters requiring occurrence data are deliberately not evaluated. */
+  subscribes(event: string): boolean {
+    if (!this.configured) return false;
+    const advertised = this.manifest.events.find(entry => entry.event === event);
+    return advertised !== undefined && this.routes.some(route =>
+      advertised.modes.includes(route.subscription.mode) &&
+      route.subscription.events.some(selector => matches(selector, event)));
   }
 
   private initialize(config: unknown): void {
