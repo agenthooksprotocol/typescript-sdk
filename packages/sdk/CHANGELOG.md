@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.4.0...agenthooksprotocol-v0.4.1) (2026-10-11)
+
+
+### Bug Fixes
+
+* **sdk:** preserve origin-correlated consumer settlements ([08cbd6b](https://github.com/agenthooksprotocol/typescript-sdk/commit/08cbd6b2a2df951a009f355c6e1b97415ed27e7d))
+
 ## [0.4.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.3.0...agenthooksprotocol-v0.4.0) (2026-10-11)
 
 
