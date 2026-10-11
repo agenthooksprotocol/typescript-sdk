@@ -11,13 +11,13 @@ import type { BoundaryContracts } from "./contracts.js";
 import type {
   Capabilities,
   ContentReference,
-  ExecutionEventContextCompactBefore,
   InterceptResponse,
   EventResponses,
   ResponseFor,
   InterceptRequest,
   Event,
   StaticCapabilityManifest,
+  ToolState, TextState, MessagesState, ElicitResultState,
 } from "../draft/raw.js";
 import type { AuthProvider, DeliveryAuthProvider } from "./auth.js";
 
@@ -32,32 +32,24 @@ type Fields<T> = {
       : K]: T[K];
 };
 /** Harness content bodies may be owned streams instead of uploaded references. */
-export type HarnessValue<T> = T extends ContentReference
-  ? ContentReference | ContentSource | ReadableStream<Uint8Array>
-  : T extends readonly (infer V)[]
-    ? HarnessValue<V>[]
-    : T extends { selection: string }
-      ? Omit<
-          { [K in keyof Fields<T>]: HarnessValue<Fields<T>[K]> },
-          "selection"
-        > & { selection?: T["selection"] }
-      : T extends object
-        ? keyof Fields<T> extends never
-          ? T
-          : { [K in keyof Fields<T>]: HarnessValue<Fields<T>[K]> }
-        : T;
-// The generated compact-before JsonValue intersection includes impossible
-// primitive/array event branches. Remove those branches before mapping content
-// bodies; otherwise Omit sees their shared keys and loses canonical fields.
-type CompactBeforeObject = Exclude<
-  ExecutionEventContextCompactBefore,
-  string | number | boolean | readonly unknown[]
->;
+export type HarnessValue<T> = T extends string | number | boolean | null | undefined
+  ? T
+  : T extends ContentReference
+    ? ContentReference | ContentSource | ReadableStream<Uint8Array>
+    : T extends readonly (infer V)[]
+      ? HarnessValue<V>[]
+      : T extends { selection: string }
+        ? Omit<
+            { [K in keyof Fields<T>]: HarnessValue<Fields<T>[K]> },
+            "selection"
+          > & { selection?: T["selection"] }
+        : T extends object
+          ? keyof Fields<T> extends never
+            ? T
+            : { [K in keyof Fields<T>]: HarnessValue<Fields<T>[K]> }
+          : T;
 export type HarnessEvent<K extends EventType = EventType> =
-  K extends "context.compact.before"
-    ? Omit<HarnessValue<CompactBeforeObject>, "trigger"> &
-        Pick<CompactBeforeObject, "trigger">
-    : HarnessValue<Extract<Event, { type: K }>>;
+  HarnessValue<Extract<Event, { type: K }>>;
 /** Passing a body stream transfers its read/cancel ownership to the SDK.
  * Keep host execution data separately; canonical effects carry accepted rewrites. */
 export type BoundaryInput<K extends EventType> = K extends EventType
@@ -148,9 +140,14 @@ type ReadonlyState<T, D extends number = 6> = T extends
       ? { readonly [P in keyof T]: ReadonlyState<T[P], StateDepth[D]> }
       : T;
 /** Canonical pending state after the last accepted settlement. */
-export type BoundaryState = ReadonlyState<
-  NonNullable<InterceptRequest["params"]["state"]>
+export type BoundaryState<K extends EventType = EventType> = ReadonlyState<
+  K extends "context.compact.before" ? TextState
+    : K extends "model.request.before" ? MessagesState
+    : K extends "user.elicitation.request" ? ElicitResultState
+    : ToolState
 >;
+export type AcceptedResponse<K extends EventType = EventType> = K extends keyof EventResponses
+  ? ResponseFor<K> : InterceptResponse;
 type BoundaryResponse<K extends EventType> = K extends keyof EventResponses
   ? ResponseFor<K> & { result: { effects: NonNullable<ResponseFor<K>["result"]["effects"]> } }
   : InterceptResponse & { result: { effects: NonNullable<InterceptResponse["result"]["effects"]> } };
@@ -161,13 +158,19 @@ export interface BoundaryResult<K extends EventType = EventType> {
   /** Accepted effective input, with occurrence identity and static envelope supplied.
    * Body streams are owned delivery resources, not reusable output streams. */
   event: HarnessEvent<K>;
+  /** Generated, decoded effective Event. Local bodies select metadata here;
+   * use event/content for their owned resources. Unknown JSON extras survive. */
+  readonly settledEvent: Extract<Event, { type: K }>;
   /** Effective canonical effects. The harness enacts them; the SDK executes no operation. */
   response: BoundaryResponse<K>;
+  /** Complete decoded receiver responses, in acceptance order, including opaque
+   * envelope extras. Failed atomic responses are not accepted. */
+  readonly acceptedResponses: readonly AcceptedResponse<K>[];
   /** Detached, deeply frozen canonical state; no effects replay is needed.
    * An interrupted boundary must not execute, even if earlier accepted state
    * contains a candidate or permission. With no acceptance, initialState is
    * preserved (or the neutral candidate/permission state is returned). */
-  readonly state: BoundaryState;
+  readonly state: BoundaryState<K>;
   /** Canonical settled permission. None is not approval; interruption forbids execution. */
   readonly permission: `${Permission}`;
   /** Accepted tool arguments, not the original proposal. Validate in host code before use. */

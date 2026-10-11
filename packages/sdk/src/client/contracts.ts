@@ -97,7 +97,7 @@ export type ToolBeforeResult<Arguments = unknown, Result = unknown, P = unknown>
     tool: Omit<BoundaryResult<'tool.before'>['event']['tool'], 'input'> & { input: Arguments };
   };
   readonly state: Omit<BoundaryResult<'tool.before'>['state'], 'candidate'> & {
-    readonly candidate: null | Readonly<Pick<Candidate<Result, P>, "value" | "provenance">>;
+    readonly candidate: null | Readonly<Candidate<Result, P>>;
   };
 };
 
