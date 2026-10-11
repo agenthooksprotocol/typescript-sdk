@@ -16,8 +16,8 @@
       "default": "./dist/src/draft/index.js"
     },
     "./generated": {
-      "types": "./dist/src/generated.d.ts",
-      "default": "./dist/src/generated.js"
+      "types": "./dist/src/draft/codecs.d.ts",
+      "default": "./dist/src/draft/codecs.js"
     },
     "./client": {
       "types": "./dist/src/client/index.d.ts",
@@ -36,6 +36,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@sinclair/typebox": "0.34.49",
     "ajv": "8.17.1",
     "ajv-formats": "3.0.1"
   },

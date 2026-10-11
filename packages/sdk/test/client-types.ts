@@ -194,7 +194,7 @@ void hooks.toolBefore({
   path: "native",
 });
 // @ts-expect-error A replacement payload is required.
-void effects.modify("replace", "input");
+void effects.modify_input_effect("replace");
 const credentialProvider: DeliveryAuthProvider = {
   credential(context) {
     return context.authentication

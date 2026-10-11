@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import {
   parseContentUploadReceipt,
   type ContentUploadReceipt,
-} from "../draft/generated.js";
+} from "../draft/raw.js";
 import { validateWire } from "../client/validation.js";
 
 /** Safe protocol upload failure; applications can map status to an HTTP response. */

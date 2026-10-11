@@ -5,21 +5,24 @@ import type {
   Permission,
   ContentSourceBinding,
   DeliveryDiagnosticCode,
-} from "../draft/generated.js";
+} from "../draft/raw.js";
 import type { Attachment, AttachmentContent, ContentSource } from "./content.js";
+import type { BoundaryContracts } from "./contracts.js";
 import type {
   Capabilities,
   ContentReference,
   ExecutionEventContextCompactBefore,
   InterceptResponse,
+  EventResponses,
+  ResponseFor,
   InterceptRequest,
   Event,
   StaticCapabilityManifest,
-} from "../draft/generated.js";
+} from "../draft/raw.js";
 import type { AuthProvider, DeliveryAuthProvider } from "./auth.js";
 
-export type { Event } from "../draft/generated.js";
-export type { EventType } from "../draft/generated.js";
+export type { Event } from "../draft/raw.js";
+export type { EventType } from "../draft/raw.js";
 /** Remove generated JSON extension index signatures while preserving named fields. */
 type Fields<T> = {
   [K in keyof T as string extends K
@@ -98,7 +101,9 @@ export interface HooksOptions {
   /** Best-effort observation budget, bounded by the operation signal. */
   observationTimeoutMs?: number;
 }
-export interface BoundaryOptions {
+export interface BoundaryOptions<Arguments = unknown, Result = unknown, P = unknown> {
+  /** Optional caller contracts run during admission, before any publication. */
+  contracts?: BoundaryContracts<Arguments, Result, P>;
   /** Generated named slots bind owned sources to producer descriptors, without refs. */
   contentSources?: readonly ContentSourceBinding<
     ContentSource | ReadableStream<Uint8Array>
@@ -146,6 +151,9 @@ type ReadonlyState<T, D extends number = 6> = T extends
 export type BoundaryState = ReadonlyState<
   NonNullable<InterceptRequest["params"]["state"]>
 >;
+type BoundaryResponse<K extends EventType> = K extends keyof EventResponses
+  ? ResponseFor<K> & { result: { effects: NonNullable<ResponseFor<K>["result"]["effects"]> } }
+  : InterceptResponse & { result: { effects: NonNullable<InterceptResponse["result"]["effects"]> } };
 export interface BoundaryResult<K extends EventType = EventType> {
   /** Present for owned Attachments. Effective local bodies by content item id,
    * including unread lazy sources. Close explicitly, independently of Hooks. */
@@ -154,7 +162,7 @@ export interface BoundaryResult<K extends EventType = EventType> {
    * Body streams are owned delivery resources, not reusable output streams. */
   event: HarnessEvent<K>;
   /** Effective canonical effects. The harness enacts them; the SDK executes no operation. */
-  response: InterceptResponse;
+  response: BoundaryResponse<K>;
   /** Detached, deeply frozen canonical state; no effects replay is needed.
    * An interrupted boundary must not execute, even if earlier accepted state
    * contains a candidate or permission. With no acceptance, initialState is

@@ -1,10 +1,11 @@
+import { runtimeInteger, sameInteger } from "../runtime-integer.js";
 import { isPartPath, localParts, mapParts } from "./content-paths.js";
 import {
   parseContentUploadReceipt,
   type ContentSelection,
   type ContentUpload,
   type ContentUploadReceipt,
-} from "../draft/generated.js";
+} from "../draft/raw.js";
 
 /** Compatibility adapter for a native lazy stream. The stream is consumed by
  * its attachment owner, not staged in an invocation store. */
@@ -18,7 +19,7 @@ export class ContentSource {
   get stream(): ReadableStream<Uint8Array> { return this.#stream; }
 }
 
-type ContentMetadata = { size?: number | undefined; sha256?: string | undefined };
+type ContentMetadata = { size?: number | bigint | undefined; sha256?: string | undefined };
 type Snapshot = { bytes: Uint8Array; size: number; sha256: string };
 type Budget = { used: number; limit: number };
 type Loader = (signal: AbortSignal, reserve: (bytes: number) => void) => Promise<Uint8Array>;
@@ -342,15 +343,30 @@ export interface ContentManagerOptions {
    * request also use bounded copies. Streams exceeding it fail explicitly.
    */
   maxSnapshotBytes?: number;
-  /** Standalone manager transfer limit; Hooks supplies its shared limiter. Default 8. */
+  /** Standalone manager transfer limit. Default: 8. */
   maxConcurrentUploads?: number;
-  /** @internal Share transfer slots, never content, across invocation managers. */
-  uploadLimiter?: UploadLimiter;
   allowLoopback?: boolean;
 }
 
-function validateSnapshotMetadata(snapshot: Pick<Snapshot, "size" | "sha256">, metadata: ContentMetadata): void {
-  if (metadata.size !== undefined && metadata.size !== snapshot.size)
+// Factory-only identity channel: no internal option leaks into public declarations.
+const sharedUploadLimiters = new WeakMap<ContentManagerOptions, UploadLimiter>();
+
+/** @internal Share transfer slots, never owners or content, across Hooks calls. */
+export function createSharedContentManager(
+  options: ContentManagerOptions,
+  limiter: UploadLimiter,
+): ContentManager {
+  const internalOptions = { ...options };
+  sharedUploadLimiters.set(internalOptions, limiter);
+  try {
+    return new ContentManager(internalOptions);
+  } finally {
+    sharedUploadLimiters.delete(internalOptions);
+  }
+}
+
+function validateSnapshotMetadata(snapshot: { size: number | bigint; sha256: string }, metadata: ContentMetadata): void {
+  if (metadata.size !== undefined && !sameInteger(metadata.size, snapshot.size))
     throw new Error("Content size mismatch");
   if (metadata.sha256 !== undefined && metadata.sha256 !== snapshot.sha256)
     throw new Error("Content SHA-256 mismatch");
@@ -406,7 +422,7 @@ export class ContentManager {
     if (!Number.isSafeInteger(limit) || limit < 0)
       throw new Error("Invalid snapshot byte limit");
     this.allowLoopback = options.allowLoopback ?? false;
-    this.uploadLimiter = options.uploadLimiter ?? new UploadLimiter(options.maxConcurrentUploads);
+    this.uploadLimiter = sharedUploadLimiters.get(options) ?? new UploadLimiter(options.maxConcurrentUploads);
   }
 
   /** Take cleanup ownership without selecting or reading any body. Call before
@@ -574,7 +590,7 @@ export class ContentManager {
         controller.abort(
           new DOMException("Content upload timed out", "TimeoutError"),
         ),
-      upload.timeoutMs,
+      runtimeInteger(upload.timeoutMs, 1),
     );
     try {
       release = await this.uploadLimiter.acquire(controller.signal);
@@ -613,9 +629,9 @@ export class ContentManager {
       const parsed = parseContentUploadReceipt(
         await readConfirmation(response, controller.signal),
       );
+      if (!parsed.ok) throw new Error("Invalid or mismatched upload reference: invalid JSON");
       if (
-        !parsed.ok ||
-        parsed.value.size !== snapshot.size ||
+        !sameInteger(parsed.value.size, snapshot.size) ||
         parsed.value.sha256 !== snapshot.sha256
       ) {
         throw new Error("Invalid or mismatched upload reference");
@@ -687,13 +703,8 @@ export class ContentManager {
         !(this.allowLoopback && loopback && url.protocol === "http:"))
     )
       throw new Error("Unsafe upload endpoint");
-    if (
-      !Number.isSafeInteger(upload.maxBytes) ||
-      upload.maxBytes < 0 ||
-      !Number.isSafeInteger(upload.timeoutMs) ||
-      upload.timeoutMs < 1
-    )
-      throw new Error("Invalid upload budget");
+    runtimeInteger(upload.maxBytes);
+    runtimeInteger(upload.timeoutMs, 1);
   }
 
   private snapshot(stream: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<Snapshot> {
@@ -736,9 +747,8 @@ async function readConfirmation(
       bytes.set(chunk, offset);
       offset += chunk.byteLength;
     }
-    return JSON.parse(
-      new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes),
-    );
+    // The generated receipt decoder parses integer tokens losslessly.
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   } finally {
     if (reader) {
       // Cancellation settles outstanding reads without waiting for the source's

@@ -670,7 +670,7 @@ test("compaction rewrites inline text for later subscribers, and canonical conti
                 operation: "replace",
                 value: [textPart("instructions", "replacement")],
               },
-              { type: "return", value: "summary" },
+              { type: "return", value: [textPart("summary", "summary")] },
             ]
           : [],
       );

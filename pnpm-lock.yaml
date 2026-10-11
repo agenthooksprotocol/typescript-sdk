@@ -24,6 +24,9 @@ importers:
 
   packages/sdk:
     dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.49
+        version: 0.34.49
       ajv:
         specifier: 8.17.1
         version: 8.17.1
@@ -38,6 +41,9 @@ importers:
         version: link:../sdk
 
 packages:
+
+  '@sinclair/typebox@0.34.49':
+    resolution: {integrity: sha512-brySQQs7Jtn0joV8Xh9ZV/hZb9Ozb0pmazDIASBkYKCjXrXU3mpcFahmK/z4YDhGkQvP9mWJbVyahdtU5wQA+A==}
 
   ajv-formats@3.0.1:
     resolution: {integrity: sha512-8iUql50EUR+uUcdRQ3HDqa6EVyo3docL8g5WJ3FNcWmu62IbkGUue/pEyLBW8VGKKucTPgqeks4fIU1DA4yowQ==}
@@ -69,6 +75,8 @@ packages:
     hasBin: true
 
 snapshots:
+
+  '@sinclair/typebox@0.34.49': {}
 
   ajv-formats@3.0.1(ajv@8.17.1):
     optionalDependencies:

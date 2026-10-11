@@ -1,17 +1,38 @@
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullFormats } from "ajv-formats/dist/formats.js";
-import { schemas } from "../draft/schemas.js";
+import { addCanonicalSchemas, canonicalSchema, parseJson, stringifyJson } from "../json.js";
 import { mapParts } from "./content-paths.js";
 import { validateElicitationAnswer } from "../elicitation.js";
-import { validateEffect, validateInterceptResponse } from "../draft/index.js";
+import { validateInterceptResponse } from "../draft/index.js";
 import type {
-  Effect,
+  EventResponses,
+  TextPart,
+  CanonicalMessage,
+  WorkspaceChange,
+  ReturnElicitResultEffect,
+  ReturnMessagesEffect,
+  UserElicitationRequestEvent,
   Capabilities,
   InterceptResponse,
   InterceptRequest,
   ObserveNotification,
-  JsonValue,
-} from "../draft/generated.js";
+} from "../draft/raw.js";
+
+import { responseForRequest } from "../draft/raw.js";
+
+export type ContextualResponse = EventResponses[keyof EventResponses];
+export type ComposedEffect = NonNullable<EventResponses[keyof EventResponses]["result"]["effects"]>[number];
+type ModifyEffect = Extract<ComposedEffect, { type: "modify" }>;
+type OutboundModifyEffect = Extract<NonNullable<EventResponses["user.message.outbound"]["result"]["effects"]>[number], { type: "modify" }>;
+
+// Context selects the declared effect shapes; canonical validation checks the
+// complete JSON contract, including constraints beyond the generated codec.
+function decodeResponse(event: ClientEvent, raw: ContextualResponse | InterceptResponse): ContextualResponse {
+  const decoded = responseForRequest(event.type, raw);
+  if (!decoded.ok || !validateInterceptResponse(raw).ok)
+    throw new Error("Invalid intercept response");
+  return decoded.value;
+}
 
 export type ClientEvent = ObserveNotification["params"]["event"];
 type ObjectValue = Record<string, unknown>;
@@ -60,7 +81,7 @@ function validator() {
     registry.addFormat("uri", fullFormats.uri);
     registry.addFormat("email", fullFormats.email);
     registry.addFormat("date-time", fullFormats["date-time"]);
-    for (const schema of schemas) registry.addSchema(schema);
+    addCanonicalSchemas(registry);
   }
   return registry;
 }
@@ -84,17 +105,39 @@ function equal(a: unknown, b: unknown, key?: string): boolean {
   );
 }
 
-// List merges append in order (including duplicates); object merges are shallow.
+// TEMP generic JSON targets use shallow merge, not recursive host traversal.
 function modifyValue(current: unknown, value: unknown, operation: string): unknown {
   if (operation === "replace") return cloneValue(value);
-  if (Array.isArray(value)) {
-    if (current !== undefined && !Array.isArray(current))
-      throw new Error("Merge target must be a list");
-    return [...((current ?? []) as unknown[]), ...cloneValue(value)];
-  }
   if (!object(current) || !object(value))
     throw new Error("Merge requires object values");
   return { ...current, ...cloneValue(value) };
+}
+function modifyList<T extends TextPart | CanonicalMessage>(
+  current: T[], value: T[], operation: "replace" | "merge",
+): T[] {
+  return operation === "replace" ? cloneValue(value) : [...current, ...cloneValue(value)];
+}
+function modifyForEvent(event: ClientEvent, current: unknown, effect: ModifyEffect): unknown {
+  switch (effect.target) {
+    case "input":
+      return modifyValue(current, effect.value, effect.operation);
+    case "workspace": {
+      const prior = current as WorkspaceChange;
+      return effect.operation === "replace" ? cloneValue(effect.value) : { ...prior, ...cloneValue(effect.value) };
+    }
+    case "instructions":
+    case "summary":
+      return modifyList(current as TextPart[], effect.value, effect.operation);
+    case "content":
+      if (event.type === "user.elicitation.result")
+        return modifyValue(current, effect.value, effect.operation);
+      // The originating event is the authority for the overlapping content target.
+      return modifyList(current as CanonicalMessage[],
+        (effect as OutboundModifyEffect).value,
+        effect.operation);
+    default:
+      return modifyList(current as CanonicalMessage[], effect.value, effect.operation);
+  }
 }
 
 // Canonical catalogue payload locations (not synthetic input/output slots).
@@ -119,20 +162,22 @@ const targets: Record<string, Record<string, string[]>> = {
  * occurs here. Use composeResponseAsync for correlated elicitation validation. */
 export function composeResponse(
   event: ClientEvent,
-  previous: Effect[],
-  response: InterceptResponse,
+  previous: ComposedEffect[],
+  response: ContextualResponse | InterceptResponse,
   capabilities: Capabilities,
 ): CompositionResult {
   return compose(event, previous, response, capabilities);
 }
 export interface CompositionResult {
   event: ClientEvent;
-  effects: Effect[];
+  effects: ComposedEffect[];
   state: InterceptRequest["params"]["state"];
   shortCircuit: boolean;
 }
 export interface CompositionOptions {
   state?: InterceptRequest["params"]["state"];
+  /** Validate each complete temporary event before applying the next modification. */
+  admitStagedEvent?: (event: ClientEvent) => void;
   /** Returns reusable, host-owned snapshot bytes; does not transfer a stream. */
   readContent: (body: ReadableStream<Uint8Array>) => Promise<Uint8Array>;
   /** Register locally synthesized sources before staging can fail. */
@@ -144,31 +189,33 @@ export interface CompositionOptions {
   /** Actual subscriber projection. Metadata/omit/gap views do not grant reads. */
   selectedEvent?: ClientEvent;
 }
+function validateEffectiveEvent(event: ClientEvent): void {
+  const eventSchema = event.type === "tool.before" ? "tool-before"
+    : event.type === "tool.after" ? "tool-after" : "catalogue-event";
+  if (!validator().validate(`${base}${eventSchema}.schema.json`, metadata(event)))
+    throw new Error("Invalid effective event payload");
+}
 function compose(
   event: ClientEvent,
-  previous: Effect[],
-  response: InterceptResponse,
+  previous: ComposedEffect[],
+  response: ContextualResponse | InterceptResponse,
   capabilities: Capabilities,
   prepared?: ClientEvent,
   preflight = false,
   previousState?: InterceptRequest["params"]["state"],
 ): CompositionResult {
-  if (!validateInterceptResponse(response).ok)
-    throw new Error("Invalid intercept response");
+  const decoded = decodeResponse(event, response);
   const ajv = validator();
   const boundary = ajv.getSchema(
     `${base}capabilities.schema.json#/$defs/${event.type}`,
   );
   if (!boundary || !boundary(capabilities))
     throw new Error("Invalid capabilities for boundary");
-  const incoming = structuredClone(response.result.effects);
+  const incoming = structuredClone(decoded.result.effects ?? []);
   const staged = cloneEvent(prepared ?? event);
   let effects = structuredClone(previous);
   for (const effect of incoming) {
-    if (
-      !validateEffect(effect).ok ||
-      !capabilities.effects.includes(effect.type)
-    )
+    if (!capabilities.effects.includes(effect.type))
       throw new Error("Invalid or unsupported effect");
     if (
       ![
@@ -195,7 +242,7 @@ function compose(
       (effect.type === "return" || effect.type === "deny") &&
       event.type === "user.elicitation.request"
     ) {
-      const meta = (event as ObjectValue).elicitation;
+      const meta = event.elicitation;
       if (
         !object(meta) ||
         (meta.mode !== "form" && meta.mode !== "url") ||
@@ -204,23 +251,19 @@ function compose(
         throw new Error("Unsupported elicitation mode");
     }
     if (effect.type === "return" && event.type === "user.elicitation.request") {
-      const meta = (event as ObjectValue).elicitation as ObjectValue;
+      // The codec selected this return variant from the originating request,
+      // not from the JSON value's runtime shape.
+      const answer = (effect as ReturnElicitResultEffect).value;
+      const meta = (event as UserElicitationRequestEvent).elicitation;
       if (
-        !ajv.validate(
-          `${base}mcp-elicitation.schema.json#/$defs/result`,
-          effect.value,
-        )
-      )
-        throw new Error("Invalid elicitation result");
-      if (!object(effect.value)) throw new Error("Invalid elicitation result");
-      if (
-        Object.hasOwn(effect.value, "content") &&
-        (meta.mode === "url" || effect.value.action !== "accept")
+        Object.hasOwn(answer, "content") &&
+        (meta.mode === "url" || answer.action !== "accept")
       )
         throw new Error("Invalid elicitation content");
-      if (!prepared && meta.mode === "form" && effect.value.action === "accept")
+      if (!prepared && meta.mode === "form" && answer.action === "accept")
         throw new Error("Form validation requires composeResponseAsync");
     }
+
     if (effect.type === "modify") {
       const operation = effect.operation;
       const advertised = capabilities.modify?.[effect.target];
@@ -231,20 +274,7 @@ function compose(
         advertised[operation] !== true
       )
         throw new Error("Unsupported modification");
-      // The shared effect schema permits specialized object-valued targets.
-      // Boundary context determines the actual shape; ordinary message targets
-      // remain canonical lists for both replacement and ordered append.
-      const objectTarget = ["input", "workspace"].includes(effect.target) ||
-        (event.type === "user.elicitation.result" && effect.target === "content");
-      if (objectTarget) {
-        if (!object(effect.value)) throw new Error("Modification requires an object");
-      } else {
-        const definition = ["instructions", "summary"].includes(effect.target)
-          ? "textParts" : "messages";
-        if (!Array.isArray(effect.value) || !ajv.validate(
-          `${base}content-item.schema.json#/$defs/${definition}`, effect.value,
-        )) throw new Error("Modification requires a canonical list");
-      }
+
     }
     if (effect.type === "flow") {
       if (!capabilities.flow?.operations.includes(effect.operation))
@@ -256,7 +286,8 @@ function compose(
         const caps = capabilities.flow;
         if (
           !(
-            typeof caps.remainingContinuations === "number" &&
+            (typeof caps.remainingContinuations === "number" ||
+              typeof caps.remainingContinuations === "bigint") &&
             caps.remainingContinuations > 0
           ) ||
           (caps.maxContinuations !== undefined &&
@@ -286,20 +317,11 @@ function compose(
     }
     const key = path[path.length - 1]!;
     const current = container[key];
-    container[key] = modifyValue(current, effect.value, effect.operation);
+    container[key] = modifyForEvent(event, current, effect);
+    if (!preflight) validateEffectiveEvent(staged);
   }
-  const eventSchema =
-    event.type === "tool.before"
-      ? "tool-before"
-      : event.type === "tool.after"
-        ? "tool-after"
-        : "catalogue-event";
-  if (
-    !preflight &&
-    incoming.some((e) => e.type === "modify") &&
-    !ajv.validate(`${base}${eventSchema}.schema.json`, metadata(staged))
-  )
-    throw new Error("Invalid effective event payload");
+  if (!preflight && incoming.some((e) => e.type === "modify"))
+    validateEffectiveEvent(staged);
   if (!equal(event, staged)) {
     effects = effects.filter((e) => e.type !== "return" && e.type !== "allow");
     if (previousState)
@@ -330,7 +352,7 @@ function compose(
 
 /** Normalize explicit and local fail-closed decisions identically. */
 export function normalizeEffects(
-  effects: Effect[],
+  effects: ComposedEffect[],
   previousState?: InterceptRequest["params"]["state"],
 ) {
   const denied =
@@ -403,7 +425,7 @@ export function normalizeEffects(
             ...(previousState?.injections ?? []),
             ...effects
               .filter((e) => e.type === "inject")
-              .map((e) => structuredClone(e) as JsonValue),
+              .map((e) => structuredClone(e)),
           ],
         }
       : {}),
@@ -417,8 +439,8 @@ export function normalizeEffects(
  */
 export async function composeResponseAsync(
   event: ClientEvent,
-  previous: Effect[],
-  response: InterceptResponse,
+  previous: ComposedEffect[],
+  response: ContextualResponse | InterceptResponse,
   capabilities: Capabilities,
   options: CompositionOptions,
 ): Promise<CompositionResult> {
@@ -426,7 +448,8 @@ export async function composeResponseAsync(
   // postpones correlated elicitation checks until its inline JSON is parsed.
   compose(event, previous, response, capabilities, event, true, options.state);
   const staged = cloneEvent(event) as ObjectValue;
-  const effects = response.result.effects;
+  const decoded = decodeResponse(event, response);
+  const effects = decoded.result.effects ?? [];
   const selectedAt = (path: string[]): unknown => {
     let value: unknown = options.selectedEvent;
     for (const key of path) value = object(value) ? value[key] : undefined;
@@ -447,7 +470,7 @@ export async function composeResponseAsync(
       typeof item.text !== "string"
     )
       throw new Error("An inline text body is required");
-    const value: unknown = JSON.parse(item.text);
+    const value: unknown = parseJson(item.text);
     if (!object(value)) throw new Error("Expected a JSON object body");
     return value;
   };
@@ -459,7 +482,7 @@ export async function composeResponseAsync(
       kind: "text",
       mediaType: "text/plain",
       selection: "body",
-      text: JSON.stringify(value),
+      text: stringifyJson(value),
       ...(oldItem.category !== undefined ? { category: oldItem.category } : {}),
     };
   };
@@ -533,7 +556,7 @@ export async function composeResponseAsync(
           const pair = value as { schema: ObjectValue; value: unknown };
           // The pinned request schema restricts the vocabulary before compilation.
           // No defaults, coercion, or unknown-field stripping can change answers.
-          if (!ajv.compile(pair.schema)(pair.value))
+          if (!ajv.compile(canonicalSchema(pair.schema) as object)(pair.value))
             throw new Error("Answer does not satisfy requestedSchema");
         } else if (
           !ajv.validate(
@@ -557,6 +580,12 @@ export async function composeResponseAsync(
           effect.operation,
         ),
       };
+      validateAnswer(elicitationResult);
+      const meta = staged.elicitation as ObjectValue;
+      meta.result = bodyItem(meta.result, elicitationResult);
+      meta.action = elicitationResult.action;
+      validateEffectiveEvent(staged as ClientEvent);
+      options.admitStagedEvent?.(staged as ClientEvent);
       continue;
     }
     const path = targets[event.type]![effect.target]!;
@@ -568,7 +597,9 @@ export async function composeResponseAsync(
     }
     const key = path[path.length - 1]!;
     const current = container[key];
-    container[key] = modifyValue(current, effect.value, effect.operation);
+    container[key] = modifyForEvent(event, current, effect);
+    validateEffectiveEvent(staged as ClientEvent);
+    options.admitStagedEvent?.(staged as ClientEvent);
   }
   if (elicitationResult) {
     validateAnswer(elicitationResult);
@@ -579,6 +610,20 @@ export async function composeResponseAsync(
   if (elicitationRequest) {
     for (const effect of effects)
       if (effect.type === "return") validateAnswer(effect.value);
+  }
+  // Only declared message effects carry attachment authority. Tool results and
+  // extension bags are opaque JSON, even if they resemble content containers.
+  if (options.resolveAttachment) {
+    for (const effect of effects) {
+      const messages = effect.type === "inject" ? effect.value
+        : effect.type === "return" && event.type === "model.request.before"
+          ? (effect as ReturnMessagesEffect).value : undefined;
+      if (messages !== undefined)
+        mapParts({ type: "model.request.before", items: messages }, (part) => {
+          if (object(part) && part.kind === "attachment") options.resolveAttachment!(part);
+          return part;
+        });
+    }
   }
   const resolved = options.resolveAttachment
     ? mapParts(staged, (part) => object(part) && part.kind === "attachment" ? options.resolveAttachment!(part) : part)

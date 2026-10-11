@@ -7,13 +7,16 @@ import {
 import {
   PROTOCOL_VERSION,
   parseObserveNotification,
+  responseForRequest,
+  type EventResponses,
   type CapabilitiesRequest,
   type CapabilitiesResponse,
   type InterceptRequest,
   type InterceptResponse,
   type ObserveNotification,
-} from "../draft/generated.js";
+} from "../draft/raw.js";
 import { validateWire } from "../client/validation.js";
+import { parseJson, stringifyJson } from "../json.js";
 
 /** A decoded canonical wire message, not a host execution boundary. */
 export type Message =
@@ -27,7 +30,7 @@ type ResultFields<T> = {
       ? never
       : K]: T[K];
 };
-export type InterceptResult = ResultFields<InterceptResponse["result"]>;
+export type InterceptResult = ResultFields<EventResponses[keyof EventResponses]["result"]>;
 export type CapabilitiesResult = ResultFields<CapabilitiesResponse["result"]>;
 export type Handler = (
   message: Message,
@@ -41,7 +44,7 @@ function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function json(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value), {
+  return new Response(stringifyJson(value), {
     status,
     headers: { "content-type": "application/json" },
   });
@@ -61,10 +64,10 @@ function error(
 /** Check support without executing, resolving bodies, or composing host state. */
 function supported(
   request: InterceptRequest,
-  response: InterceptResponse,
+  response: EventResponses[keyof EventResponses],
 ): boolean {
   const caps = request.params.capabilities;
-  return response.result.effects.every((effect) => {
+  return (response.result.effects ?? []).every((effect) => {
     if (!caps.effects.includes(effect.type)) return false;
     if (effect.type === "modify") {
       const target = caps.modify?.[effect.target];
@@ -81,7 +84,7 @@ function supported(
       if (effect.operation === "continue") {
         const flow = caps.flow;
         return (
-          typeof flow.remainingContinuations === "number" &&
+          (typeof flow.remainingContinuations === "number" || typeof flow.remainingContinuations === "bigint") &&
           flow.remainingContinuations > 0 &&
           (flow.maxContinuations === undefined ||
             (flow.continuationCount ?? 0) < flow.maxContinuations)
@@ -115,7 +118,7 @@ async function handle(request: Request, handler: Handler): Promise<Response> {
     return new Response(null, { status: 415 });
   let raw: unknown;
   try {
-    raw = JSON.parse(await request.text()) as unknown;
+    raw = parseJson(await request.text());
   } catch {
     return error(null, -32700, "Parse error", false, 400);
   }
@@ -190,8 +193,9 @@ async function handle(request: Request, handler: Handler): Promise<Response> {
       result: { ...result, protocolVersion: PROTOCOL_VERSION },
     };
     if (canonical.method === "hooks/intercept") {
-      const response = validateInterceptResponse(envelope);
-      if (!response.ok || !supported(canonical, response.value))
+      const validation = validateInterceptResponse(envelope);
+      const response = responseForRequest(canonical.params.event.type, envelope);
+      if (!validation.ok || !response.ok || !supported(canonical, response.value))
         throw new Error("Invalid result");
       return json(response.value);
     }

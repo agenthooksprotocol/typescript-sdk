@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import type { Capabilities, Effect } from "agenthooksprotocol/client";
+import type { Capabilities, ToolBeforeEffect } from "agenthooksprotocol/client";
 import {
   DecisionPipeline,
   type HostState,
@@ -25,7 +25,7 @@ interface Scenario {
   id: string;
   phase: "pending" | "accepted" | "timeout" | "failure";
   failurePolicy: "fail-open" | "fail-closed";
-  effects: Effect[];
+  effects: ToolBeforeEffect[];
 }
 const scenarios: Scenario[] = JSON.parse(
   readFileSync(

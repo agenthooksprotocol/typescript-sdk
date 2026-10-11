@@ -5,7 +5,7 @@ const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
 const { composeResponse } = await import(
-  require.resolve("agenthooksprotocol/client")
+  "../packages/sdk/dist/src/client/composition.js"
 );
 
 const envelope = { id: "e", source: "urn:test", time: "2026-01-01T00:00:00Z" };
@@ -253,7 +253,7 @@ test("model request modifications use canonical message lists", () => {
 });
 
 const { composeResponseAsync } = await import(
-  require.resolve("agenthooksprotocol/client")
+  "../packages/sdk/dist/src/client/composition.js"
 );
 const textPart = (id, value) => ({
   id, kind: "text", mediaType: "text/plain", selection: "body",
@@ -757,11 +757,11 @@ test("identical inline compaction modification preserves an existing candidate",
   ];
   const result = await composeResponseAsync(
     event,
-    [{ type: "return", value: "summary" }],
+    [{ type: "return", value: [textPart("summary", "summary")] }],
     response(effects),
     modifyCaps("instructions"),
     { readContent: bodyReader() },
   );
-  assert.equal(result.state.candidate.value, "summary");
+  assert.deepEqual(result.state.candidate.value, [textPart("summary", "summary")]);
   assert.equal(result.event.instructions[0].text, event.instructions[0].text);
 });

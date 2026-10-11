@@ -1,4 +1,4 @@
-import type { Authentication } from "../draft/generated.js";
+import type { Authentication } from "../draft/raw.js";
 
 export interface Credential {
   token: string;

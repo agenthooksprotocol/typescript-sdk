@@ -300,6 +300,55 @@ without fabricated replies; failure or abort destroys both streams. Long-running
 handlers should honor `request.signal` for cooperative cancellation. The Node-only subpath keeps `node:` imports out of the
 Web server entrypoint.
 
+## Typed caller contracts
+
+Use `Type`, `contract`, and `form` from `agenthooksprotocol/client` to declare
+application payloads. Schema inference stays attached to the contract; call its
+`decode` method when admitting application data directly.
+
+```ts
+import { Hooks, Type, contract, form } from "agenthooksprotocol/client";
+
+const argumentsContract = contract(Type.Object({ count: Type.Integer() }));
+const resultContract = contract(Type.Object({ answer: Type.String() }));
+const argumentsValue = argumentsContract.decode({ count: 1 });
+
+// hooks is a configured Hooks instance with explicit tool.before grants.
+declare const hooks: Hooks;
+const result = await hooks.toolBefore({
+  callId: "call-1", name: "read", path: "native", origin: "native",
+  input: argumentsValue,
+}, { contracts: { arguments: argumentsContract, result: resultContract } });
+const count: number = result.input.count;
+if (result.state.candidate !== null) {
+  const answer: string = result.state.candidate.value.answer;
+}
+
+const approval = form(Type.Object({ approved: Type.Boolean() }));
+const answer = approval.decode({ action: "accept", content: { approved: true } });
+```
+
+`ToolBeforeInput<Arguments>` and `ToolBeforeResult<Arguments, Result, Provenance>`
+name these typed boundary values. Canonical wire models and structural codecs
+remain available from `/draft` and `/generated`.
+
+### Advanced delivery APIs
+
+`ContentManager` and `BackendTransport` are intentional advanced `/client` APIs
+for hosts implementing their own delivery orchestration. Prefer `Hooks` for normal
+boundary calls. A `ContentManager` coordinates one invocation's attachment owners,
+byte budget, uploads, and cleanup; immutable bytes and lazy sources belong to
+`Attachment`, not to the manager. Close the manager after the invocation. Transfer
+returned content ownership before closing when results must outlive delivery.
+`ContentManagerOptions` configures `maxSnapshotBytes`, `maxConcurrentUploads`
+(default `8`), and `allowLoopback`. Standalone managers have independent upload
+limits; `Hooks` shares its upload limit across its concurrent invocations.
+
+`BackendTransport` implements HTTP/stdio delivery for a canonical `Backend` and a
+caller-supplied fetch adapter. The adapter owns network policy and authentication;
+close the transport to release its processes and pending requests. Transport
+handling validates envelopes, not application contracts or boundary admission.
+
 ## Packages
 
 - `agenthooksprotocol/client` — configuration-driven harness client, typed event boundaries, and HTTP/stdio delivery
@@ -327,7 +376,7 @@ node packages/conformance/dist/src/cli.js -- \
   node packages/testing/dist/src/fake-backend.js --mode no-effect
 ```
 
-Generated code lives in `packages/sdk/src/generated.ts`. Its provenance is recorded in `ahp-codegen.lock.json`; schema changes are made in the [protocol repository](https://github.com/agenthooksprotocol/agent-hooks-protocol), not by editing the generated file.
+The current draft contracts live in `packages/sdk/src/draft/`. The advanced `/generated` entrypoint exposes the filtered `draft/codecs.ts` facade; `/draft` adds canonical validation and the explicit `reference` namespace. Generated provenance is recorded in `packages/sdk/src/draft/ahp-codegen.lock.json`; schema changes are made in the [protocol repository](https://github.com/agenthooksprotocol/agent-hooks-protocol), not by editing generated files.
 
 ## Draft API
 

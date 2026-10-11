@@ -1,3 +1,4 @@
+import { parseJson } from "./json.js";
 /** MCP 2025-11-25 inline-text binding. Identity comes from authentication,
  * never event.source or elicitation.server. */
 export function validateElicitationExchange(
@@ -220,7 +221,7 @@ export function readSelectedElicitation(
   if (item.selection !== "body") return null;
   if (item.gap !== undefined || typeof item.text !== "string")
     throw Error("Selected text unavailable (fail closed)");
-  const payload = JSON.parse(item.text);
+  const payload = parseJson(item.text) as Record<string, any>;
   validate("mcp-elicitation#" + stage, payload);
   if (stage === "request" && meta.mode !== (payload.mode ?? "form"))
     throw Error("Mode mismatch");

@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  uploadContent,
-  prepareWireContent,
   draftCodecs,
-  stageBoundary,
+  reference,
 } from "agenthooksprotocol/draft";
+const { uploadContent, prepareWireContent, stageBoundary } = reference;
+
 import { Hooks, auth } from "agenthooksprotocol/client";
 import { hooks, attachments } from "agenthooksprotocol/server";
 

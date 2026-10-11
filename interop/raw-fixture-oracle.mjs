@@ -1,12 +1,13 @@
 // Test-only oracle for deliberately raw response fixtures. Never used after SDK delivery.
 import { mutableValues, effectiveEvent } from "./settlement.mjs";
 import { sdkDraft } from "./common.mjs";
-const { stageBoundary, validateInterceptRequest, validateInterceptResponse } =
-  sdkDraft;
+const { validateInterceptRequest, validateInterceptResponse } = sdkDraft;
+const { stageBoundary } = sdkDraft.reference;
 export function evaluate(request, response) {
+  const decodedResponse = validateInterceptResponse(response);
   if (
     !validateInterceptRequest(request).ok ||
-    !validateInterceptResponse(response).ok ||
+    !decodedResponse.ok ||
     response.id !== request.id
   )
     throw Error("Invalid canonical envelope");
@@ -40,7 +41,7 @@ export function evaluate(request, response) {
   };
   const staged = stageBoundary(
     before,
-    response.result.effects,
+    decodedResponse.value.result.effects ?? [],
     capabilities,
     "matrix",
     event.tool?.name === "task"

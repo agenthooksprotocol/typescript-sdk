@@ -3,9 +3,10 @@ import type {
   Backend,
   HttpTransport,
   StdioTransport,
-} from "../draft/generated.js";
+} from "../draft/raw.js";
 import { HookOperationalError } from "../errors.js";
 import { NdjsonDecoder } from "../framing.js";
+import { parseJson, stringifyJson } from "../json.js";
 
 type Fetcher = (url: string, init: RequestInit) => Promise<Response>;
 type Pending = {
@@ -159,7 +160,7 @@ export class BackendTransport {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify(message),
+      body: stringifyJson(message),
       redirect: "error",
       signal,
     });
@@ -193,7 +194,7 @@ export class BackendTransport {
       signal.throwIfAborted();
       let decoded: unknown;
       try {
-        decoded = JSON.parse(text);
+        decoded = parseJson(text);
       } catch {
         throw new HookOperationalError(
           "MALFORMED_JSON",
@@ -275,7 +276,7 @@ export class BackendTransport {
       try {
         const lines = decoder.push(chunk);
         for (const line of lines) {
-          const value = JSON.parse(line);
+          const value = parseJson(line) as any;
           if (transport.lifecycle === "persistent") {
             // Validate protocol output, but ignore replies to abandoned/unknown IDs.
             const response = responseFor(value, { id: value?.id });
@@ -341,7 +342,7 @@ export class BackendTransport {
     notification: boolean,
     signal: AbortSignal,
   ): Promise<unknown> {
-    const wire = JSON.stringify(message) + "\n";
+    const wire = stringifyJson(message) + "\n";
     const state = this.#process ?? this.#start();
     const perEvent =
       (this.#transport as StdioTransport).lifecycle === "per_event";

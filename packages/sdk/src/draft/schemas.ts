@@ -2623,11 +2623,50 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          counters: {
+            $ref: "#/$defs/SessionCounters",
+          },
         },
       },
       native: {
         description:
           "Opaque implementation-defined JSON, delivered only when includeNative is authorized. AHP does not prescribe its shape, completeness, or construction. Native data cannot replace required normalized fields or bypass content selection, inline text and attachment-only uploads, permissions, or credential exclusions.",
+      },
+      SessionCounters: {
+        type: "object",
+        properties: {
+          turns: {
+            type: "integer",
+            minimum: 0,
+            description: "Completed host turns.",
+          },
+          modelRequests: {
+            type: "integer",
+            minimum: 0,
+            description: "Actual provider attempts, including retries.",
+          },
+          toolCalls: {
+            type: "integer",
+            minimum: 0,
+            description: "Actual tool executions, including failures.",
+          },
+          inputTokens: {
+            type: "integer",
+            minimum: 0,
+            description: "Provider-reported total input tokens, when known.",
+          },
+          outputTokens: {
+            type: "integer",
+            minimum: 0,
+            description: "Provider-reported total output tokens, when known.",
+          },
+        },
+        additionalProperties: {
+          type: "integer",
+          minimum: 0,
+        },
+        description:
+          "Host-supplied counters. Omitted means unknown, not zero; SDKs do not infer values.",
       },
     },
   },
@@ -3257,6 +3296,45 @@ export const schemas = [
         $ref: "deny-effect.schema.json",
       },
       {
+        $ref: "#/$defs/AllowEffect",
+      },
+      {
+        $ref: "#/$defs/AskEffect",
+      },
+      {
+        $ref: "#/$defs/ModifyMessagesEffect",
+      },
+      {
+        $ref: "#/$defs/ModifyTextEffect",
+      },
+      {
+        $ref: "#/$defs/ModifyWorkspaceEffect",
+      },
+      {
+        $ref: "#/$defs/ModifyFormEffect",
+      },
+      {
+        $ref: "#/$defs/ModifyInputEffect",
+      },
+      {
+        $ref: "#/$defs/MessageEffect",
+      },
+      {
+        $ref: "#/$defs/ReturnToolEffect",
+      },
+      {
+        $ref: "#/$defs/StopFlowEffect",
+      },
+      {
+        $ref: "#/$defs/ContinueFlowEffect",
+      },
+      {
+        $ref: "#/$defs/InjectEffect",
+      },
+    ],
+    title: "AHP Effect (Draft)",
+    $defs: {
+      AllowEffect: {
         type: "object",
         required: ["type"],
         properties: {
@@ -3266,7 +3344,7 @@ export const schemas = [
         },
         additionalProperties: false,
       },
-      {
+      AskEffect: {
         type: "object",
         required: ["type"],
         properties: {
@@ -3276,111 +3354,7 @@ export const schemas = [
         },
         additionalProperties: false,
       },
-      {
-        type: "object",
-        required: ["type", "target", "operation", "value"],
-        properties: {
-          type: {
-            const: "modify",
-          },
-          target: {
-            enum: [
-              "input",
-              "output",
-              "prompt",
-              "request",
-              "response",
-              "content",
-              "instructions",
-              "summary",
-              "workspace",
-            ],
-          },
-          operation: {
-            enum: ["replace", "merge"],
-            description:
-              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
-          },
-          value: {},
-        },
-        allOf: [
-          {
-            if: {
-              properties: {
-                target: {
-                  enum: ["prompt", "request", "response", "output"],
-                },
-              },
-            },
-            then: {
-              properties: {
-                value: {
-                  $ref: "content-item.schema.json#/$defs/messages",
-                },
-              },
-            },
-          },
-          {
-            if: {
-              properties: {
-                target: {
-                  const: "content",
-                },
-              },
-            },
-            then: {
-              properties: {
-                value: {
-                  oneOf: [
-                    {
-                      $ref: "content-item.schema.json#/$defs/messages",
-                    },
-                    {
-                      type: "object",
-                    },
-                  ],
-                  description:
-                    "Canonical messages at user.message.outbound; MCP answer object at user.elicitation.result. The host MUST validate the boundary-specific target contract.",
-                },
-              },
-            },
-          },
-          {
-            if: {
-              properties: {
-                target: {
-                  enum: ["instructions", "summary"],
-                },
-              },
-            },
-            then: {
-              properties: {
-                value: {
-                  $ref: "content-item.schema.json#/$defs/textParts",
-                },
-              },
-            },
-          },
-          {
-            if: {
-              properties: {
-                target: {
-                  enum: ["input", "workspace"],
-                },
-              },
-            },
-            then: {
-              properties: {
-                value: {
-                  type: "object",
-                },
-              },
-            },
-          },
-        ],
-        additionalProperties: false,
-      },
-      {
+      MessageEffect: {
         type: "object",
         required: ["type", "text"],
         properties: {
@@ -3393,18 +3367,7 @@ export const schemas = [
         },
         additionalProperties: false,
       },
-      {
-        type: "object",
-        required: ["type", "value"],
-        properties: {
-          type: {
-            const: "return",
-          },
-          value: true,
-        },
-        additionalProperties: false,
-      },
-      {
+      StopFlowEffect: {
         type: "object",
         required: ["type", "operation", "reason"],
         properties: {
@@ -3421,7 +3384,7 @@ export const schemas = [
         },
         additionalProperties: false,
       },
-      {
+      ContinueFlowEffect: {
         type: "object",
         required: ["type", "operation"],
         properties: {
@@ -3438,7 +3401,7 @@ export const schemas = [
         },
         additionalProperties: false,
       },
-      {
+      InjectEffect: {
         type: "object",
         required: ["type", "target", "operation", "deliverAt", "value"],
         properties: {
@@ -3460,8 +3423,222 @@ export const schemas = [
         },
         additionalProperties: false,
       },
-    ],
-    title: "AHP Effect (Draft)",
+      ModifyMessagesEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            oneOf: [
+              {
+                const: "prompt",
+              },
+              {
+                const: "request",
+              },
+              {
+                const: "response",
+              },
+              {
+                const: "output",
+              },
+              {
+                const: "content",
+              },
+            ],
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            $ref: "content-item.schema.json#/$defs/messages",
+          },
+        },
+        additionalProperties: false,
+      },
+      ModifyTextEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            oneOf: [
+              {
+                const: "instructions",
+              },
+              {
+                const: "summary",
+              },
+            ],
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            $ref: "content-item.schema.json#/$defs/textParts",
+          },
+        },
+        additionalProperties: false,
+      },
+      ModifyWorkspaceEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            const: "workspace",
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            $ref: "task-workspace-event.schema.json#/$defs/WorkspaceChange",
+          },
+        },
+        additionalProperties: false,
+      },
+      ModifyFormEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            const: "content",
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            $ref: "mcp-elicitation.schema.json#/$defs/FormAnswers",
+          },
+        },
+        additionalProperties: false,
+      },
+      ModifyInputEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            const: "input",
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            type: "object",
+            description:
+              "Tool-owned input contract; validate using the declared caller codec.",
+          },
+        },
+        additionalProperties: false,
+      },
+      ReturnMessagesEffect: {
+        type: "object",
+        required: ["type", "value"],
+        properties: {
+          type: {
+            const: "return",
+          },
+          value: {
+            $ref: "content-item.schema.json#/$defs/messages",
+          },
+        },
+        additionalProperties: false,
+      },
+      ReturnTextEffect: {
+        type: "object",
+        required: ["type", "value"],
+        properties: {
+          type: {
+            const: "return",
+          },
+          value: {
+            $ref: "content-item.schema.json#/$defs/textParts",
+          },
+        },
+        additionalProperties: false,
+      },
+      ReturnElicitResultEffect: {
+        type: "object",
+        required: ["type", "value"],
+        properties: {
+          type: {
+            const: "return",
+          },
+          value: {
+            $ref: "mcp-elicitation.schema.json#/$defs/ElicitResult",
+          },
+        },
+        additionalProperties: false,
+      },
+      ReturnToolEffect: {
+        type: "object",
+        required: ["type", "value"],
+        properties: {
+          type: {
+            const: "return",
+          },
+          value: true,
+        },
+        additionalProperties: false,
+      },
+    },
   },
   {
     $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -6694,7 +6871,7 @@ export const schemas = [
         properties: {
           result: {
             type: "object",
-            required: ["protocolVersion", "effects"],
+            required: ["protocolVersion"],
             properties: {
               protocolVersion: {
                 $ref: "common.schema.json#/$defs/protocolVersion",
@@ -6704,7 +6881,7 @@ export const schemas = [
                 minItems: 1,
                 maxItems: 1,
                 items: {
-                  $ref: "deny-effect.schema.json",
+                  $ref: "effect.schema.json",
                 },
               },
               extensions: {
@@ -6736,7 +6913,7 @@ export const schemas = [
         properties: {
           result: {
             type: "object",
-            required: ["protocolVersion", "effects"],
+            required: ["protocolVersion"],
             properties: {
               protocolVersion: {
                 $ref: "common.schema.json#/$defs/protocolVersion",
@@ -6744,6 +6921,9 @@ export const schemas = [
               effects: {
                 type: "array",
                 maxItems: 0,
+                items: {
+                  $ref: "effect.schema.json",
+                },
               },
               extensions: {
                 $ref: "extensions.schema.json",
@@ -6918,7 +7098,9 @@ export const schemas = [
                   },
                   injections: {
                     type: "array",
-                    items: {},
+                    items: {
+                      $ref: "effect.schema.json#/$defs/InjectEffect",
+                    },
                   },
                 },
               },
@@ -7304,12 +7486,300 @@ export const schemas = [
                   },
                 },
               },
+              {
+                if: {
+                  required: ["event"],
+                  properties: {
+                    event: {
+                      required: ["type"],
+                      properties: {
+                        type: {
+                          const: "model.request.before",
+                        },
+                      },
+                    },
+                  },
+                },
+                then: {
+                  properties: {
+                    state: {
+                      $ref: "#/$defs/MessagesState",
+                    },
+                  },
+                },
+              },
+              {
+                if: {
+                  required: ["event"],
+                  properties: {
+                    event: {
+                      required: ["type"],
+                      properties: {
+                        type: {
+                          const: "context.compact.before",
+                        },
+                      },
+                    },
+                  },
+                },
+                then: {
+                  properties: {
+                    state: {
+                      $ref: "#/$defs/TextState",
+                    },
+                  },
+                },
+              },
+              {
+                if: {
+                  required: ["event"],
+                  properties: {
+                    event: {
+                      required: ["type"],
+                      properties: {
+                        type: {
+                          const: "user.elicitation.request",
+                        },
+                      },
+                    },
+                  },
+                },
+                then: {
+                  properties: {
+                    state: {
+                      $ref: "#/$defs/ElicitResultState",
+                    },
+                  },
+                },
+              },
+              {
+                if: {
+                  required: ["event"],
+                  properties: {
+                    event: {
+                      required: ["type"],
+                      properties: {
+                        type: {
+                          const: "tool.before",
+                        },
+                      },
+                    },
+                  },
+                },
+                then: {
+                  properties: {
+                    state: {
+                      $ref: "#/$defs/ToolState",
+                    },
+                  },
+                },
+              },
             ],
           },
         },
         required: ["method", "params"],
       },
     ],
+    $defs: {
+      MessagesCandidate: {
+        type: "object",
+        required: ["value"],
+        properties: {
+          value: {
+            $ref: "content-item.schema.json#/$defs/messages",
+          },
+          provenance: {
+            type: "object",
+            properties: {},
+            description:
+              "Optional provenance metadata; subscription identity remains harness-local and is not an authorization claim.",
+          },
+        },
+      },
+      TextCandidate: {
+        type: "object",
+        required: ["value"],
+        properties: {
+          value: {
+            $ref: "content-item.schema.json#/$defs/textParts",
+          },
+          provenance: {
+            type: "object",
+            properties: {},
+            description:
+              "Optional provenance metadata; subscription identity remains harness-local and is not an authorization claim.",
+          },
+        },
+      },
+      ElicitResultCandidate: {
+        type: "object",
+        required: ["value"],
+        properties: {
+          value: {
+            $ref: "mcp-elicitation.schema.json#/$defs/ElicitResult",
+          },
+          provenance: {
+            type: "object",
+            properties: {},
+            description:
+              "Optional provenance metadata; subscription identity remains harness-local and is not an authorization claim.",
+          },
+        },
+      },
+      ToolCandidate: {
+        type: "object",
+        required: ["value"],
+        properties: {
+          value: true,
+          provenance: {
+            type: "object",
+            properties: {},
+            description:
+              "Optional provenance metadata; subscription identity remains harness-local and is not an authorization claim.",
+          },
+        },
+      },
+      MessagesState: {
+        type: "object",
+        required: ["permission", "candidate"],
+        properties: {
+          permission: {
+            enum: ["none", "allow", "ask", "deny"],
+          },
+          candidate: {
+            anyOf: [
+              {
+                type: "null",
+              },
+              {
+                $ref: "#/$defs/MessagesCandidate",
+              },
+            ],
+          },
+          flow: {
+            enum: ["none", "stop", "continue"],
+          },
+          instructions: {
+            type: "array",
+            items: {
+              type: "string",
+              minLength: 1,
+            },
+          },
+          injections: {
+            type: "array",
+            items: {
+              $ref: "effect.schema.json#/$defs/InjectEffect",
+            },
+          },
+        },
+      },
+      TextState: {
+        type: "object",
+        required: ["permission", "candidate"],
+        properties: {
+          permission: {
+            enum: ["none", "allow", "ask", "deny"],
+          },
+          candidate: {
+            anyOf: [
+              {
+                type: "null",
+              },
+              {
+                $ref: "#/$defs/TextCandidate",
+              },
+            ],
+          },
+          flow: {
+            enum: ["none", "stop", "continue"],
+          },
+          instructions: {
+            type: "array",
+            items: {
+              type: "string",
+              minLength: 1,
+            },
+          },
+          injections: {
+            type: "array",
+            items: {
+              $ref: "effect.schema.json#/$defs/InjectEffect",
+            },
+          },
+        },
+      },
+      ElicitResultState: {
+        type: "object",
+        required: ["permission", "candidate"],
+        properties: {
+          permission: {
+            enum: ["none", "allow", "ask", "deny"],
+          },
+          candidate: {
+            anyOf: [
+              {
+                type: "null",
+              },
+              {
+                $ref: "#/$defs/ElicitResultCandidate",
+              },
+            ],
+          },
+          flow: {
+            enum: ["none", "stop", "continue"],
+          },
+          instructions: {
+            type: "array",
+            items: {
+              type: "string",
+              minLength: 1,
+            },
+          },
+          injections: {
+            type: "array",
+            items: {
+              $ref: "effect.schema.json#/$defs/InjectEffect",
+            },
+          },
+        },
+      },
+      ToolState: {
+        type: "object",
+        required: ["permission", "candidate"],
+        properties: {
+          permission: {
+            enum: ["none", "allow", "ask", "deny"],
+          },
+          candidate: {
+            anyOf: [
+              {
+                type: "null",
+              },
+              {
+                $ref: "#/$defs/ToolCandidate",
+              },
+            ],
+          },
+          flow: {
+            enum: ["none", "stop", "continue"],
+          },
+          instructions: {
+            type: "array",
+            items: {
+              type: "string",
+              minLength: 1,
+            },
+          },
+          injections: {
+            type: "array",
+            items: {
+              $ref: "effect.schema.json#/$defs/InjectEffect",
+            },
+          },
+        },
+      },
+    },
   },
   {
     $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -7332,7 +7802,7 @@ export const schemas = [
         properties: {
           result: {
             type: "object",
-            required: ["protocolVersion", "effects"],
+            required: ["protocolVersion"],
             properties: {
               protocolVersion: {
                 $ref: "common.schema.json#/$defs/protocolVersion",
@@ -7355,6 +7825,1460 @@ export const schemas = [
         required: ["result"],
       },
     ],
+    $defs: {
+      SessionStartEffect: {
+        oneOf: [
+          {
+            $ref: "effect.schema.json#/$defs/InjectEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      SessionStartInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/SessionStartEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      ConfigChangeBeforeEffect: {
+        oneOf: [
+          {
+            $ref: "deny-effect.schema.json",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      ConfigChangeBeforeInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/ConfigChangeBeforeEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      TurnStartModifyEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            const: "prompt",
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            $ref: "content-item.schema.json#/$defs/messages",
+          },
+        },
+        additionalProperties: false,
+      },
+      TurnStartEffect: {
+        oneOf: [
+          {
+            $ref: "deny-effect.schema.json",
+          },
+          {
+            $ref: "#/$defs/TurnStartModifyEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/InjectEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/StopFlowEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      TurnStartInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/TurnStartEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      TurnFinishBeforeModifyEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            const: "response",
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            $ref: "content-item.schema.json#/$defs/messages",
+          },
+        },
+        additionalProperties: false,
+      },
+      TurnFinishBeforeEffect: {
+        oneOf: [
+          {
+            $ref: "#/$defs/TurnFinishBeforeModifyEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/StopFlowEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/ContinueFlowEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      TurnFinishBeforeInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/TurnFinishBeforeEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      ModelRequestBeforeModifyEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            const: "request",
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            $ref: "content-item.schema.json#/$defs/messages",
+          },
+        },
+        additionalProperties: false,
+      },
+      ModelRequestBeforeEffect: {
+        oneOf: [
+          {
+            $ref: "deny-effect.schema.json",
+          },
+          {
+            $ref: "#/$defs/ModelRequestBeforeModifyEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/InjectEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/ReturnMessagesEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/StopFlowEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      ModelRequestBeforeInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/ModelRequestBeforeEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      ModelResponseAfterModifyEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            const: "response",
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            $ref: "content-item.schema.json#/$defs/messages",
+          },
+        },
+        additionalProperties: false,
+      },
+      ModelResponseAfterEffect: {
+        oneOf: [
+          {
+            $ref: "#/$defs/ModelResponseAfterModifyEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/StopFlowEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      ModelResponseAfterInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/ModelResponseAfterEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      ModelSwitchBeforeEffect: {
+        oneOf: [
+          {
+            $ref: "deny-effect.schema.json",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/StopFlowEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      ModelSwitchBeforeInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/ModelSwitchBeforeEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      ToolBeforeModifyEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            const: "input",
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            type: "object",
+            description:
+              "Tool-owned input contract; validate using the declared caller codec.",
+          },
+        },
+        additionalProperties: false,
+      },
+      ToolBeforeEffect: {
+        oneOf: [
+          {
+            $ref: "deny-effect.schema.json",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/AllowEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/AskEffect",
+          },
+          {
+            $ref: "#/$defs/ToolBeforeModifyEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/InjectEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/StopFlowEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/ReturnToolEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      ToolBeforeInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/ToolBeforeEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      ToolAfterModifyEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            const: "output",
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            $ref: "content-item.schema.json#/$defs/messages",
+          },
+        },
+        additionalProperties: false,
+      },
+      ToolAfterEffect: {
+        oneOf: [
+          {
+            $ref: "#/$defs/ToolAfterModifyEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/InjectEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/StopFlowEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/ContinueFlowEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      ToolAfterInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/ToolAfterEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      ToolPermissionRequestModifyEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            const: "input",
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            type: "object",
+            description:
+              "Tool-owned input contract; validate using the declared caller codec.",
+          },
+        },
+        additionalProperties: false,
+      },
+      ToolPermissionRequestEffect: {
+        oneOf: [
+          {
+            $ref: "effect.schema.json#/$defs/AllowEffect",
+          },
+          {
+            $ref: "deny-effect.schema.json",
+          },
+          {
+            $ref: "#/$defs/ToolPermissionRequestModifyEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/StopFlowEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      ToolPermissionRequestInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/ToolPermissionRequestEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      ToolBatchAfterEffect: {
+        oneOf: [
+          {
+            $ref: "effect.schema.json#/$defs/StopFlowEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/InjectEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      ToolBatchAfterInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/ToolBatchAfterEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      ContextCompactBeforeModifyEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            const: "instructions",
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            $ref: "content-item.schema.json#/$defs/textParts",
+          },
+        },
+        additionalProperties: false,
+      },
+      ContextCompactBeforeEffect: {
+        oneOf: [
+          {
+            $ref: "deny-effect.schema.json",
+          },
+          {
+            $ref: "#/$defs/ContextCompactBeforeModifyEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/ReturnTextEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/InjectEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      ContextCompactBeforeInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/ContextCompactBeforeEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      ContextCompactAfterModifyEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            const: "summary",
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            $ref: "content-item.schema.json#/$defs/textParts",
+          },
+        },
+        additionalProperties: false,
+      },
+      ContextCompactAfterEffect: {
+        oneOf: [
+          {
+            $ref: "effect.schema.json#/$defs/InjectEffect",
+          },
+          {
+            $ref: "#/$defs/ContextCompactAfterModifyEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      ContextCompactAfterInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/ContextCompactAfterEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      TaskChangeBeforeEffect: {
+        oneOf: [
+          {
+            $ref: "deny-effect.schema.json",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      TaskChangeBeforeInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/TaskChangeBeforeEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      UserElicitationRequestEffect: {
+        oneOf: [
+          {
+            $ref: "deny-effect.schema.json",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/ReturnElicitResultEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      UserElicitationRequestInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/UserElicitationRequestEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      UserElicitationResultModifyEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            const: "content",
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            $ref: "mcp-elicitation.schema.json#/$defs/FormAnswers",
+          },
+        },
+        additionalProperties: false,
+      },
+      UserElicitationResultEffect: {
+        oneOf: [
+          {
+            $ref: "#/$defs/UserElicitationResultModifyEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      UserElicitationResultInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/UserElicitationResultEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      UserMessageInboundModifyEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            const: "prompt",
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            $ref: "content-item.schema.json#/$defs/messages",
+          },
+        },
+        additionalProperties: false,
+      },
+      UserMessageInboundEffect: {
+        oneOf: [
+          {
+            $ref: "deny-effect.schema.json",
+          },
+          {
+            $ref: "#/$defs/UserMessageInboundModifyEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      UserMessageInboundInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/UserMessageInboundEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      UserMessageOutboundModifyEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            const: "content",
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            $ref: "content-item.schema.json#/$defs/messages",
+          },
+        },
+        additionalProperties: false,
+      },
+      UserMessageOutboundEffect: {
+        oneOf: [
+          {
+            $ref: "deny-effect.schema.json",
+          },
+          {
+            $ref: "#/$defs/UserMessageOutboundModifyEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      UserMessageOutboundInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/UserMessageOutboundEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+      WorkspaceChangeBeforeModifyEffect: {
+        type: "object",
+        required: ["type", "target", "operation", "value"],
+        properties: {
+          type: {
+            const: "modify",
+          },
+          target: {
+            const: "workspace",
+          },
+          operation: {
+            description:
+              "replace substitutes the target value. merge appends canonical message/text-part lists in order, preserving duplicates; actual objects merge shallowly with literal null and whole nested values.",
+            oneOf: [
+              {
+                const: "replace",
+              },
+              {
+                const: "merge",
+              },
+            ],
+          },
+          value: {
+            $ref: "task-workspace-event.schema.json#/$defs/WorkspaceChange",
+          },
+        },
+        additionalProperties: false,
+      },
+      WorkspaceChangeBeforeEffect: {
+        oneOf: [
+          {
+            $ref: "deny-effect.schema.json",
+          },
+          {
+            $ref: "#/$defs/WorkspaceChangeBeforeModifyEffect",
+          },
+          {
+            $ref: "effect.schema.json#/$defs/MessageEffect",
+          },
+        ],
+      },
+      WorkspaceChangeBeforeInterceptResponse: {
+        $comment:
+          "Mutable AHP draft. Draft ordered tool.before effects; atomicity, capability gating and response correlation require runtime validation.",
+        "x-requirements": [
+          "AHP-RPC-001",
+          "AHP-VER-001",
+          "AHP-DEC-001",
+          "AHP-DEC-003",
+          "AHP-SEC-001",
+        ],
+        allOf: [
+          {
+            $ref: "common.schema.json#/$defs/successResponse",
+          },
+          {
+            properties: {
+              result: {
+                type: "object",
+                required: ["protocolVersion"],
+                properties: {
+                  protocolVersion: {
+                    $ref: "common.schema.json#/$defs/protocolVersion",
+                  },
+                  effects: {
+                    type: "array",
+                    items: {
+                      $ref: "#/$defs/WorkspaceChangeBeforeEffect",
+                    },
+                  },
+                  extensions: {
+                    $ref: "extensions.schema.json",
+                  },
+                },
+                not: {
+                  required: ["manifest"],
+                },
+              },
+            },
+            required: ["result"],
+          },
+        ],
+      },
+    },
   },
   {
     $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -7543,25 +9467,37 @@ export const schemas = [
             type: "string",
           },
           content: {
-            additionalProperties: {
-              anyOf: [
-                {
-                  items: {
-                    type: "string",
-                  },
-                  type: "array",
-                },
-                {
-                  type: ["string", "number", "boolean"],
-                },
-              ],
-            },
-            description:
-              'The submitted form data, only present when action is "accept" and mode was "form".\nContains values matching the requested schema.\nOmitted for out-of-band mode responses.',
-            type: "object",
+            $ref: "#/$defs/FormAnswers",
           },
         },
         required: ["action"],
+        type: "object",
+      },
+      FormAnswerValue: {
+        anyOf: [
+          {
+            type: "string",
+          },
+          {
+            type: "number",
+          },
+          {
+            type: "boolean",
+          },
+          {
+            type: "array",
+            items: {
+              type: "string",
+            },
+          },
+        ],
+      },
+      FormAnswers: {
+        additionalProperties: {
+          $ref: "#/$defs/FormAnswerValue",
+        },
+        description:
+          'The submitted form data, only present when action is "accept" and mode was "form".\nContains values matching the requested schema.\nOmitted for out-of-band mode responses.',
         type: "object",
       },
       LegacyTitledEnumSchema: {
@@ -9035,42 +10971,10 @@ export const schemas = [
                 enum: ["cwd", "roots", "switch"],
               },
               change: {
-                type: "object",
-                minProperties: 1,
-                properties: {
-                  cwd: {
-                    type: "string",
-                    minLength: 1,
-                  },
-                  workspaceRoots: {
-                    type: "array",
-                    uniqueItems: true,
-                    items: {
-                      type: "string",
-                      minLength: 1,
-                    },
-                  },
-                },
-                additionalProperties: false,
+                $ref: "#/$defs/WorkspaceChange",
               },
               prior: {
-                type: "object",
-                minProperties: 1,
-                properties: {
-                  cwd: {
-                    type: "string",
-                    minLength: 1,
-                  },
-                  workspaceRoots: {
-                    type: "array",
-                    uniqueItems: true,
-                    items: {
-                      type: "string",
-                      minLength: 1,
-                    },
-                  },
-                },
-                additionalProperties: false,
+                $ref: "#/$defs/WorkspaceChange",
               },
               reason: {
                 type: "string",
@@ -9167,42 +11071,10 @@ export const schemas = [
                 enum: ["cwd", "roots", "switch"],
               },
               change: {
-                type: "object",
-                minProperties: 1,
-                properties: {
-                  cwd: {
-                    type: "string",
-                    minLength: 1,
-                  },
-                  workspaceRoots: {
-                    type: "array",
-                    uniqueItems: true,
-                    items: {
-                      type: "string",
-                      minLength: 1,
-                    },
-                  },
-                },
-                additionalProperties: false,
+                $ref: "#/$defs/WorkspaceChange",
               },
               prior: {
-                type: "object",
-                minProperties: 1,
-                properties: {
-                  cwd: {
-                    type: "string",
-                    minLength: 1,
-                  },
-                  workspaceRoots: {
-                    type: "array",
-                    uniqueItems: true,
-                    items: {
-                      type: "string",
-                      minLength: 1,
-                    },
-                  },
-                },
-                additionalProperties: false,
+                $ref: "#/$defs/WorkspaceChange",
               },
               reason: {
                 type: "string",
@@ -9330,6 +11202,25 @@ export const schemas = [
         },
         description:
           "Open event envelope for extension metadata; nested protocol payload keys are closed, task state keys remain harness-defined.",
+      },
+      WorkspaceChange: {
+        type: "object",
+        minProperties: 1,
+        properties: {
+          cwd: {
+            type: "string",
+            minLength: 1,
+          },
+          workspaceRoots: {
+            type: "array",
+            uniqueItems: true,
+            items: {
+              type: "string",
+              minLength: 1,
+            },
+          },
+        },
+        additionalProperties: false,
       },
     },
   },

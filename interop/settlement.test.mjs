@@ -1,3 +1,4 @@
+import { composeResponse } from "../packages/sdk/dist/src/client/composition.js";
 // @ts-check
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -10,7 +11,7 @@ const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
 /** @type {typeof import("agenthooksprotocol/client")} */
-const { Hooks, auth, composeResponse } = await import(
+const { Hooks, auth } = await import(
   require.resolve("agenthooksprotocol/client")
 );
 /** @type {typeof import("agenthooksprotocol/server")} */

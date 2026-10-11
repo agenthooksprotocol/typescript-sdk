@@ -3,7 +3,8 @@ import {
   ownedAttachment,
   CapabilityBuilder,
   Permission,
-} from "../draft/generated.js";
+  responseForRequest,
+} from "../draft/raw.js";
 import { HookOperationalError } from "../errors.js";
 import { randomUUID } from "node:crypto";
 import type {
@@ -16,7 +17,7 @@ import type {
   ObserveSubscription,
   Registration,
   StaticCapabilityManifest,
-} from "../draft/generated.js";
+} from "../draft/raw.js";
 import {
   validateCapabilities,
   validateInterceptRequest,
@@ -24,8 +25,10 @@ import {
 } from "../draft/index.js";
 import { isPartPath, localParts, mapParts } from "./content-paths.js";
 import { BackendTransport } from "./transport.js";
-import { Attachment, ContentManager, ContentSource, UploadLimiter } from "./content.js";
-import { composeResponseAsync, normalizeEffects } from "./composition.js";
+import { Attachment, ContentManager, ContentSource, UploadLimiter, createSharedContentManager } from "./content.js";
+import { composeResponseAsync, normalizeEffects, type ComposedEffect } from "./composition.js";
+import { runtimeInteger } from "../runtime-integer.js";
+import { admitContracts, decodeContract, encodeContract, freezeContractValue, type ToolBeforeInput, type ToolBeforeResult } from "./contracts.js";
 import { auth } from "./auth.js";
 import { validateWire } from "./validation.js";
 import {
@@ -448,7 +451,7 @@ export class Hooks {
     input: BoundaryInput<K>,
     options: BoundaryOptions = {},
   ): Promise<BoundaryResult<K>> {
-    const manager = new ContentManager({
+    const manager = createSharedContentManager({
       // Invalid configuration still transfers unused-source cleanup ownership;
       // initialize rejects it before any preparation can use this fallback.
       maxSnapshotBytes:
@@ -457,8 +460,7 @@ export class Hooks {
           ? this.options.maxContentBytes!
           : 64 * 1024 * 1024,
       allowLoopback: true,
-      uploadLimiter: this.uploadLimiter,
-    });
+    }, this.uploadLimiter);
     try {
       manager.own([localParts({ ...input, type }).map(({ part }) => part?.body), options.contentSources?.map(binding => binding.source)]);
     } catch (error) {
@@ -569,7 +571,8 @@ export class Hooks {
           jsonrpc: "2.0",
           id: requestId,
           result: { protocolVersion: "draft", effects: [] },
-        },
+        // An empty effective list is valid for every boundary, including observe-only events.
+        } as unknown as BoundaryResult<K>["response"],
         state: snapshotState(options.initialState),
         get permission() {
           return this.state.permission as `${Permission}`;
@@ -586,7 +589,7 @@ export class Hooks {
     let correlation: { event: Event; release: () => Promise<void> } | undefined;
     let originalRequest: Event | undefined;
 
-    let effects: Effect[] = [];
+    let effects: ComposedEffect[] = [];
     let state = structuredClone(options.initialState);
     // A supplied snapshot is input to the first receiver, not a newly accepted
     // result in this chain. Composition settles terminal state after acceptance.
@@ -610,12 +613,10 @@ export class Hooks {
     if (type === "turn.finish.before" && caps.flow) {
       caps.flow.continuationCount = event.continuationCount;
       if (caps.flow.maxContinuations !== undefined)
-        caps.flow.remainingContinuations = Math.max(
-          0,
-          Math.min(
-            caps.flow.remainingContinuations ?? 0,
-            caps.flow.maxContinuations - event.continuationCount,
-          ),
+        caps.flow.remainingContinuations = clampContinuations(
+          caps.flow.remainingContinuations ?? 0,
+          caps.flow.maxContinuations,
+          event.continuationCount,
         );
     }
     if (
@@ -633,6 +634,7 @@ export class Hooks {
         matchesFilters(r.subscription, event),
     );
     try {
+      admitContracts(options.contracts, event, state);
       correlation = this.elicitationFor(event);
       originalRequest = correlation?.event;
       // Validate a metadata-only view before any delivery (this does not consume bytes).
@@ -745,9 +747,9 @@ export class Hooks {
           const valid = validateInterceptRequest(request);
           if (!valid.ok) throw new Error("Invalid interception request");
           phase = "interception";
-          budget = deadlineAfter(s.timeoutMs, signal);
+          budget = deadlineAfter(runtimeInteger(s.timeoutMs, 1), signal);
           deadline = budget.signal;
-          const reply = await route.transport.request(request, deadline);
+          const reply = await route.transport.request(valid.value, deadline);
           received = true;
           budget.check();
           if (reply && typeof reply === "object" && "error" in reply)
@@ -755,24 +757,25 @@ export class Hooks {
               "JSON_RPC_ERROR",
               "Backend returned a JSON-RPC error",
             );
-          const decoded = validateInterceptResponse(reply);
-          if (!decoded.ok || decoded.value.id !== requestId)
+          const canonicalResponse = validateInterceptResponse(reply);
+          const decoded = responseForRequest(type, reply);
+          if (!canonicalResponse.ok || !decoded.ok || decoded.value.id !== requestId)
             throw new Error("Invalid interception response");
           // Elicitation terminals are mutually exclusive. Check the raw reply
           // before generic composition normalizes return + deny to denial.
           if (
             type === "user.elicitation.request" &&
-            decoded.value.result.effects.some(
+            (decoded.value.result.effects ?? []).some(
               (effect) => effect.type === "return",
             ) &&
-            decoded.value.result.effects.some(
+            (decoded.value.result.effects ?? []).some(
               (effect) => effect.type === "deny",
             )
           )
             throw new Error("Conflicting elicitation terminal effects");
           if (
             type === "user.elicitation.request" &&
-            decoded.value.result.effects.some(
+            (decoded.value.result.effects ?? []).some(
               (effect) => effect.type === "return" || effect.type === "deny",
             ) &&
             (projected.elicitation?.request?.selection !== "body" ||
@@ -790,6 +793,10 @@ export class Hooks {
                 localSources.add(body);
               },
               selectedEvent: projected,
+              admitStagedEvent: (temporary) => {
+                admitContracts(options.contracts, temporary, state);
+                budget!.check();
+              },
               resolveAttachment: (part) => manager.restoreAttachment(part, event, projected),
               state,
               ...(originalRequest
@@ -798,6 +805,8 @@ export class Hooks {
             }),
             deadline,
           );
+          budget.check();
+          admitContracts(options.contracts, staged.event, staged.state, decoded.value.result.effects ?? []);
           budget.check();
           event = staged.event;
           effects = staged.effects;
@@ -833,7 +842,7 @@ export class Hooks {
           errors.push(error);
           if (interrupted) break;
           if (syntheticDenial) {
-            const denial: Effect = {
+            const denial: ComposedEffect = {
               type: "deny",
               reason: "Required policy backend unavailable.",
             };
@@ -893,7 +902,7 @@ export class Hooks {
         jsonrpc: "2.0",
         id: requestId,
         result: { protocolVersion: "draft", effects },
-      } as InterceptResponse;
+      } as BoundaryResult<K>["response"];
       return {
         event: await resultEvent(event, manager, localSources),
         content: manager.resultContent(event),
@@ -1083,6 +1092,11 @@ export class Hooks {
         part?.kind === "attachment" && part.body instanceof Attachment
           ? { ...part, body: ownedAttachment(part.body) } : part);
       const projection = _projectHostInput(type, host as any);
+      if (type === "tool.before" && options?.contracts?.arguments) {
+        // Projection owns this container; encode caller-defined values before JSON delivery.
+        const projected = projection.event as any;
+        projected.tool = { ...projected.tool, input: encodeContract(options.contracts.arguments, (input as any).input) };
+      }
       bindContentSources(type, projection.event, projection.bindings as any);
       return this.dispatch(type, projection.event as unknown as BoundaryInput<K>, options);
     } catch (error) {
@@ -1096,11 +1110,26 @@ export class Hooks {
     }
   }
 
-  toolBefore(
-    input: EventInput<"tool.before">,
-    options?: BoundaryOptions,
-  ): Promise<BoundaryResult<"tool.before">> {
-    return this.boundary("tool.before", input, options);
+  toolBefore<Arguments = unknown, Result = unknown, P = unknown>(
+    input: ToolBeforeInput<Arguments>,
+    options?: BoundaryOptions<Arguments, Result, P>,
+  ): Promise<ToolBeforeResult<Arguments, Result, P>> {
+    return this.boundary("tool.before", input, options).then(settled => {
+      const contracts = options?.contracts;
+      const accepted = contracts?.arguments
+        ? decodeContract(contracts.arguments, settled.input) : settled.input as Arguments;
+      const candidate = settled.state.candidate;
+      const typedCandidate = candidate === null ? null : freezeContractValue({
+        ...candidate,
+        value: contracts?.result ? decodeContract(contracts.result, candidate.value) : candidate.value as Result,
+        ...(candidate.provenance !== undefined ? { provenance: contracts?.provenance
+          ? decodeContract(contracts.provenance, candidate.provenance) : candidate.provenance as P } : {}),
+      });
+      return { ...settled, input: accepted,
+        event: { ...settled.event, tool: { ...settled.event.tool, input: accepted } },
+        state: Object.freeze({ ...settled.state, candidate: typedCandidate }),
+      } as ToolBeforeResult<Arguments, Result, P>;
+    });
   }
   toolAfter(
     input: EventInput<"tool.after">,
@@ -1508,4 +1537,13 @@ function bindContentSources(
     descriptor.body = source;
     descriptor.selection = "body";
   }
+}
+
+function clampContinuations(remaining: number | bigint, maximum: number | bigint, count: number | bigint): number | bigint {
+  if (typeof remaining === "bigint" || typeof maximum === "bigint" || typeof count === "bigint") {
+    const budget = BigInt(maximum) - BigInt(count);
+    const available = BigInt(remaining);
+    return budget <= 0n ? 0n : available < budget ? available : budget;
+  }
+  return Math.max(0, Math.min(remaining, maximum - count));
 }

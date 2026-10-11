@@ -13,7 +13,7 @@ export interface PendingState {
   denied: boolean;
   messages: string[];
 }
-const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+const clone = <T>(value: T): T => structuredClone(value);
 function equal(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (

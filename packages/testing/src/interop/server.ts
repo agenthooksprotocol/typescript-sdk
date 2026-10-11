@@ -4,7 +4,7 @@ import { createServer as createTlsServer } from "node:https";
 import { readFileSync } from "node:fs";
 import process from "node:process";
 import { NdjsonDecoder } from "agenthooksprotocol";
-import { parseInterceptRequest as parseDraftRequest } from "agenthooksprotocol/draft";
+import { parseInterceptRequest as parseDraftRequest, type CanonicalMessage, type UserMessageInboundEvent } from "agenthooksprotocol/draft";
 import { hooks, attachments } from "agenthooksprotocol/server";
 import { createAuth } from "./auth.js";
 
@@ -29,10 +29,10 @@ async function intercept(body: string): Promise<string> {
     const decoded = parseDraftRequest(body);
     if (!decoded.ok) throw new Error("Invalid draft request");
     const envelope = decoded.value;
-    if (Object.hasOwn(scriptedReplies, envelope.id)) {
+    if (Object.hasOwn(scriptedReplies, String(envelope.id))) {
       process.send({ type: "atomic-request", request: envelope });
-      const reply = scriptedReplies[envelope.id]!;
-      delete scriptedReplies[envelope.id];
+      const reply = scriptedReplies[String(envelope.id)]!;
+      delete scriptedReplies[String(envelope.id)];
       return reply;
     }
     const response = await hooks.handle(
@@ -46,7 +46,8 @@ async function intercept(body: string): Promise<string> {
           message.method === "hooks/intercept" &&
           message.params.event.type === "user.message.inbound"
         ) {
-          for (const item of (message.params.event as import("agenthooksprotocol/client").UserMessageInboundEvent).message.messages.flatMap((message) => message.parts)) {
+          const event = message.params.event as UserMessageInboundEvent;
+          for (const item of event.message.messages.flatMap((message: CanonicalMessage) => message.parts)) {
             if (item.kind !== "attachment") continue;
             if (
               !("body" in item) ||

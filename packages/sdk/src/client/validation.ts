@@ -1,6 +1,6 @@
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullFormats } from "ajv-formats/dist/formats.js";
-import { schemas } from "../draft/schemas.js";
+import { addCanonicalSchemas } from "../json.js";
 
 let registry: Ajv2020 | undefined;
 /** Validate against the checked-in canonical schema without coercion. */
@@ -13,7 +13,7 @@ export function validateWire(name: string, value: unknown): string[] {
     });
     registry.addFormat("uri", fullFormats.uri);
     registry.addFormat("date-time", fullFormats["date-time"]);
-    for (const schema of schemas) registry.addSchema(schema);
+    addCanonicalSchemas(registry);
   }
   const validate = registry.getSchema(
     `https://agenthooksprotocol.org/schemas/draft/${name}.schema.json`,

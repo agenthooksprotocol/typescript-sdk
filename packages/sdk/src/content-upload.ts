@@ -1,5 +1,5 @@
-import type { ContentReference, ContentUploadReceipt } from "./draft/generated.js";
-export type { ContentReference, ContentUploadReceipt } from "./draft/generated.js";
+import type { ContentReference, ContentUploadReceipt } from "./draft/raw.js";
+export type { ContentReference, ContentUploadReceipt } from "./draft/types.js";
 /** Normative HTTP content upload. Event authentication is deliberately not an input. */
 export interface UploadConfiguration {
   endpoint: string;

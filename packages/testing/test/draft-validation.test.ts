@@ -8,8 +8,10 @@ import {
   validateInterceptResponse,
   validateInterceptRequest,
   draftCodecs,
-  stageResponse,
+  reference,
 } from "agenthooksprotocol/draft";
+const { stageResponse } = reference;
+
 import {
   parseInterceptResponse as parseRootResponse,
   validateElicitationMode,
@@ -148,7 +150,7 @@ test("failed atomic staging never mutates the caller-owned pending state", () =>
     try {
       stageResponse(
         scenario.initial,
-        decoded.value.result.effects,
+        decoded.value.result.effects ?? [],
         scenario.subscribers[0]!.capabilities,
         "first",
       );
@@ -310,7 +312,8 @@ test("root response parser accepts envelope and extension data but rejects unkno
     futureEnvelope: true,
     result: { ...response([deny]).result, futureResult: { enabled: true } },
   };
-  assert.deepEqual(parseRootResponse(JSON.stringify(wire), "first"), {
+  // Wire JSON equality does not depend on decoder object prototypes.
+  assert.deepEqual(structuredClone(parseRootResponse(JSON.stringify(wire), "first")), {
     protocolVersion: "draft",
     effects: [deny],
   });

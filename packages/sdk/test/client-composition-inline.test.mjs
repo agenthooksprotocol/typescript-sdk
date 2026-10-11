@@ -82,7 +82,7 @@ test('elicitation answer content requires an object, not an ordinary message lis
   };
   await assert.rejects(composeResponseAsync(event, [], response(edit('content', 'replace', [message('not-an-answer')])), {
     ...capabilities('content'), elicitation: { form: {} },
-  }, options), /Modification requires an object/);
+  }, options), /Invalid intercept response/);
 });
 
 test('ordinary model request targets reject objects even when specialized schemas permit them', () => {
