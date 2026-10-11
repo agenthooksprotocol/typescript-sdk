@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.3.0...agenthooksprotocol-v0.4.0) (2026-10-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* Consumer input and result APIs use domain names, and internal SDK assembly helpers are no longer exported.
+
+### Features
+
+* enforce typed operation contracts and clean public APIs ([10275c0](https://github.com/agenthooksprotocol/typescript-sdk/commit/10275c0e8ae0707366ebec3ec7ec123906ccaf08))
+
 ## [0.3.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.2.0...agenthooksprotocol-v0.3.0) (2026-10-10)
 
 
