@@ -5,6 +5,7 @@ import {
   Permission,
   responseForRequest,
 } from "../draft/raw.js";
+import { decodeSettledEvent, decodeSettledState, SettlementDecodeError } from "./settlement.js";
 import { HookOperationalError } from "../errors.js";
 import { randomUUID } from "node:crypto";
 import type {
@@ -545,10 +546,11 @@ export class Hooks {
     // duplicate injections/instructions and lose candidate invalidation.
     const snapshotState = (
       value: BoundaryOptions["initialState"],
+      decode = true,
     ): BoundaryResult<K>["state"] => {
-      const snapshot = structuredClone(
-        value ?? { candidate: null, permission: "none" },
-      );
+      const snapshot = structuredClone(decode
+        ? decodeSettledState(decodeSettledEvent(event), value)
+        : value ?? { candidate: null, permission: "none" });
       if (
         !Object.values(Permission).includes(snapshot.permission as Permission)
       )
@@ -562,18 +564,22 @@ export class Hooks {
         }
       };
       freeze(snapshot);
-      return snapshot;
+      return snapshot as BoundaryResult<K>["state"];
     };
     if (signal.aborted)
       return {
         event: await resultEvent(event, manager),
+        // Raw dispatch preserves pre-cancelled retirement calls. A typed consumer
+        // accessor (and every named boundary) must still decode or throw.
+        get settledEvent() { return decodeSettledEvent<K>(event); },
         response: {
           jsonrpc: "2.0",
           id: requestId,
           result: { protocolVersion: "draft", effects: [] },
         // An empty effective list is valid for every boundary, including observe-only events.
         } as unknown as BoundaryResult<K>["response"],
-        state: snapshotState(options.initialState),
+        acceptedResponses: [],
+        state: snapshotState(options.initialState, false),
         get permission() {
           return this.state.permission as `${Permission}`;
         },
@@ -589,6 +595,7 @@ export class Hooks {
     let correlation: { event: Event; release: () => Promise<void> } | undefined;
     let originalRequest: Event | undefined;
 
+    const acceptedResponses: BoundaryResult<K>["acceptedResponses"][number][] = [];
     let effects: ComposedEffect[] = [];
     let state = structuredClone(options.initialState);
     // A supplied snapshot is input to the first receiver, not a newly accepted
@@ -808,9 +815,11 @@ export class Hooks {
           budget.check();
           admitContracts(options.contracts, staged.event, staged.state, decoded.value.result.effects ?? []);
           budget.check();
+          decodeSettledState(decodeSettledEvent(staged.event), staged.state);
           event = staged.event;
           effects = staged.effects;
           state = staged.state;
+          acceptedResponses.push(freezeContractValue(structuredClone(decoded.value)) as BoundaryResult<K>["acceptedResponses"][number]);
           shortCircuit = staged.shortCircuit;
         } catch (cause) {
           interrupted = signal.aborted;
@@ -905,8 +914,10 @@ export class Hooks {
       } as BoundaryResult<K>["response"];
       return {
         event: await resultEvent(event, manager, localSources),
+        settledEvent: decodeSettledEvent<K>(event),
         content: manager.resultContent(event),
         response,
+        acceptedResponses: Object.freeze(acceptedResponses),
         state: snapshotState(state),
         get permission() {
           return this.state.permission as `${Permission}`;
@@ -924,6 +935,9 @@ export class Hooks {
         this.forgetElicitation(requestId);
       await manager.close().catch(() => {});
       this.managers.delete(manager);
+      if (error instanceof SettlementDecodeError)
+        throw new SettlementDecodeError(error.message, Object.freeze([...acceptedResponses]),
+          freezeContractValue(structuredClone(state)), { cause: error });
       throw error;
     } finally {
       await correlation?.release().catch(() => {});
@@ -1098,7 +1112,10 @@ export class Hooks {
         projected.tool = { ...projected.tool, input: encodeContract(options.contracts.arguments, (input as any).input) };
       }
       bindContentSources(type, projection.event, projection.bindings as any);
-      return this.dispatch(type, projection.event as unknown as BoundaryInput<K>, options);
+      return this.dispatch(type, projection.event as unknown as BoundaryInput<K>, options).then(result => {
+        void result.settledEvent;
+        return result;
+      });
     } catch (error) {
       const owners = new Set(localParts({ ...input, type }).map(({ part }) => part?.body).filter(body => body instanceof Attachment));
       // Admit cleanup ownership through the same synchronous nominal claim as
@@ -1115,20 +1132,24 @@ export class Hooks {
     options?: BoundaryOptions<Arguments, Result, P>,
   ): Promise<ToolBeforeResult<Arguments, Result, P>> {
     return this.boundary("tool.before", input, options).then(settled => {
-      const contracts = options?.contracts;
-      const accepted = contracts?.arguments
-        ? decodeContract(contracts.arguments, settled.input) : settled.input as Arguments;
-      const candidate = settled.state.candidate;
-      const typedCandidate = candidate === null ? null : freezeContractValue({
-        ...candidate,
-        value: contracts?.result ? decodeContract(contracts.result, candidate.value) : candidate.value as Result,
-        ...(candidate.provenance !== undefined ? { provenance: contracts?.provenance
-          ? decodeContract(contracts.provenance, candidate.provenance) : candidate.provenance as P } : {}),
-      });
-      return { ...settled, input: accepted,
-        event: { ...settled.event, tool: { ...settled.event.tool, input: accepted } },
-        state: Object.freeze({ ...settled.state, candidate: typedCandidate }),
-      } as ToolBeforeResult<Arguments, Result, P>;
+      try {
+        const contracts = options?.contracts;
+        const accepted = contracts?.arguments
+          ? decodeContract(contracts.arguments, settled.input) : settled.input as Arguments;
+        const candidate = settled.state.candidate;
+        const typedCandidate = candidate === null ? null : freezeContractValue({
+          ...candidate,
+          value: contracts?.result ? decodeContract(contracts.result, candidate.value) : candidate.value as Result,
+          ...(candidate.provenance !== undefined ? { provenance: contracts?.provenance
+            ? decodeContract(contracts.provenance, candidate.provenance) : candidate.provenance as P } : {}),
+        });
+        return { ...settled, input: accepted,
+          event: { ...settled.event, tool: { ...settled.event.tool, input: accepted } },
+          state: Object.freeze({ ...settled.state, candidate: typedCandidate }),
+        } as ToolBeforeResult<Arguments, Result, P>;
+      } catch (cause) {
+        throw new SettlementDecodeError("Caller settlement decoding failed", settled.acceptedResponses, settled.state, { cause });
+      }
     });
   }
   toolAfter(

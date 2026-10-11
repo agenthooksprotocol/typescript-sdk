@@ -1,10 +1,11 @@
 /** Harness-facing, configuration-driven API for the complete canonical draft catalogue. */
 export { Hooks } from "./hooks.js";
+export { SettlementDecodeError } from "./settlement.js";
 export { ConfigurationError } from "./types.js";
 export type {
   Event, EventType, HarnessValue, HarnessEvent, BoundaryInput, EventInput,
   EventGrant, EventCapabilities, HooksOptions, BoundaryOptions, DeliveryDiagnostic,
-  DeliveryError, BoundaryState, BoundaryResult, ConfigurationIssue,
+  DeliveryError, BoundaryState, BoundaryResult, AcceptedResponse, ConfigurationIssue,
 } from "./types.js";
 export { Type } from "@sinclair/typebox";
 export { contract } from "./contracts.js";
