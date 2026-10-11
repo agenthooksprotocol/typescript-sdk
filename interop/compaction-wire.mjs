@@ -196,8 +196,10 @@ async function exchange(plan, sub, name, snapshot) {
       );
     if (!receipt) throw Error("Missing receiver receipt");
     return {
-      effects: result.response.result.effects,
-      failed: result.errors.length > 0,
+      effects: result.effects,
+      event: result.event,
+      acceptedResponses: result.acceptedResponses,
+      failed: result.diagnostics.filter(d => d.phase !== "observation").length > 0,
       wire: {
         subscription: sub,
         request: receipt.request,
@@ -236,7 +238,7 @@ if (mode === "host" || mode === "call") {
             const r = await exchange(plan, h.supplier, row.name, snapshot);
             trace.push(r.wire);
             if (r.failed) throw Error("Rejected compaction response");
-            return r.effects;
+            return r.acceptedResponses.flatMap(reply => reply.result.effects);
           },
         }));
       const result = await runCompaction(

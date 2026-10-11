@@ -120,9 +120,9 @@ test('public Hooks preserves exact session counters and opaque tool integers thr
   try {
     const bigintResult = { decode(value) { assert.equal(typeof value, 'bigint'); return value; }, encode(value) { return value; } };
     const settled = await hooks.toolBefore({ callId: 'call', name: 'read', input: { opaque: -huge }, origin: 'native', path: 'native', session: { id: 'session', counters } }, { contracts: { result: bigintResult } });
-    assert.deepEqual(settled.errors, []);
+    assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
     assert.deepEqual(settled.event.session.counters, counters);
-    assert.equal(settled.input.opaque, -huge);
+    assert.equal(settled.event.tool.input.opaque, -huge);
     assert.equal(settled.state.candidate.value, huge + 4n);
     assert.equal(requestText.includes(`"turns":${huge}`), true);
   } finally { await hooks.close(); }

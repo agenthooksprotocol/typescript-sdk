@@ -94,7 +94,7 @@ const input: ToolBeforeInput<{ count: number }> = {
 declare const hooks: Hooks;
 void hooks.toolBefore(input, { contracts: { arguments: codec, result: resultContract } }).then(result => {
   const typed: ToolBeforeResult<{ count: number }, { answer: string }, unknown> = result;
-  const count: number = typed.input.count;
+  const count: number = typed.event.tool.input.count;
   if (typed.state.candidate !== null) {
     const answer: string = typed.state.candidate.value.answer;
     // @ts-expect-error The result contract does not declare count.
@@ -119,3 +119,45 @@ void Attachment.bytes(new Uint8Array([1]));
 declare const event: ToolBeforeEvent;
 declare const response: InterceptResponse;
 void [event, response];
+
+// @ts-expect-error Attachment is the sole owner; no native-source compatibility adapter.
+import type { ContentSource } from 'agenthooksprotocol/client';
+// @ts-expect-error The credential model has one name.
+import type { AuthCredential } from 'agenthooksprotocol/client';
+// @ts-expect-error AuthOptions is the sole factory configuration type.
+import type { AuthOverrides } from 'agenthooksprotocol/client';
+void hooks.modelRequestBefore({ model: { provider: 'provider', id: 'model' }, attempt: { id: 'attempt', number: 1 }, params: {}, items: [] }).then(result => {
+  const canonicalType: 'model.request.before' = result.event.type;
+  // @ts-expect-error There is one authoritative typed event, not a second settlement view.
+  void result.settledEvent;
+  // @ts-expect-error Observations settle before return and use structured diagnostics.
+  void result.observations;
+  void canonicalType;
+});
+
+// @ts-expect-error Hooks accepts only the canonical delivery provider, not authenticate-only helpers.
+const legacyAuth: import('agenthooksprotocol/client').HooksOptions['auth'] = { authenticate: async () => ({ token: 'secret' }) };
+void legacyAuth;
+
+// @ts-expect-error Generic dispatch requires canonical content selection, not implicit body decoding.
+const missingSelection: import('agenthooksprotocol/client').BoundaryInput<'turn.start'>['items'][number]['parts'][number] = { id: 'text', kind: 'text', mediaType: 'text/plain', text: 'body' };
+void missingSelection;
+
+// @ts-expect-error Canonical AttachmentBodyPart is not duplicated by a stream-item interface.
+import type { StreamContentItem } from 'agenthooksprotocol/client';
+// @ts-expect-error Attachment has one native-source factory, stream.
+Attachment.fromStream(new ReadableStream<Uint8Array>());
+
+// @ts-expect-error Interception diagnostics use the sole public DeliveryDiagnostic model.
+import type { DeliveryError } from 'agenthooksprotocol/client';
+void hooks.toolBefore(input).then(result => {
+  // @ts-expect-error Receiver envelopes belong only to acceptedResponses.
+  void result.response;
+  // @ts-expect-error Structured diagnostics are the sole delivery evidence.
+  void result.errors;
+  // @ts-expect-error Accepted arguments belong to the typed event.
+  void result.input;
+  // @ts-expect-error Canonical permission belongs to state.
+  void result.permission;
+  for (const effect of result.effects) { const family: string = effect.type; void family; }
+});

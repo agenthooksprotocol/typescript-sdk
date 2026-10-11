@@ -9,7 +9,7 @@ const require = createRequire(
 const { hooks, attachments } = await import(
   require.resolve("agenthooksprotocol/server")
 );
-const { Hooks } = await import(
+const { Hooks, Attachment } = await import(
   require.resolve("agenthooksprotocol/client")
 );
 
@@ -143,18 +143,18 @@ test(
         items: [
           {
             id: "item",
-            kind: "attachment",
+            kind: "attachment", selection: "body",
             mediaType: "application/octet-stream",
-            body: new ReadableStream({
+            body: Attachment.stream(new ReadableStream({
               start(controller) {
                 controller.enqueue(bytes);
                 controller.close();
               },
-            }),
+            })),
           },
         ],
       });
-      assert.deepEqual(result.errors, []);
+      assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
       assert.deepEqual(result.event.tool.input, { path: "a", checked: true });
       await observedPromise;
       assert.deepEqual(calls, ["upload", "hooks/intercept", "hooks/observe"]);

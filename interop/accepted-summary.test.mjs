@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { sdkClient, sdkDraft, canonicalFixtureInjections } from "./common.mjs";
+import { sdkClient, sdkDraft } from "./common.mjs";
 import { summarizeAccepted, matches } from "./evaluator.mjs";
 const { Hooks } = sdkClient;
 
@@ -10,7 +10,6 @@ test("canonical summaries distinguish SDK protocol rejection from userland tool-
     await readFile("../agent-hooks-protocol/interop/scenarios.json", "utf8"),
   );
   for (const row of scenarios) {
-    canonicalFixtureInjections(row);
     row.request = sdkDraft.validateInterceptRequest(row.request).value;
     const event = row.request.params.event;
     const client = new Hooks(
@@ -62,9 +61,9 @@ test("canonical summaries distinguish SDK protocol rejection from userland tool-
       if (hostRejected) {
         // task > 0 is a synthetic host rule, not protocol validation.
         assert.equal(row.expectError, true, row.id);
-        assert.deepEqual(result.errors, [], row.id);
+        assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), [], row.id);
         assert.deepEqual(
-          result.response.result.effects,
+          result.acceptedResponses[0].result.effects,
           row.response.result.effects,
           row.id,
         );
@@ -74,11 +73,11 @@ test("canonical summaries distinguish SDK protocol rejection from userland tool-
         assert.equal(executions, 0, row.id);
       } else if (row.expectError) {
         assert.ok(
-          result.errors.some((error) => error.code === "DELIVERY_FAILED"),
+          result.diagnostics.filter(d => d.phase !== "observation").some((error) => error.code === "protocol_rejection"),
           row.id,
         );
       } else {
-        assert.deepEqual(result.errors, [], row.id);
+        assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), [], row.id);
         const actual = summarizeAccepted(row.request, result);
         assert.equal(
           matches(actual, row.expected),
@@ -97,19 +96,16 @@ test("summary does not replay effects or revalidate an accepted SDK response", (
   const request = { params: { event, capabilities: { effects: [] } } };
   const result = {
     event,
-    response: {
-      result: {
-        effects: [
-          {
-            type: "modify",
-            target: "input",
-            operation: "replace",
-            value: { fabricated: true },
-          },
-          { type: "message", text: "accepted" },
-        ],
+    effects: [
+      {
+        type: "modify",
+        target: "input",
+        operation: "replace",
+        value: { fabricated: true },
       },
-    },
+      { type: "message", text: "accepted" },
+    ],
+    state: { permission: "none", candidate: null },
     interrupted: false,
   };
   assert.deepEqual(summarizeAccepted(request, result).input, { actual: true });

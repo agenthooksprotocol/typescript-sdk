@@ -6,11 +6,11 @@ import { Attachment, Hooks } from "agenthooksprotocol/client";
 const requestType = "user.elicitation.request";
 const resultType = "user.elicitation.result";
 const binary = new Uint8Array([255, 0, 1]);
-const body = () => new ReadableStream({
+const body = () => Attachment.stream(new ReadableStream({
   start(c) { c.enqueue(binary.slice()); c.close(); },
-});
+}));
 const item = (value) => ({ id: "request-text", kind: "text", mediaType: "text/plain", selection: "body", text: JSON.stringify(value) });
-const attachment = () => ({ id: "body", kind: "attachment", mediaType: "application/octet-stream", body: body() });
+const attachment = () => ({ id: "body", kind: "attachment", mediaType: "application/octet-stream", selection: "body", body: body() });
 const request = (id, session = "one") => ({
   id, session: { id: session }, items: [attachment()],
   elicitation: { mode: "form", server: "test", request: item({ message: "Answer?", requestedSchema: { type: "object", properties: {} } }) },
@@ -53,16 +53,17 @@ test("4097 terminal invocations release bookkeeping while result views retain ow
   try {
     for (let i = 0; i < 4097; i++) {
       const result = await hooks.dispatch(requestType, request(`request-${i}`));
-      assert.deepEqual(result.errors, []);
+      assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
       results.push(result);
       empty(hooks);
       assert.equal(typeof result.event.elicitation.request.text, "string");
-      assert.ok(result.event.items[0].body instanceof ReadableStream);
+      assert.equal(result.event.items[0].body, undefined);
+      assert.ok(result.content.ids.includes("body"));
     }
-    assert.deepEqual(results[0].response.result.effects, [{ type: "deny", reason: "Policy" }]);
-    assert.deepEqual(new Uint8Array(await new Response(results[0].event.items[0].body).arrayBuffer()), binary);
+    assert.deepEqual(results[0].effects, [{ type: "deny", reason: "Policy" }]);
+    assert.deepEqual(await results[0].content.read("body"), binary);
   } finally {
-    await Promise.all(results.map(result => result.event.items[0].body.cancel().catch(() => {})));
+    await Promise.all(results.map(result => result.content.close().catch(() => {})));
     await hooks.close();
   }
 });
@@ -114,10 +115,10 @@ test("active exchange capacity errors rather than evicting unfinished requests",
   try {
     for (let i = 0; i < 128; i++) {
       const result = await hooks.dispatch(requestType, request(`pending-${i}`));
-      assert.deepEqual(result.errors, []);
+      assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
     }
     const overflow = await hooks.dispatch(requestType, request("overflow"));
-    assert.equal(overflow.errors[0].code, "PREPARATION_FAILED");
+    assert.equal(overflow.diagnostics.filter(d => d.phase !== "observation")[0].code, "preparation");
     assert.equal(hooks.elicitations.size, 128);
     assert.ok(hooks.elicitations.has("pending-0"));
     assert.equal(hooks.elicitations.has("overflow"), false);
@@ -128,8 +129,8 @@ test("active exchange capacity errors rather than evicting unfinished requests",
 test("active exchange byte budget remains enforced", async () => {
   const hooks = client({ maxContentBytes: 100 });
   try {
-    assert.deepEqual((await hooks.dispatch(requestType, request("first"))).errors, []);
-    assert.equal((await hooks.dispatch(requestType, request("second"))).errors[0].code, "PREPARATION_FAILED");
+    assert.deepEqual((await hooks.dispatch(requestType, request("first"))).diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.equal((await hooks.dispatch(requestType, request("second"))).diagnostics.filter(d => d.phase !== "observation")[0].code, "preparation");
     assert.deepEqual([...hooks.elicitations.keys()], ["first"]);
   } finally { await hooks.close(); }
 });
@@ -145,12 +146,14 @@ test("successful correlated inline replacement survives retirement", async () =>
       items: [], id: "answer", parentEventId: "first", session: { id: "one" },
       elicitation: { mode: "form", server: "test", action: "accept", result: item({ action: "accept", content: {} }) },
     });
-    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
     empty(hooks);
     assert.deepEqual(JSON.parse(result.event.elicitation.result.text), { action: "accept", content: { answer: "replacement" } });
-    assert.deepEqual(result.response.result.effects[0].value, { answer: "replacement" });
+    assert.deepEqual(result.effects, []);
+    assert.deepEqual(result.acceptedResponses[0].result.effects[0].value, { answer: "replacement" });
     replacement.answer = "mutated";
-    assert.deepEqual(result.response.result.effects[0].value, { answer: "replacement" });
+    assert.deepEqual(result.effects, []);
+    assert.deepEqual(result.acceptedResponses[0].result.effects[0].value, { answer: "replacement" });
   } finally { await hooks.close(); }
 });
 
@@ -177,7 +180,7 @@ test("concurrent pending requests have isolated ownership and session retirement
     assert.equal("snapshots" in manager, false);
     assert.equal("readers" in manager, false);
     const signal = AbortSignal.abort();
-    await hooks.dispatch("session.end", { session: { id: "slow-session" } }, { signal });
+    await assert.rejects(hooks.dispatch("session.end", { session: { id: "slow-session" } }, { signal }), error => error.code === "INVALID_SETTLEMENT");
     empty(hooks);
   } finally { release(); await hooks.close(); }
 });
@@ -205,7 +208,8 @@ for (const mode of ["deny", "failure", "abort", "timeout"])
       assert.equal("readers" in manager, false);
       assert.equal("snapshots" in manager, false);
       assert.equal(typeof result.event.elicitation.request.text, "string");
-      assert.ok(result.event.items[0].body instanceof ReadableStream);
+      assert.equal(result.event.items[0].body, undefined);
+      assert.ok(result.content.ids.includes("body"));
     } finally { await hooks.close(); }
   });
 
@@ -215,7 +219,7 @@ function gatedRequest(id, session) {
   const entered = new Promise((resolve) => { enter = resolve; });
   const gate = new Promise((resolve) => { release = resolve; });
   const input = request(id, session);
-  input.items[0].body = new ReadableStream({
+  input.items[0].body = Attachment.stream(new ReadableStream({
     async pull(controller) {
       enter();
       await gate;
@@ -224,7 +228,7 @@ function gatedRequest(id, session) {
       controller.close();
     },
     cancel() { cancelled = true; },
-  }, { highWaterMark: 0 });
+  }, { highWaterMark: 0 }));
   return { input, entered, release };
 }
 
@@ -241,9 +245,9 @@ for (const retirement of ["discard", "session.end", "session.end-generated", "re
       assert.equal(hooks.elicitations.size, 0);
       if (retirement === "discard") hooks.discardElicitation("racy");
       else if (retirement.startsWith("session.end"))
-        await hooks.dispatch("session.end", { session: { id: "ended" } }, { signal: AbortSignal.abort() });
+        await assert.rejects(hooks.dispatch("session.end", { session: { id: "ended" } }, { signal: AbortSignal.abort() }), error => error.code === "INVALID_SETTLEMENT");
       else if (retirement === "result")
-        await hooks.dispatch(resultType, { parentEventId: "racy" }, { signal: AbortSignal.abort() });
+        await assert.rejects(hooks.dispatch(resultType, { parentEventId: "racy" }, { signal: AbortSignal.abort() }), error => error.code === "INVALID_SETTLEMENT");
       else await hooks.close();
       slow.release();
       other.release();
@@ -254,15 +258,15 @@ for (const retirement of ["discard", "session.end", "session.end-generated", "re
         assert.equal(result.interrupted, true);
         empty(hooks);
       } else {
-        assert.deepEqual(result.errors, []);
-        assert.deepEqual(otherResult.errors, []);
+        assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+        assert.deepEqual(otherResult.diagnostics.filter(d => d.phase !== "observation"), []);
         assert.deepEqual([...hooks.elicitations.keys()], ["unrelated"]);
         assert.equal(hooks.elicitationBytes, hooks.elicitations.get("unrelated").size);
         hooks.discardElicitation("unrelated");
         empty(hooks);
         // Retirement leaves no historical tombstone that blocks a later call.
         const next = await hooks.dispatch(requestType, request("racy", "ended"));
-        assert.deepEqual(next.errors, []);
+        assert.deepEqual(next.diagnostics.filter(d => d.phase !== "observation"), []);
         assert.equal(hooks.elicitations.has("racy"), true);
         hooks.discardElicitation("racy");
         empty(hooks);
@@ -277,7 +281,6 @@ for (const retirement of ["discard", "session.end", "session.end-generated", "re
 test('binary result ownership survives inline protocol correlation retirement', async () => {
   const hooks = client();
   const input = request('shared-owner');
-  input.items[0].body = Attachment.fromStream(input.items[0].body);
   const result = await hooks.dispatch(requestType, input);
   const entry = hooks.elicitations.get('shared-owner');
   assert.equal('bytes' in entry, false);
@@ -302,13 +305,13 @@ test('active correlated composition retains its owner after pending exchange ret
     },
   });
   const initial = await hooks.dispatch(requestType, request('borrowed'));
-  // Remove the result stream lease, leaving only the pending exchange lease.
-  await initial.event.items[0].body.cancel();
+  // Remove result ownership, leaving only the pending exchange lease.
+  await initial.content.close();
   const result = await hooks.dispatch(resultType, {
     items: [], id: 'answer', parentEventId: 'borrowed', session: { id: 'one' },
     elicitation: { mode: 'form', server: 'test', action: 'accept', result: item({ action: 'accept', content: {} }) },
   });
-  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   await hooks.close();
   assert.deepEqual(JSON.parse(result.event.elicitation.result.text), { action: 'accept', content: { answer: 'retained' } });
 });

@@ -71,13 +71,14 @@ test("final state exposes accepted candidate and is detached from effects and in
   const result = await run([[{ type: "return", value: { answer: [42] } }]], {
     initialState,
   });
-  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.deepEqual(result.state, {
     ...seed(),
     candidate: { value: { answer: [42] } },
   });
   assert.deepEqual(initialState, seed());
-  result.response.result.effects[0].value.answer.push(43);
+  assert.deepEqual(result.effects, []);
+  assert.throws(() => result.acceptedResponses[0].result.effects[0].value.answer.push(43), TypeError);
   initialState.instructions.push("changed");
   assert.deepEqual(result.state.candidate.value.answer, [42]);
   assert.deepEqual(result.state.instructions, ["existing"]);
@@ -122,7 +123,7 @@ test("final state reflects candidate invalidation rather than replaying earlier 
     ],
   ]) {
     const result = await run(responses, { initialState: seed() });
-    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
     assert.equal(result.state.candidate, null);
     assert.equal(result.state.permission, "none");
     assert.equal(result.event.tool.input.x, 2);
@@ -169,7 +170,7 @@ test("rejected responses and fail-open errors preserve the actual prior state", 
     ],
   ]) {
     const result = await run(responses, { initialState: seed() });
-    assert.equal(result.errors.length, 1);
+    assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
     assert.deepEqual(result.state, seed());
     assert.equal(result.event.tool.input.x, 1);
   }
@@ -215,7 +216,7 @@ test("interruption retains last accepted state but does not grant execution", as
   assert.equal(result.state.candidate.value, 42);
   assert.equal(result.state.permission, "allow");
   assert.ok(
-    !result.response.result.effects.some(
+    !result.effects.some(
       (e) => e.type === "return" || e.type === "allow",
     ),
   );
@@ -279,7 +280,7 @@ test("final-state projection does not append continuation instructions twice", a
         },
       },
     );
-    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
     assert.equal(result.state.flow, "continue");
     assert.deepEqual(result.state.instructions, ["Earlier", "Check once"]);
     assert.ok(Object.isFrozen(result.state.instructions));

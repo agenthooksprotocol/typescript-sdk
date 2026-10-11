@@ -60,7 +60,7 @@ function auth(mode, role) {
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
-const { Hooks, auth: sdkAuth } = await import(
+const { Hooks, auth: sdkAuth, Attachment } = await import(
   require.resolve("agenthooksprotocol/client")
 );
 const { hooks: serverHooks, attachments } = await import(
@@ -419,14 +419,14 @@ for (const [transport, mode, authenticatedUpload] of [
             items: [
               {
                 id: "item-" + status,
-                kind: "attachment",
+                kind: "attachment", selection: "body",
                 mediaType: "application/octet-stream",
-                body: new ReadableStream({
+                body: Attachment.stream(new ReadableStream({
                   start(stream) {
                     stream.enqueue(bytes);
                     stream.close();
                   },
-                }),
+                })),
               },
             ],
           };
@@ -435,24 +435,24 @@ for (const [transport, mode, authenticatedUpload] of [
             input,
             status === "interrupted" ? { signal: controller.signal } : {},
           );
-          assert.deepEqual(await result.observations, []);
+          assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
           assert.equal(result.interrupted, status === "interrupted");
           if (status === "interrupted") {
             assert.ok(
-              result.errors.some((error) => error.code === "INTERRUPTED"),
+              result.diagnostics.filter(d => d.phase !== "observation").some((error) => error.code === "cancelled"),
             );
             assert.equal(result.event.tool.input.task, 1);
           } else {
-            assert.deepEqual(result.errors, []);
+            assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
             assert.equal(result.event.tool.input.task, 2);
             assert.equal(
-              result.response.result.effects.some(
+              result.effects.some(
                 (effect) => effect.type === "deny",
               ),
               status === "denied",
             );
             assert.equal(
-              result.response.result.effects.some(
+              result.effects.some(
                 (effect) => effect.type === "flow",
               ),
               status === "stopped",

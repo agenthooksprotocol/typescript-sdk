@@ -5,7 +5,7 @@ export { ConfigurationError } from "./types.js";
 export type {
   Event, EventType, HarnessValue, HarnessEvent, BoundaryInput, EventInput,
   EventGrant, EventCapabilities, HooksOptions, BoundaryOptions, DeliveryDiagnostic,
-  DeliveryError, BoundaryState, BoundaryResult, AcceptedResponse, ConfigurationIssue,
+  BoundaryState, BoundaryResult, AcceptedResponse, ConfigurationIssue,
 } from "./types.js";
 export { Type } from "@sinclair/typebox";
 export { contract } from "./contracts.js";
@@ -14,13 +14,12 @@ export { form } from "./forms.js";
 export type { Form, FormResult } from "./forms.js";
 export { auth } from "./auth.js";
 export type {
-  Credential, AuthCredential, AuthContext, DeliveryCredential, DeliveryAuthContext,
+  Credential, AuthContext, DeliveryCredential, DeliveryAuthContext,
   AuthChallengeContext, DeliveryAuthProvider, OAuthClient, AuthorizationRequest,
   OAuthMetadata, TokenRequest, AuthorizationCodeRequest, AuthOptions, AuthProvider,
-  AuthOverrides,
 } from "./auth.js";
-export { Attachment, AttachmentContent, ContentSource, ContentManager } from "./content.js";
-export type { StreamContentItem, ContentUploadRequest, ContentManagerOptions } from "./content.js";
+export { Attachment, AttachmentContent, ContentManager } from "./content.js";
+export type { ContentUploadRequest, ContentManagerOptions } from "./content.js";
 export { BackendTransport } from "./transport.js";
 
 // Canonical schema models are intentional advanced APIs. Host projection and
@@ -320,6 +319,6 @@ export type {
   CapabilityDelivery,
 } from "../draft/types.js";
 export {
-  Permission, state, effects, contentSlots, capabilities, events, CapabilityBuilder,
+  Permission, state, effects, capabilities, events, CapabilityBuilder,
   effectNames, supports,
 } from "../draft/public.js";

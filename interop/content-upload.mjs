@@ -2,7 +2,7 @@
 import { sdkClient, sdkServer, sdkDraft } from "./common.mjs";
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
-const { Hooks, auth } = sdkClient;
+const { Hooks, auth, Attachment } = sdkClient;
 const { attachments, hooks } = sdkServer;
 import { connect as tcpConnect } from "node:net";
 import { connect as tlsConnect } from "node:tls";
@@ -122,20 +122,20 @@ export async function uploadBytes(
       items: [
         {
           id: "bytes",
-          kind: "attachment",
+          kind: "attachment", selection: "body",
           mediaType: "application/octet-stream",
-          body: new ReadableStream({
+          body: Attachment.stream(new ReadableStream({
             start(controller) {
               controller.enqueue(new Uint8Array(bytes));
               controller.close();
             },
-          }),
+          })),
         },
       ],
     });
-    if (result.errors.length || !descriptor)
+    if (result.diagnostics.filter(d => d.phase !== "observation").length || !descriptor)
       throw Object.assign(Error("Required SDK upload failed"), {
-        errors: result.errors,
+        errors: result.diagnostics.filter(d => d.phase !== "observation"),
       });
     // The SDK verified the upload receipt before exposing the ref-only event.
     return { status: 201, body: { ref: descriptor.ref, size: bytes.length, sha256: digest(bytes) } };
@@ -406,12 +406,12 @@ export function createContentAdapter(
         )
           throw Error("Content source integrity mismatch");
         selected.push({ descriptor: { ...source.descriptor }, confirmed: false });
-        item.body = new ReadableStream({
+        item.body = Attachment.stream(new ReadableStream({
           start(controller) {
             controller.enqueue(new Uint8Array(bytes));
             controller.close();
           },
-        });
+        }));
       }
     },
     /** @param {Parameters<typeof fetch>[0]} input @param {Parameters<typeof fetch>[1]} [init] */
@@ -493,11 +493,11 @@ export async function prepareRequestContent(
         throw Error("Unavailable fixture bytes");
       const bytes = Buffer.from(source.bodyBase64, "base64");
       // Compatibility hydration only: the caller's real Hooks boundary owns upload.
-      item.body = new ReadableStream({
+      item.body = Attachment.stream(new ReadableStream({
         start(controller) {
           controller.enqueue(bytes);
           controller.close();
         },
-      });
+      }));
     }
 }

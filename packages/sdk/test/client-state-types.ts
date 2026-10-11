@@ -67,8 +67,8 @@ if (elicit.state.candidate !== null) {
   const answer: string = elicit.state.candidate.value.content;
   void answer;
 }
-const eventType: 'model.request.before' = messages.settledEvent.type;
-const eventMessages = messages.settledEvent.items;
+const eventType: 'model.request.before' = messages.event.type;
+const eventMessages = messages.event.items;
 if (messages.state.injections) {
   const delivery: string = messages.state.injections[0]!.deliverAt;
   const target: 'context' = messages.state.injections[0]!.target;
@@ -87,4 +87,11 @@ for (const response of messages.acceptedResponses) {
       void scalar;
     }
   }
+}
+
+for (const effect of messages.effects) {
+  // @ts-expect-error Accepted returns are execution facts in state.candidate, not residual effects.
+  if (effect.type === 'return') void effect;
+  // @ts-expect-error Accepted modifications are execution facts in event, not residual effects.
+  if (effect.type === 'modify') void effect;
 }

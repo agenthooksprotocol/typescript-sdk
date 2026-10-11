@@ -104,9 +104,10 @@ for (const mediaType of [
         assert.equal(uploadRequests, 0, "inline text must not use uploads");
         assert.deepEqual(result.wire.response.result.effects, effects);
         assert.equal(result.failed, mediaType !== "application/json");
-        if (mediaType === "application/json")
-          assert.deepEqual(result.effects, effects);
-        else
+        if (mediaType === "application/json") {
+          assert.deepEqual(result.effects, []);
+          assert.deepEqual(result.acceptedResponses[0].result.effects, effects);
+        } else
           assert.equal(
             result.effects.some((effect) => effect.type === "modify"),
             false,

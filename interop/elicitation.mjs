@@ -83,8 +83,8 @@ const clientOptions = (source, capabilities, token, uploadToken) => ({
 const dispatch = async (client, message) => {
   const { type, source, ...event } = message.params.event;
   const result = await client.dispatch(type, event);
-  if (result.errors.length || (await result.observations).length)
-    throw Error("SDK delivery rejected: " + JSON.stringify(result.errors));
+  if (result.diagnostics.filter(d => d.phase !== "observation").length || result.diagnostics.filter(diagnostic => diagnostic.phase === 'observation').length)
+    throw Error("SDK delivery rejected: " + JSON.stringify(result.diagnostics.filter(d => d.phase !== "observation")));
   return result;
 };
 
@@ -170,7 +170,7 @@ if (process.argv[2] === "client") {
         const result = await dispatch(client, message);
         results.push({
           status: 200,
-          body: JSON.stringify(result.response),
+          body: JSON.stringify(result.acceptedResponses[0].result),
           contentUploads: adapter.contentUploads,
         });
       } finally {
@@ -349,12 +349,12 @@ if (process.argv[2] === "client") {
     // text and decisions come from the actual accepted SDK boundary. No second
     // effect interpreter or semantic validator participates in acceptance.
     const presentAtomic = async (c, accepted) => {
-      const acceptedEffects = accepted.response.result.effects;
+      const acceptedEffects = accepted.acceptedResponses.flatMap(reply => reply.result.effects);
       const result = c.result
         ? JSON.parse(accepted.event.elicitation.result.text)
-        : acceptedEffects.some((effect) => effect.type === "deny")
+        : accepted.state.permission === "deny"
           ? { action: "decline" }
-          : acceptedEffects.find((effect) => effect.type === "return").value;
+          : accepted.state.candidate.value;
       return {
         request: JSON.parse(c.request.params.event.elicitation.request.text),
         result,
@@ -408,7 +408,7 @@ if (process.argv[2] === "client") {
                 session: { id: "capability" },
                 elicitation: { mode: c.mode, server: "fixture" },
               });
-              if (result.errors.length || (await result.observations).length)
+              if (result.diagnostics.filter(d => d.phase !== "observation").length || result.diagnostics.filter(diagnostic => diagnostic.phase === 'observation').length)
                 throw Error("SDK capability delivery rejected");
             } finally {
               await client.close();
@@ -426,7 +426,6 @@ if (process.argv[2] === "client") {
                 : validateElicitationExchange(
                     c.request,
                     c.result,
-                    resolve,
                     validate,
                     principal,
                     c.effect,
@@ -528,7 +527,6 @@ if (process.argv[2] === "client") {
                 const payload = readSelectedElicitation(
                   meta,
                   "request",
-                  resolve,
                   validate,
                 );
                 body =
@@ -544,7 +542,6 @@ if (process.argv[2] === "client") {
                 summary = validateElicitationExchange(
                   pending.get(key),
                   message,
-                  resolve,
                   validate,
                   principal,
                 );

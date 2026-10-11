@@ -1,6 +1,7 @@
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullFormats } from "ajv-formats/dist/formats.js";
 import { addCanonicalSchemas, canonicalSchema, parseJson, stringifyJson } from "../json.js";
+import { Attachment } from "./content.js";
 import { mapParts } from "./content-paths.js";
 import { validateElicitationAnswer } from "../elicitation.js";
 import { validateInterceptResponse } from "../draft/index.js";
@@ -64,7 +65,7 @@ function cloneValue<T>(value: T): T {
 }
 function metadata(value: unknown): unknown {
   return mapParts(value, (part) => {
-    if (!object(part) || !(part.body instanceof ReadableStream)) return part;
+    if (!object(part) || !(part.body instanceof Attachment)) return part;
     const { body: _, ...rest } = part;
     return { ...rest, selection: "metadata" };
   });
@@ -85,15 +86,23 @@ function validator() {
   }
   return registry;
 }
+// Opaque JSON equality does not interpret nested keys as protocol containers.
+// Non-JSON host objects retain identity; native data is never traversed.
+function equalJson(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b))
+    return a.length === b.length && a.every((value, index) => equalJson(value, b[index]));
+  if (!object(a) || !object(b) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(a)) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(b))) return false;
+  return Object.keys(a).length === Object.keys(b).length &&
+    Object.keys(a).every(key => Object.hasOwn(b, key) && equalJson(a[key], b[key]));
+}
 function equal(a: unknown, b: unknown, key?: string): boolean {
   if (a === b) return true;
-  if (key === "native" || key === "input" || key === "params") {
-    // At most compare direct object-target fields; never inspect nested native data.
-    return key !== "native" && object(a) && object(b) &&
-      Object.keys(a).length === Object.keys(b).length &&
-      Object.keys(a).every(k => Object.hasOwn(b, k) && a[k] === b[k]);
-  }
-  if (a instanceof ReadableStream || b instanceof ReadableStream) return false;
+  if (key === "native") return false;
+  if (key === "input" || key === "params") return equalJson(a, b);
+  if (a instanceof Attachment || b instanceof Attachment) return false;
   if (Array.isArray(a) && Array.isArray(b))
     return a.length === b.length && a.every((v, i) => equal(v, b[i]));
   return (
@@ -178,10 +187,6 @@ export interface CompositionOptions {
   state?: InterceptRequest["params"]["state"];
   /** Validate each complete temporary event before applying the next modification. */
   admitStagedEvent?: (event: ClientEvent) => void;
-  /** Returns reusable, host-owned snapshot bytes; does not transfer a stream. */
-  readContent: (body: ReadableStream<Uint8Array>) => Promise<Uint8Array>;
-  /** Register locally synthesized sources before staging can fail. */
-  ownContent?: (body: ReadableStream<Uint8Array>) => void;
   /** Resolve only existing, selected receiver refs to their immutable local owners. */
   resolveAttachment?: (part: ObjectValue) => ObjectValue;
   /** Raw request event associated by parentEventId, source, session and server. */

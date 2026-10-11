@@ -7,7 +7,7 @@ import { listen } from "./common.mjs";
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
-const { Hooks, auth } = await import(
+const { Hooks, auth, Attachment } = await import(
   require.resolve("agenthooksprotocol/client")
 );
 const { hooks, attachments } = await import(
@@ -114,20 +114,20 @@ test("public sender never inherits event Authorization when upload auth is omitt
       items: [
         {
           id: "body-item",
-          kind: "attachment",
+          kind: "attachment", selection: "body",
           mediaType: "application/octet-stream",
-          body: new ReadableStream({
+          body: Attachment.stream(new ReadableStream({
             start(controller) {
               controller.enqueue(bytes);
               controller.close();
             },
-          }),
+          })),
         },
       ],
     });
-    assert.deepEqual(result.errors, []);
-    assert.deepEqual(await result.observations, []);
-    assert.deepEqual(result.response.result.effects, []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
+    assert.deepEqual(result.effects, []);
     assert.equal(captures.length, 1);
     assert.equal(captures[0].authorization, undefined);
     assert.equal(

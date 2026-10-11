@@ -5474,18 +5474,7 @@
             },
             "keep": "yes"
           },
-          "candidate": {
-            "value": "cached",
-            "supplier": "first",
-            "input": {
-              "task": 2,
-              "options": {
-                "recursive": true,
-                "limit": 20
-              },
-              "keep": "yes"
-            }
-          },
+          "candidate": null,
           "permission": "allow",
           "approval": "pending",
           "denied": true,

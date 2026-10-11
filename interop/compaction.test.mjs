@@ -54,7 +54,7 @@ test("failed compound preserves candidate, messages and input; supplied summary 
   const r = await runCompaction(
     "old",
     [
-      hook("cache", () => [{ type: "return", value: "cached" }]),
+      hook("cache", () => [{ type: "return", value: textParts("cached", "summary-1") }]),
       hook(
         "bad",
         () => [
@@ -170,61 +170,14 @@ test(
   },
 );
 
-test(
-  "observe-only legacy after callbacks complete inline without applying effects",
-  { timeout: 5000 },
-  async () => {
-    let returned = false,
-      snapshot,
-      notify,
-      release;
-    const entered = new Promise((resolve) => {
-      notify = resolve;
-    });
-    const gate = new Promise((resolve) => {
-      release = resolve;
-    });
-    try {
-      const work = runCompaction(
-        "base",
-        [],
-        [
-          hook("legacy", async (value) => {
-            snapshot = value;
-            notify();
-            await gate;
-            value.summary[0].text = "mutation";
-            return [modify("summary", "forbidden")];
-          }),
-        ],
-        { observeOnly: true },
-      ).then((result) => {
-        returned = true;
-        return result;
-      });
-      await entered;
-      assert.equal(
-        returned,
-        false,
-        "compaction returned before its callback completed",
-      );
-      assert.equal(snapshot.applied, true);
-      assert.deepEqual(snapshot.capabilities, { effects: [], modify: {} });
-      release();
-      const r = await work;
-      const downstream = r.applied ? [inlineText(r.summary)] : [];
-      assert.deepEqual(downstream, ["summary:base"]);
-      assert.deepEqual(r.failures, []);
-      assert.equal(inlineText(r.summary), "summary:base");
-      const saved = structuredClone(r);
-      snapshot.summary = "late mutation";
-      await new Promise((resolve) => setImmediate(resolve));
-      assert.deepEqual(r, saved);
-    } finally {
-      release();
-    }
-  },
-);
+test("observe-only rejects after interceptors before invoking callbacks", async () => {
+  let called = false;
+  await assert.rejects(
+    runCompaction("base", [], [hook("interceptor", () => { called = true; return []; })], { observeOnly: true }),
+    /explicit observers/,
+  );
+  assert.equal(called, false);
+});
 
 test(
   "wire receiver scopes attachment uploads and inline-text events by independent credentials, never correlation IDs",
@@ -452,7 +405,7 @@ test("compaction composes all inline text parts before generation", async () => 
 test("canonical instruction identities preserve a supplied candidate across a no-change edit", async () => {
   const instructions = [{ ...textParts("base")[0], id: "fixture:text" }];
   const result = await runCompaction(instructions, [
-    hook("cache", () => [{ type: "return", value: "cached" }]),
+    hook("cache", () => [{ type: "return", value: textParts("cached", "summary-1") }]),
     hook("same", snapshot => [{ type: "modify", target: "instructions", operation: "replace", value: structuredClone(snapshot.instructions) }]),
   ], [hook("watch", snapshot => {
     assert.ok(Array.isArray(snapshot.instructions));
@@ -470,12 +423,24 @@ test("canonical instruction identities preserve a supplied candidate across a no
 
 test("rejected equal-valued return cannot overwrite the accepted supplier", async () => {
   const result = await runCompaction(textParts("base"), [
-    hook("cache", () => [{ type: "return", value: "cached" }]),
-    hook("rejected", () => [{ type: "return", value: "cached" }, modify("summary", "leak")], "fail-open"),
+    hook("cache", () => [{ type: "return", value: textParts("cached", "summary-1") }]),
+    hook("rejected", () => [{ type: "return", value: textParts("cached", "summary-1") }, modify("summary", "leak")], "fail-open"),
   ]);
   assert.equal(result.failures.length, 1);
   assert.equal(result.generated, false);
   assert.equal(inlineText(result.summary), "cached");
+  assert.deepEqual(result.provenance, { kind: "supplied", supplier: "cache" });
+});
+
+test("canonical SDK admission rejects string compaction returns without replacing a complete candidate", async () => {
+  const supplied = [...textParts("first", "summary:first"), ...textParts(":second", "summary:second")];
+  const result = await runCompaction(textParts("base"), [
+    hook("cache", () => [{ type: "return", value: supplied }]),
+    { ...hook("legacy", () => [{ type: "return", value: "legacy summary" }], "fail-open"), bypass: true },
+  ], [], { generate() { throw Error("accepted canonical candidate must skip generation"); } });
+  assert.deepEqual(result.failures, [{ boundary: "before", supplier: "legacy" }]);
+  assert.equal(result.generated, false);
+  assert.deepEqual(result.summary, supplied);
   assert.deepEqual(result.provenance, { kind: "supplied", supplier: "cache" });
 });
 

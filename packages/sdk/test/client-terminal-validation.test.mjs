@@ -99,7 +99,7 @@ async function dispatch(
             },
           };
     const result = await client.dispatch(type, input);
-    assert.deepEqual(await result.observations, []);
+    assert.deepEqual(result.diagnostics.filter(diagnostic => diagnostic.phase === 'observation'), []);
     assert.equal(deliveries, 1);
     return result;
   } finally {
@@ -114,15 +114,15 @@ for (const failurePolicy of ["fail-open", "fail-closed"]) {
   ]) {
     test(`elicitation rejects ${effects.map((e) => e.type).join("+")} atomically (${failurePolicy})`, async () => {
       const result = await dispatch(effects, failurePolicy);
-      assert.equal(result.errors.length, 1);
-      assert.equal(result.errors[0].code, "DELIVERY_FAILED");
-      assert.equal(result.errors[0].phase, "interception");
+      assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
+      assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0].code, "protocol_rejection");
+      assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0].phase, "interception");
       assert.equal(
-        result.errors[0].syntheticDenial,
+        result.diagnostics.filter(d => d.phase !== "observation")[0].syntheticDenial,
         failurePolicy === "fail-closed",
       );
       assert.deepEqual(
-        result.response.result.effects,
+        result.effects,
         failurePolicy === "fail-closed"
           ? [{ type: "deny", reason: "Required policy backend unavailable." }]
           : [],
@@ -140,9 +140,9 @@ for (const selection of ["metadata", "omit"]) {
         "user.elicitation.request",
         selection,
       );
-      assert.equal(result.errors.length, 1);
-      assert.equal(result.errors[0].code, "DELIVERY_FAILED");
-      assert.deepEqual(result.response.result.effects, []);
+      assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
+      assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0].code, "protocol_rejection");
+      assert.deepEqual(result.effects, []);
     });
   }
 }
@@ -150,8 +150,10 @@ for (const selection of ["metadata", "omit"]) {
 for (const effect of [returned, denied]) {
   test(`elicitation still accepts a single ${effect.type}`, async () => {
     const result = await dispatch([effect]);
-    assert.deepEqual(result.errors, []);
-    assert.deepEqual(result.response.result.effects, [effect]);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.deepEqual(result.acceptedResponses[0].result.effects, [effect]);
+    assert.deepEqual(result.effects, effect.type === "return" ? [] : [effect]);
+    if (effect.type === "return") assert.deepEqual(result.state.candidate.value, effect.value);
   });
 }
 
@@ -161,8 +163,8 @@ for (const effects of [
 ]) {
   test(`tool return/deny precedence remains unchanged (${effects[0].type} first)`, async () => {
     const result = await dispatch(effects, "fail-open", "tool.before");
-    assert.deepEqual(result.errors, []);
-    assert.deepEqual(result.response.result.effects, [denied]);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.deepEqual(result.effects, [denied]);
   });
 }
 
@@ -176,8 +178,8 @@ for (const modeGrants of [null, {}, { url: {} }]) {
         "body",
         modeGrants,
       );
-      assert.equal(result.errors.length, 1);
-      assert.deepEqual(result.response.result.effects, []);
+      assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
+      assert.deepEqual(result.effects, []);
     });
   }
 }

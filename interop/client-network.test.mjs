@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
-const { Hooks, auth } = await import(
+const { Hooks, auth, Attachment } = await import(
   require.resolve("agenthooksprotocol/client")
 );
 const { hooks, attachments } = await import(
@@ -89,19 +89,19 @@ test("client network delegation preserves independent event and upload authentic
       items: [
         {
           id: "payload",
-          kind: "attachment",
+          kind: "attachment", selection: "body",
           mediaType: "application/octet-stream",
-          body: new ReadableStream({
+          body: Attachment.stream(new ReadableStream({
             start(controller) {
               controller.enqueue(new TextEncoder().encode("network payload"));
               controller.close();
             },
-          }),
+          })),
         },
       ],
     });
-    assert.deepEqual(result.errors, []);
-    assert.deepEqual(await result.observations, []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
     assert.deepEqual(bindings, [
       { name: "UPLOAD_TOKEN", purpose: "upload" },
       { name: "EVENT_TOKEN", purpose: "event" },

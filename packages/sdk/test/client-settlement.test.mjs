@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { Hooks } from '../dist/src/client/index.js';
 import { decodeSettledEvent, decodeSettledState } from '../dist/src/client/settlement.js';
 
-const hooksFor = (type, replies = [{}]) => new Hooks({ protocolVersion: 'draft', hooks: replies.map((_, index) => ({
+const hooksFor = (type, replies = [{}], capabilities = { effects: [] }) => new Hooks({ protocolVersion: 'draft', hooks: replies.map((_, index) => ({
   id: `settlement.backend${index}`, transport: { type: 'http', url: `https://backend${index}.test/hooks` },
   subscriptions: [{ mode: 'intercept', events: [type], timeoutMs: 1000, failurePolicy: 'fail-open', content: { default: 'metadata' } }],
 })) }, {
-  source: 'urn:test:settlement', capabilities: { [type]: { effects: [] } },
+  source: 'urn:test:settlement', capabilities: { [type]: capabilities },
   fetch: async (url, init) => {
     const index = Number(new URL(url).hostname.match(/backend(\d+)/)[1]);
     const reply = replies[index];
@@ -30,8 +30,8 @@ test('decoded generated effective events and canonical state retain opaque extra
       candidate: { value: [message], provenance: { supplier: 'cache', future: extra }, future: extra },
       permission: 'none', injections: [injection], future: extra,
     } });
-    assert.equal(settled.settledEvent.type, 'model.request.before');
-    assert.deepEqual(json(settled.settledEvent.extensions['test.future']), extra);
+    assert.equal(settled.event.type, 'model.request.before');
+    assert.deepEqual(json(settled.event.extensions['test.future']), extra);
     assert.deepEqual(settled.state.candidate, { value: [message], provenance: { supplier: 'cache', future: extra }, future: extra });
     assert.deepEqual(settled.state.injections, [injection]);
     assert.deepEqual(settled.state.future, extra);
@@ -66,6 +66,7 @@ test('tool supplied null remains a candidate, not absence, with provenance and e
 test('invalid decoded settlement events and complete state fail closed instead of returning authority', () => {
   const event = { type: 'model.request.before', id: 'event', time: '2026-01-01T00:00:00Z', source: 'urn:test:settlement', model: { provider: 'test', id: 'model' }, attempt: { id: 'attempt', number: 1 }, params: {}, items: [] };
   assert.throws(() => decodeSettledEvent({ ...event, items: [{ id: 'message', role: 'assistant', parts: [{ kind: 'text', selection: 'body', text: 42 }] }] }), /Invalid decoded settlement event/);
+  assert.throws(() => decodeSettledEvent({ ...event, items: [{ id: 'message', role: 'assistant', parts: [{ id: 'text', kind: 'text', mediaType: 'text/plain', text: 'missing selection' }] }] }), /Invalid decoded settlement event/);
   const decoded = decodeSettledEvent(event);
   assert.throws(() => decodeSettledState(decoded, { candidate: null, permission: 'allow', injections: [{ type: 'inject', value: [] }] }), /Invalid decoded settlement state/);
 });
@@ -79,7 +80,7 @@ test('acceptedResponses retains complete canonical envelopes in order, excluding
   ]);
   try {
     const settled = await hooks.toolBefore({ callId: 'call', name: 'read', input: {}, path: 'native', origin: 'native' });
-    assert.equal(settled.errors.length, 1);
+    assert.equal(settled.diagnostics.filter(d => d.phase !== "observation").length, 1);
     assert.equal(settled.acceptedResponses.length, 2);
     assert.deepEqual(json(settled.acceptedResponses[0].future), opaque);
     assert.deepEqual(json(settled.acceptedResponses[0].result.future), opaque);
@@ -87,7 +88,7 @@ test('acceptedResponses retains complete canonical envelopes in order, excluding
     assert.deepEqual(json(settled.acceptedResponses[1].future), { order: 3 });
     assert.deepEqual(settled.acceptedResponses[1].result.effects, []);
     assert.equal(Object.isFrozen(settled.acceptedResponses[0].result.future), true);
-    assert.deepEqual(settled.response.result.effects, []);
+    assert.deepEqual(settled.effects, []);
   } finally { await hooks.close(); }
 });
 
@@ -119,13 +120,10 @@ test('public final decode failure throws without authorization and preserves acc
   } finally { await hooks.close(); }
 });
 
-test('raw pre-cancelled retirement remains compatible but its typed view and named boundary fail closed', async () => {
+test('pre-cancelled generic and named boundaries reject malformed events without raw escape hatches', async () => {
   const hooks = hooksFor('tool.before');
   try {
-    const raw = await hooks.dispatch('session.end', { session: { id: 'retired' } }, { signal: AbortSignal.abort() });
-    assert.equal(raw.interrupted, true);
-    assert.deepEqual(raw.acceptedResponses, []);
-    assert.throws(() => raw.settledEvent, error => error.code === 'INVALID_SETTLEMENT');
+    await assert.rejects(hooks.dispatch('session.end', { session: { id: 'retired' } }, { signal: AbortSignal.abort() }), error => error.code === 'INVALID_SETTLEMENT');
     await assert.rejects(hooks.sessionEnd({ session: { id: 'retired' } }, { signal: AbortSignal.abort() }), error => error.code === 'INVALID_SETTLEMENT');
   } finally { await hooks.close(); }
 });
@@ -167,14 +165,48 @@ test('pre-aborted named boundaries decode valid origin candidates losslessly and
   }
 });
 
-test('raw pre-aborted dispatch retains undecoded state for retirement compatibility', async () => {
+test('pre-aborted generic dispatch rejects invalid correlated state without publishing an outcome', async () => {
   const hooks = hooksFor('context.compact.before');
   const initialState = { permission: 'none', candidate: { value: 42 } };
   try {
-    const settled = await hooks.dispatch('context.compact.before', { instructions: [], trigger: 'manual', items: [] }, { signal: AbortSignal.abort(), initialState });
-    assert.equal(settled.interrupted, true);
-    assert.deepEqual(settled.state, initialState);
-    assert.equal(settled.settledEvent.type, 'context.compact.before');
-    assert.deepEqual(settled.acceptedResponses, []);
+    await assert.rejects(hooks.dispatch('context.compact.before', { instructions: [], trigger: 'manual', items: [] }, { signal: AbortSignal.abort(), initialState }), error => {
+      assert.equal(error.code, 'INVALID_SETTLEMENT');
+      assert.deepEqual(error.canonicalState, initialState);
+      assert.deepEqual(error.acceptedResponses, []);
+      return true;
+    });
+  } finally { await hooks.close(); }
+});
+
+test('typed settlement has no compatibility views and null is not omission', async () => {
+  const hooks = hooksFor('tool.before');
+  const facts = { callId: 'call', name: 'read', input: {}, path: 'native', origin: 'native' };
+  try {
+    const settled = await hooks.toolBefore(facts);
+    for (const field of ['settledEvent', 'effectiveEvent', 'observations', 'response', 'permission', 'input', 'errors'])
+      assert.equal(Object.hasOwn(settled, field), false, field);
+    for (const options of [{ initialState: null }, { signal: AbortSignal.abort(), initialState: null }])
+      await assert.rejects(hooks.toolBefore(facts, options), error => ['INVALID_SETTLEMENT', 'INVALID_CONFIGURATION'].includes(error.code));
+    for (const field of ['id', 'time'])
+      await assert.rejects(hooks.dispatch('tool.before', { tool: { callId: 'call', name: 'read', input: {}, path: 'native', origin: 'native' }, [field]: null }, { signal: AbortSignal.abort() }), error => error.code === 'INVALID_SETTLEMENT');
+  } finally { await hooks.close(); }
+});
+
+test('accepted typed responses retain injection order, delivery timing and opaque envelope fields', async () => {
+  const message = id => ({ id, role: 'assistant', parts: [{ ...text, id: `text.${id}` }] });
+  const injections = [
+    { type: 'inject', target: 'context', operation: 'append', deliverAt: 'now', value: [message('first')] },
+    { type: 'inject', target: 'context', operation: 'append', deliverAt: 'next_turn', value: [message('second')] },
+  ];
+  const hooks = hooksFor('model.request.before', [{ result: { effects: injections, future: { order: [1, 2], selected: null } } }], {
+    effects: ['inject'], inject: { context: { append: true, deliverAt: ['now', 'next_turn'] } },
+  });
+  try {
+    const settled = await hooks.modelRequestBefore({ model: { provider: 'test', id: 'model' }, attempt: { id: 'attempt', number: 1 }, params: {}, items: [] });
+    assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.deepEqual(json(settled.acceptedResponses[0].result.effects), injections);
+    assert.deepEqual(settled.state.injections, injections);
+    assert.deepEqual(json(settled.acceptedResponses[0].result.future), { order: [1, 2], selected: null });
+    assert.deepEqual(json(settled.effects), injections);
   } finally { await hooks.close(); }
 });

@@ -35,7 +35,7 @@ try {
   );
 
   for (const diagnostic of result.diagnostics) console.error(diagnostic);
-  const denied = result.permission === Permission.Deny;
+  const denied = result.state.permission === Permission.Deny;
   if (result.interrupted || denied) {
     throw new Error("File read interrupted or denied by hooks");
   }

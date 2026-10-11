@@ -10,7 +10,7 @@ test('draft facade and codec namespace expose public helpers, not runtime-privat
   for (const name of ['parseInterceptRequest', 'parseInterceptResponse', 'parseContentReference', 'encodeContentReference', 'responseForRequest', 'toEventInput']) {
     assert.equal(typeof draft.draftCodecs[name], 'function', name);
   }
-  for (const name of ['PendingAttachment', 'HostInputProjection', '_projectHostInput']) {
+  for (const name of ['PendingAttachment', 'HostInputProjection', '_projectHostInput', 'contentSlots']) {
     assert.equal(name in generated, false, `generated.${name}`);
     assert.equal(name in draft, false, name);
     assert.equal(name in draft.draftCodecs, false, `draftCodecs.${name}`);

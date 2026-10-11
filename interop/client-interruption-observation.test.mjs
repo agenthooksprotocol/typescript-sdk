@@ -124,11 +124,11 @@ test(
       assert.equal(result.interrupted, true);
       assert.equal(result.event.tool.input.x, 2);
       assert.deepEqual(
-        result.response.result.effects.map((e) => e.type),
-        ["modify"],
+        result.effects.map((e) => e.type),
+        [],
       );
-      assert.equal(result.errors.length, 1);
-      assert.equal(result.errors[0].syntheticDenial, false);
+      assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
+      assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0].syntheticDenial, false);
       assert.equal(
         s.messages.filter((m) => m.method === "hooks/intercept").length,
         2,
@@ -140,7 +140,7 @@ test(
       s.releasePending.resolve();
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(s.messages.length, 2); // No late response can start fallback work.
-      assert.deepEqual(await result.observations, []);
+      assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
     } finally {
       s.releasePending.resolve();
       s.releaseObservers.resolve();
@@ -161,7 +161,7 @@ test(
       await s.client.close();
       const result = await work;
       assert.equal(result.interrupted, true);
-      assert.deepEqual(await result.observations, []);
+      assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
       assert.equal(
         s.messages.filter((m) => m.method === "hooks/observe").length,
         0,

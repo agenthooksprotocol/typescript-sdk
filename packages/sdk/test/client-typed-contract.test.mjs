@@ -30,8 +30,8 @@ for (const result of [{ protocolVersion: 'draft' }, { protocolVersion: 'draft', 
     assert.deepEqual(wire, before);
     const hooks = client('tool.before', { effects: [] }, () => result);
     const settled = await hooks.toolBefore({ callId: 'call', name: 'read', input: {}, path: 'native', origin: 'native' });
-    assert.deepEqual(settled.errors, []);
-    assert.deepEqual(settled.response.result.effects, []);
+    assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.deepEqual(settled.effects, []);
     assert.equal(settled.state.permission, 'none');
     assert.equal(settled.state.candidate, null);
     await hooks.close();
@@ -65,7 +65,7 @@ for (const [type, method, target, facts] of [
   const hooks = client(type, caps(target), () => ({ effects: [edit(target, [changed])] }));
   const settled = await hooks[method]({ ...facts, native: { test: opaque }, [target]: [text('old', 'old')] });
   assert.deepEqual(settled.event.native, { test: opaque });
-  assert.deepEqual(settled.errors, []);
+  assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.deepEqual(settled.event[target], [snapshot]);
   assert.equal(Object.hasOwn(settled.event[target][0], 'parts'), false);
   assert.deepEqual(changed, snapshot);
@@ -76,7 +76,7 @@ test('public message edits preserve text parts and opaque metadata', async () =>
   const changed = message('edited');
   const hooks = client('user.message.inbound', caps('prompt'), () => ({ effects: [edit('prompt', [changed])] }));
   const settled = await hooks.userMessageInbound({ message: { channel: 'chat', sender: 'user', messages: [message('old')] } });
-  assert.deepEqual(settled.errors, []);
+  assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.deepEqual(settled.event.message.messages, [changed]);
   assert.equal(Object.hasOwn(settled.event.message.messages[0].parts[0], 'parts'), false);
   await hooks.close();
@@ -87,7 +87,7 @@ test('invalid later response rolls back all its edits while retaining earlier ac
     ? [edit('instructions', [text('accepted', 'accepted')])]
     : [edit('instructions', [text('unpublished', 'unpublished')]), edit('instructions', [message('wrong-shape')])] }), 2);
   const settled = await hooks.contextCompactBefore({ trigger: 'manual', items: [], instructions: [text('old', 'old')] });
-  assert.equal(settled.errors.length, 1);
+  assert.equal(settled.diagnostics.filter(d => d.phase !== "observation").length, 1);
   assert.deepEqual(settled.event.instructions, [text('accepted', 'accepted')]);
   await hooks.close();
 });
@@ -106,7 +106,7 @@ test('public workspace edit preserves opaque change metadata without attachment 
   const hooks = client('workspace.change.before', caps('workspace'), () => ({ effects: [edit('workspace', change)] }));
   const settled = await hooks.workspaceChangeBefore({ native, workspace: { kind: 'cwd', change: { cwd: '/old' } } });
   assert.deepEqual(settled.event.native, native);
-  assert.deepEqual(settled.errors, []);
+  assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.deepEqual(settled.event.workspace.change, change);
   await hooks.close();
 });
@@ -115,7 +115,7 @@ test('public model return retains a canonical whole message list', async () => {
   const value = [message('model', 'assistant')];
   const hooks = client('model.request.before', { effects: ['return'] }, () => ({ effects: [{ type: 'return', value }] }));
   const settled = await hooks.modelRequestBefore({ model: { id: 'model', provider: 'test' }, attempt: { id: 'attempt', number: 1 }, params: {}, items: [] });
-  assert.deepEqual(settled.errors, []);
+  assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.deepEqual(settled.state.candidate.value, value);
   await hooks.close();
 });
@@ -124,7 +124,18 @@ test('public elicitation return retains a canonical ElicitResult and form answer
   const value = { action: 'accept', content: { answer: 'yes' } };
   const hooks = client('user.elicitation.request', { effects: ['return'], elicitation: { form: {} } }, () => ({ effects: [{ type: 'return', value }] }));
   const settled = await hooks.userElicitationRequest({ elicitation: { mode: 'form', server: 'test', request: text('request', JSON.stringify({ message: 'Answer?', requestedSchema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] } })) } });
-  assert.deepEqual(settled.errors, []);
+  assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.deepEqual(settled.state.candidate.value, value);
   await hooks.close();
 });
+
+for (const value of ['summary', { action: 'accept', content: null }]) {
+  test('elicitation rejects noncanonical return atomically: ' + JSON.stringify(value), async () => {
+    const hooks = client('user.elicitation.request', { effects: ['return'], elicitation: { form: {} } }, () => ({ effects: [{ type: 'return', value }] }));
+    const settled = await hooks.userElicitationRequest({ elicitation: { mode: 'form', server: 'test', request: text('request', JSON.stringify({ message: 'Answer?', requestedSchema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] } })) } });
+    assert.equal(settled.state.candidate, null);
+    assert.deepEqual(settled.acceptedResponses, []);
+    assert.equal(settled.diagnostics[0].code, 'protocol_rejection');
+    await hooks.close();
+  });
+}

@@ -201,7 +201,7 @@ for (const binding of bindings) {
     );
     try {
       const result = await hooks.dispatch("tool.before", toolInput());
-      assert.deepEqual(result.errors, []);
+      assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
       assert.equal(contexts.length, 1);
       assert.equal(contexts[0].backendId, "auth.backend");
       assert.equal(contexts[0].purpose, "event");
@@ -256,7 +256,7 @@ for (const finalStatus of [200, 401]) {
     );
     try {
       const result = await hooks.dispatch("tool.before", toolInput());
-      assert.equal(result.errors.length, finalStatus === 200 ? 0 : 1);
+      assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, finalStatus === 200 ? 0 : 1);
       assert.equal(acquisitions, 2);
       assert.equal(requests.length, 2);
       assert.equal(challenges.length, finalStatus === 200 ? 1 : 2);
@@ -289,7 +289,7 @@ for (const finalStatus of [200, 401]) {
         "Bearer new-secret",
       );
       assert.doesNotMatch(
-        JSON.stringify(result.errors),
+        JSON.stringify(result.diagnostics.filter(d => d.phase !== "observation")),
         /old-secret|new-secret/,
       );
     } finally {
@@ -357,7 +357,7 @@ for (const uploadAuth of [
         name: input.tool.name, origin: input.tool.origin,
         input: input.tool.input, items: input.items,
       });
-      assert.deepEqual(result.errors, []);
+      assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
       assert.deepEqual(
         contexts.map((context) => context.purpose),
         ["upload", "event"],
@@ -403,7 +403,7 @@ test("Hooks allows provider-owned recovery from an anonymous challenge", async (
   );
   try {
     assert.deepEqual(
-      (await hooks.dispatch("tool.before", toolInput())).errors,
+      (await hooks.dispatch("tool.before", toolInput())).diagnostics.filter(d => d.phase !== "observation"),
       [],
     );
     assert.equal(requests.length, 2);
@@ -432,8 +432,8 @@ for (const binding of bindings) {
     try {
       const result = await hooks.dispatch("tool.before", toolInput());
       assert.equal(deliveries, 0);
-      assert.equal(result.errors.length, 1);
-      assert.equal(result.errors[0].syntheticDenial, true);
+      assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
+      assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0].syntheticDenial, true);
     await result.content?.close();
     } finally {
       await hooks.close();
@@ -486,7 +486,7 @@ for (const phase of ["credential", "challenge"]) {
         assert.equal(providerSignal.aborted, true);
         assert.equal(result.interrupted, true);
         assert.equal(deliveries, phase === "credential" ? 0 : 1);
-        assert.ok(result.errors.some((error) => error.code === "INTERRUPTED"));
+        assert.ok(result.diagnostics.filter(d => d.phase !== "observation").some((error) => error.code === "cancelled"));
       } finally {
         controller.abort();
         await hooks.close();
@@ -519,8 +519,8 @@ test("Hooks never retries a challenge anonymously when the provider still has no
     assert.equal(deliveries, 1);
     assert.equal(challenges, 1);
     assert.equal(acquisitions, 2);
-    assert.equal(result.errors.length, 1);
-    assert.equal(result.errors[0].syntheticDenial, true);
+    assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
+    assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0].syntheticDenial, true);
     await result.content?.close();
   } finally {
     await hooks.close();
@@ -572,9 +572,9 @@ test("Hooks cannot substitute event credentials for missing configured upload cr
     });
     assert.deepEqual(purposes, ["upload"]);
     assert.equal(deliveries, 0);
-    assert.equal(result.errors.length, 1);
-    assert.equal(result.errors[0].phase, "preparation");
-    assert.equal(result.errors[0].syntheticDenial, true);
+    assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
+    assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0].phase, "preparation");
+    assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0].syntheticDenial, true);
     await result.content?.close();
   } finally {
     await hooks.close();

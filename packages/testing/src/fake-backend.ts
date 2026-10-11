@@ -5,7 +5,7 @@ import { createInterface } from "node:readline";
 import {
   parseInterceptRequest,
   PROTOCOL_VERSION,
-} from "agenthooksprotocol";
+} from "agenthooksprotocol/draft";
 
 type Mode =
   | "no-effect"
@@ -121,19 +121,8 @@ async function main(): Promise<void> {
       await writeFrame("{malformed", config.chunkSize);
       continue;
     }
-    // Canonical positive fixtures use the public server evaluator. The main
-    // package compatibility runner still emits its historical tool.callId shape;
-    // keep that deliberately separate from the canonical client path below.
-    let canonical = false;
-    try {
-      const message = JSON.parse(line);
-      canonical =
-        message.method === "hooks/observe" ||
-        message.params?.event?.call !== undefined;
-    } catch {
-      // Malformed-input fixtures continue through the legacy error path.
-    }
-    if (canonical && ["no-effect", "deny", "timeout"].includes(config.mode)) {
+    // Positive fixtures use the canonical public server evaluator.
+    if (["no-effect", "deny", "timeout"].includes(config.mode)) {
       const response = await hooks.handle(
         new Request("http://stdio.fixture/hooks", {
           method: "POST",
@@ -158,7 +147,9 @@ async function main(): Promise<void> {
     // exercise malformed frames, unsupported effects and correlation failures.
     let request;
     try {
-      request = parseInterceptRequest(line);
+      const parsed = parseInterceptRequest(line);
+      if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+      request = parsed.value;
     } catch (error) {
       await writeFrame(
         JSON.stringify({
@@ -202,7 +193,7 @@ async function main(): Promise<void> {
     if (config.mode === "deny")
       effects = [{ type: "deny", reason: config.reason }];
     else if (config.mode === "malformed-deny")
-      effects = [{ type: "deny", reason: "   " }];
+      effects = [{ type: "deny", reason: 42 }];
     else if (config.mode === "unsupported-effect")
       effects = [{ type: "rewrite", arguments: {} }];
     else if (config.mode === "multiple-effects")

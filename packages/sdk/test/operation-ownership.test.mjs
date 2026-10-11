@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Hooks, ContentSource } from "agenthooksprotocol/client";
+import { Attachment, Hooks } from "agenthooksprotocol/client";
 
 const input = () => ({
   items: [],
@@ -80,8 +80,8 @@ test("result input and permission use accepted settlement, not original host arg
   const original = input();
   try {
     const result = await hooks.dispatch("tool.before", original);
-    assert.equal(result.permission, "allow");
-    assert.deepEqual(result.input, { x: 2 });
+    assert.equal(result.state.permission, "allow");
+    assert.deepEqual(result.event.tool.input, { x: 2 });
     assert.deepEqual(original.tool.input, { x: 1 });
     assert.deepEqual(result.diagnostics, []);
   } finally {
@@ -118,7 +118,7 @@ test("the call remains pending until owned observation delivery settles", async 
     const result = await work;
     assert.equal(completed, true);
     assert.deepEqual(result.diagnostics, []);
-    assert.deepEqual(await result.observations, []);
+    assert.deepEqual(result.diagnostics.filter(diagnostic => diagnostic.phase === 'observation'), []);
   } finally {
     release.resolve();
     await hooks.close();
@@ -157,12 +157,12 @@ for (const timeout of [false, true])
       assert.equal(providerSignal.aborted, true);
       assert.equal(result.interrupted, true);
       assert.equal(
-        result.errors[0].code,
-        timeout ? "DEADLINE_EXCEEDED" : "INTERRUPTED",
+        result.diagnostics.filter(d => d.phase !== "observation")[0].code,
+        timeout ? "deadline_exceeded" : "cancelled",
       );
-      assert.equal(result.errors[0].syntheticDenial, false);
+      assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0].syntheticDenial, false);
       assert.equal(sent, 0);
-      assert.equal(result.permission, "none");
+      assert.equal(result.state.permission, "none");
     } finally {
       await hooks.close();
     }
@@ -211,10 +211,10 @@ test("close cancels owned observation I/O without closing shared providers", asy
 });
 
 for (const early of ["unmatched", "invalid", "cancelled"])
-  test(`owned unused source is cancelled on ${early} path without a read`, async () => {
+  test(`owned unused source is cancelled on ${early} path after result cleanup without a read`, async () => {
     let reads = 0,
       cancels = 0;
-    const source = new ContentSource(
+    const source = Attachment.stream(
       new ReadableStream(
         {
           pull() {
@@ -237,16 +237,20 @@ for (const early of ["unmatched", "invalid", "cancelled"])
       ],
       ...(early === "invalid" ? { capabilities: {} } : {}),
     });
-    const value = { ...input(), items: [{ id: "body", kind: "attachment", mediaType: "application/octet-stream", body: source }] };
+    const value = { ...input(), items: [{ id: "body", kind: "attachment", mediaType: "application/octet-stream", selection: "body", body: source }] };
     const controller = new AbortController();
     if (early === "cancelled") controller.abort();
     try {
       if (early === "invalid")
         await assert.rejects(hooks.dispatch("tool.before", value));
-      else
-        await hooks.dispatch("tool.before", value, {
+      else {
+        const result = await hooks.dispatch("tool.before", value, {
           signal: controller.signal,
         });
+        assert.equal(reads, 0);
+        if (early === "unmatched") assert.equal(cancels, 0);
+        await result.content?.close();
+      }
       assert.equal(reads, 0);
       assert.equal(cancels, 1);
     } finally {
@@ -309,7 +313,7 @@ for (const [name, makeResponse, code] of [
       assert.equal(result.diagnostics[0].backendId, "test.operation");
       assert.equal(result.diagnostics[0].subscriptionIndex, 0);
       assert.equal(result.diagnostics[0].syntheticDenial, true);
-      assert.equal(result.permission, "deny");
+      assert.equal(result.state.permission, "deny");
       assert.equal(
         JSON.stringify(result.diagnostics).includes("SECRET"),
         false,
@@ -341,7 +345,7 @@ test("outer budget stops selected content preparation before upload or publicati
       throw new Error("unexpected delivery");
     },
   });
-  const source = new ContentSource(
+  const source = Attachment.stream(
     new ReadableStream(
       {
         pull() {
@@ -361,7 +365,7 @@ test("outer budget stops selected content preparation before upload or publicati
       {
         ...input(),
         items: [
-          { id: "body", kind: "attachment", mediaType: "application/octet-stream", body: source },
+          { id: "body", kind: "attachment", mediaType: "application/octet-stream", selection: "body", body: source },
         ],
       },
       { signal: controller.signal },

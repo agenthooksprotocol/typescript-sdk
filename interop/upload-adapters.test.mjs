@@ -153,8 +153,8 @@ for (const name of ["compaction", "elicitation"])
                   },
                 ],
               });
-              assert.deepEqual(result.errors, []);
-              assert.deepEqual(result.response.result.effects, []);
+              assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+              assert.deepEqual(result.effects, []);
             } finally {
               await client.close();
             }

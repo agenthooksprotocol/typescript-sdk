@@ -22,9 +22,3 @@ export class HookOperationalError extends Error {
     this.code = code;
   }
 }
-
-export function asOperationalError(error: unknown): HookOperationalError {
-  if (error instanceof HookOperationalError) return error;
-  const message = error instanceof Error ? error.message : String(error);
-  return new HookOperationalError("IO_ERROR", message, { cause: error });
-}

@@ -138,13 +138,13 @@ test("effective observation payload and offline composition use public SDK respo
     },
   );
   const result = await client.dispatch("tool.before", toolInput);
-  assert.deepEqual(result.errors, []);
-  await result.observations;
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+  result.diagnostics.filter(d => d.phase === "observation");
   assert.equal(result.event.tool.input.x, 2);
   assert.equal(toolInput.tool.input.x, 1);
   // Offline composition consumes the canonical public client response, not an
   // interop evaluator or a hand-built positive response envelope.
-  const reply = result.response;
+  const reply = result.acceptedResponses[0];
   assert.ok(request);
   const offline = composeResponse(
     request.params.event,
@@ -200,8 +200,8 @@ test("task lineage receives canonical SDK events and rejects malformed explicit 
   ];
   for (const [type, id, parentEventId] of occurrences) {
     const result = await client.dispatch(type, { id, parentEventId, task });
-    assert.deepEqual(result.errors, []);
-    assert.deepEqual(await result.observations, []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
   }
   assert.equal(messages.length, 2);
   assert.throws(() =>
@@ -238,9 +238,8 @@ test("task lineage receives canonical SDK events and rejects malformed explicit 
     "urn:other",
   );
   assert.deepEqual(
-    await (
-      await other.dispatch("task.change.before", { id: "before", task })
-    ).observations,
+    (await other.dispatch("task.change.before", { id: "before", task }))
+      .diagnostics.filter(d => d.phase === "observation"),
     [],
   );
 });
@@ -281,8 +280,8 @@ test("typed task/workspace controls use public SDK and reject malformed offline 
       change: { status: "native-done" },
     },
   });
-  assert.deepEqual(task.errors, []);
-  assert.equal(task.response.result.effects[0].type, "deny");
+  assert.deepEqual(task.diagnostics.filter(d => d.phase !== "observation"), []);
+  assert.equal(task.effects[0].type, "deny");
   assert.ok(request);
   /** @param {import("agenthooksprotocol/client").Effect} effect
    * @returns {import("agenthooksprotocol/client").InterceptResponse} */
@@ -313,7 +312,7 @@ test("typed task/workspace controls use public SDK and reject malformed offline 
     workspace: { kind: "cwd", change: { cwd: "/old" } },
   };
   const modified = await client.dispatch("workspace.change.before", input);
-  assert.deepEqual(modified.errors, []);
+  assert.deepEqual(modified.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(modified.event.workspace.change.cwd, "/new");
   // Deliberately bypass hooks.handle, which would reject an unsupported effect.
   assert.throws(() =>
@@ -334,8 +333,8 @@ test("typed task/workspace controls use public SDK and reject malformed offline 
     ...input,
     id: "workspace-denied",
   });
-  assert.deepEqual(denied.errors, []);
-  assert.equal(denied.response.result.effects[0].type, "deny");
+  assert.deepEqual(denied.diagnostics.filter(d => d.phase !== "observation"), []);
+  assert.equal(denied.effects[0].type, "deny");
 });
 
 test("short-circuit downgrades only uncalled interceptors and awaits observers", async (t) => {
@@ -412,9 +411,9 @@ test("short-circuit downgrades only uncalled interceptors and awaits observers",
   release();
   const result = await work;
   assert.equal(settled, true);
-  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(result.event.tool.input.x, 2);
-  assert.deepEqual(await result.observations, []);
+  assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
 });
 
 test("chain refreshes receiver evidence after a fast final interception", async (t) => {

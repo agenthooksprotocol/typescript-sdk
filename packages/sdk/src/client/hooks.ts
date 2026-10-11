@@ -5,6 +5,7 @@ import {
   Permission,
   responseForRequest,
 } from "../draft/raw.js";
+import type { BoundaryContracts, Codec } from "./contracts.js";
 import { decodeSettledEvent, decodeSettledState, SettlementDecodeError } from "./settlement.js";
 import { HookOperationalError } from "../errors.js";
 import { randomUUID } from "node:crypto";
@@ -26,7 +27,7 @@ import {
 } from "../draft/index.js";
 import { isPartPath, localParts, mapParts } from "./content-paths.js";
 import { BackendTransport } from "./transport.js";
-import { Attachment, ContentManager, ContentSource, UploadLimiter, createSharedContentManager } from "./content.js";
+import { Attachment, ContentManager, UploadLimiter, createSharedContentManager } from "./content.js";
 import { composeResponseAsync, normalizeEffects, type ComposedEffect } from "./composition.js";
 import { runtimeInteger } from "../runtime-integer.js";
 import { admitContracts, decodeContract, encodeContract, freezeContractValue, type ToolBeforeInput, type ToolBeforeResult } from "./contracts.js";
@@ -41,10 +42,12 @@ import {
   type Event,
   type EventType,
   type HooksOptions,
-  type DeliveryError,
   type DeliveryDiagnostic,
 } from "./types.js";
 
+type DeliveryFailure = Omit<DeliveryDiagnostic, "code"> & {
+  code: "PREPARATION_FAILED" | "DELIVERY_FAILED" | "DEADLINE_EXCEEDED" | "INTERRUPTED";
+};
 type Subscription = InterceptSubscription | ObserveSubscription;
 type Route = {
   backend: Backend;
@@ -373,9 +376,7 @@ export class Hooks {
     for (let attempt = 0; attempt < 2; attempt++) {
       const credential = await raceAbort(
         Promise.resolve(
-          "credential" in this.provider
-            ? this.provider.credential({ ...context, signal })
-            : this.provider.authenticate({ ...context, signal }, {}),
+          this.provider.credential({ ...context, signal }),
         ),
         signal,
       );
@@ -391,12 +392,7 @@ export class Hooks {
           typeof credential.token !== "string" ||
           !credential.token ||
           /[\s\x00-\x1f\x7f]/.test(credential.token) ||
-          ("credential" in this.provider &&
-            (!("type" in credential) || credential.type !== "bearer")) ||
-          ("expiresAt" in credential &&
-            credential.expiresAt !== undefined &&
-            (!Number.isFinite(credential.expiresAt) ||
-              credential.expiresAt <= Date.now()))
+          credential.type !== "bearer"
         )
           throw new Error("Invalid authentication credential");
         headers.set("authorization", `Bearer ${credential.token}`);
@@ -416,7 +412,7 @@ export class Hooks {
         }),
         signal,
       );
-      if (response.status === 401 && "credential" in this.provider) {
+      if (response.status === 401) {
         try {
           await raceAbort(
             Promise.resolve(
@@ -473,7 +469,7 @@ export class Hooks {
     const exchange: ElicitationLifetime | undefined =
       type === "user.elicitation.request"
         ? {
-            id: input.id ?? randomUUID(),
+            id: input.id === undefined ? randomUUID() : input.id,
             sessionId: (input as any).session?.id,
             retired: false,
           }
@@ -497,6 +493,11 @@ export class Hooks {
         returnedContent = result.content;
       }
       return result;
+    } catch (error) {
+      if (error instanceof SettlementDecodeError && error.canonicalState === undefined)
+        throw new SettlementDecodeError(error.message, error.acceptedResponses,
+          freezeContractValue(structuredClone(options.initialState)), { cause: error });
+      throw error;
     } finally {
       // Terminal exchanges retire even when validation or cancellation bypasses run.
       if (type === "user.elicitation.result")
@@ -535,8 +536,8 @@ export class Hooks {
       ...input,
       type,
       source: this.options.source,
-      id: exchange?.id ?? input.id ?? randomUUID(),
-      time: input.time ?? new Date().toISOString(),
+      id: exchange?.id ?? (input.id === undefined ? randomUUID() : input.id),
+      time: input.time === undefined ? new Date().toISOString() : input.time,
     });
     bindContentSources(type, event, options.contentSources);
     if (type === "session.start")
@@ -546,11 +547,8 @@ export class Hooks {
     // duplicate injections/instructions and lose candidate invalidation.
     const snapshotState = (
       value: BoundaryOptions["initialState"],
-      decode = true,
     ): BoundaryResult<K>["state"] => {
-      const snapshot = structuredClone(decode
-        ? decodeSettledState(decodeSettledEvent(event), value)
-        : value ?? { candidate: null, permission: "none" });
+      const snapshot = structuredClone(decodeSettledState(decodeSettledEvent(event), value));
       if (
         !Object.values(Permission).includes(snapshot.permission as Permission)
       )
@@ -566,32 +564,20 @@ export class Hooks {
       freeze(snapshot);
       return snapshot as BoundaryResult<K>["state"];
     };
-    if (signal.aborted)
+    if (signal.aborted) {
+      const decodedEvent = decodeSettledEvent<K>(event);
+      const decodedState = snapshotState(options.initialState);
+      try { admitContracts(options.contracts, decodedEvent, decodedState as BoundaryOptions["initialState"]); }
+      catch (cause) { throw new SettlementDecodeError("Interrupted boundary contract admission failed", [], decodedState, { cause }); }
       return {
-        event: await resultEvent(event, manager),
-        // Raw dispatch preserves pre-cancelled retirement calls. A typed consumer
-        // accessor (and every named boundary) must still decode or throw.
-        get settledEvent() { return decodeSettledEvent<K>(event); },
-        response: {
-          jsonrpc: "2.0",
-          id: requestId,
-          result: { protocolVersion: "draft", effects: [] },
-        // An empty effective list is valid for every boundary, including observe-only events.
-        } as unknown as BoundaryResult<K>["response"],
+        event: decodedEvent,
+        effects: Object.freeze([]) as unknown as BoundaryResult<K>["effects"],
         acceptedResponses: [],
-        state: snapshotState(options.initialState, false),
-        get permission() {
-          return this.state.permission as `${Permission}`;
-        },
-        get input(): unknown {
-          return (this.event as any).tool?.input;
-        },
-        errors: [],
+        state: decodedState,
         diagnostics: [],
-        observations: Promise.resolve([]),
         interrupted: true,
       } as BoundaryResult<K>;
-    const localSources = new Set<ReadableStream<Uint8Array>>();
+    }
     let correlation: { event: Event; release: () => Promise<void> } | undefined;
     let originalRequest: Event | undefined;
 
@@ -602,7 +588,7 @@ export class Hooks {
     // result in this chain. Composition settles terminal state after acceptance.
     let shortCircuit = false;
     let interrupted = false;
-    const errors: DeliveryError[] = [];
+    const errors: DeliveryFailure[] = [];
     const advertised = this.manifest.events.find((e) => e.event === type);
     if (!advertised)
       throw new ConfigurationError([
@@ -641,6 +627,7 @@ export class Hooks {
         matchesFilters(r.subscription, event),
     );
     try {
+      decodeSettledEvent<K>(event);
       admitContracts(options.contracts, event, state);
       correlation = this.elicitationFor(event);
       originalRequest = correlation?.event;
@@ -708,7 +695,7 @@ export class Hooks {
         }
         called.add(route);
         const s = route.subscription;
-        let phase: DeliveryError["phase"] = "preparation";
+        let phase: DeliveryFailure["phase"] = "preparation";
         let deadline: AbortSignal | undefined;
         let received = false;
         let budget: ReturnType<typeof deadlineAfter> | undefined;
@@ -794,11 +781,6 @@ export class Hooks {
             );
           const staged = await raceAbort(
             composeResponseAsync(event, effects, decoded.value, caps, {
-              readContent: (body) => manager.readBody(body, deadline),
-              ownContent: (body) => {
-                manager.own(body);
-                localSources.add(body);
-              },
               selectedEvent: projected,
               admitStagedEvent: (temporary) => {
                 admitContracts(options.contracts, temporary, state);
@@ -825,7 +807,7 @@ export class Hooks {
           interrupted = signal.aborted;
           const syntheticDenial =
             !interrupted && s.failurePolicy === "fail-closed";
-          const error: DeliveryError = {
+          const error: DeliveryFailure = {
             backendId: route.backend.id,
             subscriptionIndex: route.index,
             phase,
@@ -879,7 +861,7 @@ export class Hooks {
           (r.subscription.mode === "observe" ||
             ((shortCircuit || interrupted) && !called.has(r))),
       );
-      let observed: Promise<DeliveryError[]> = Promise.resolve([]);
+      let observed: Promise<DeliveryFailure[]> = Promise.resolve([]);
       // Cancellation stops new work, including settlement notifications. Each
       // observer budget can shorten, but never extend, the operation signal.
       if (!signal.aborted && observations.length) {
@@ -889,7 +871,7 @@ export class Hooks {
         );
         observed = Promise.all(jobs).then((results) =>
           results.filter(
-            (result): result is DeliveryError => result !== undefined,
+            (result): result is DeliveryFailure => result !== undefined,
           ),
         );
         await observed;
@@ -907,27 +889,13 @@ export class Hooks {
         this.forgetElicitation(event.id);
       if (type === "session.end")
         this.retireSessionElicitations(event.session?.id);
-      const response = {
-        jsonrpc: "2.0",
-        id: requestId,
-        result: { protocolVersion: "draft", effects },
-      } as BoundaryResult<K>["response"];
       return {
-        event: await resultEvent(event, manager, localSources),
-        settledEvent: decodeSettledEvent<K>(event),
+        event: decodeSettledEvent<K>(event),
         content: manager.resultContent(event),
-        response,
+        effects: Object.freeze(effects.filter(effect => effect.type !== "modify" && effect.type !== "return")),
         acceptedResponses: Object.freeze(acceptedResponses),
         state: snapshotState(state),
-        get permission() {
-          return this.state.permission as `${Permission}`;
-        },
-        get input(): unknown {
-          return (this.event as any).tool?.input;
-        },
-        errors,
         diagnostics: [...errors, ...(await observed)].map(deliveryDiagnostic),
-        observations: observed,
         interrupted,
       } as BoundaryResult<K>;
     } catch (error) {
@@ -950,7 +918,7 @@ export class Hooks {
     manager: ContentManager,
     parentSignal: AbortSignal,
     preparationFailures: Map<Route, unknown>,
-  ): Promise<DeliveryError | undefined> {
+  ): Promise<DeliveryFailure | undefined> {
     const budget = deadlineAfter(
       this.options.observationTimeoutMs ?? 15000,
       parentSignal,
@@ -988,7 +956,7 @@ export class Hooks {
         signal,
       );
     } catch (cause) {
-      const error: DeliveryError = {
+      const error: DeliveryFailure = {
         backendId: route.backend.id,
         subscriptionIndex: route.index,
         phase: "observation",
@@ -1112,21 +1080,7 @@ export class Hooks {
         projected.tool = { ...projected.tool, input: encodeContract(options.contracts.arguments, (input as any).input) };
       }
       bindContentSources(type, projection.event, projection.bindings as any);
-      return this.dispatch(type, projection.event as unknown as BoundaryInput<K>, options).then(result => {
-        try {
-          const settledEvent = result.settledEvent;
-          if (result.interrupted) {
-            // Raw cancellation can skip admission for retirement-only calls.
-            // Named boundaries must still decode the origin-correlated state.
-            const state = decodeSettledState(settledEvent, result.state as BoundaryOptions["initialState"]);
-            admitContracts(options?.contracts, settledEvent, state);
-            return { ...result, state: freezeContractValue(structuredClone(state)) } as BoundaryResult<K>;
-          }
-          return result;
-        } catch (cause) {
-          throw new SettlementDecodeError("Named boundary settlement decoding failed", result.acceptedResponses, result.state, { cause });
-        }
-      });
+      return this.dispatch(type, projection.event as unknown as BoundaryInput<K>, options);
     } catch (error) {
       const owners = new Set(localParts({ ...input, type }).map(({ part }) => part?.body).filter(body => body instanceof Attachment));
       // Admit cleanup ownership through the same synchronous nominal claim as
@@ -1138,26 +1092,35 @@ export class Hooks {
     }
   }
 
-  toolBefore<Arguments = unknown, Result = unknown, P = unknown>(
-    input: ToolBeforeInput<Arguments>,
-    options?: BoundaryOptions<Arguments, Result, P>,
-  ): Promise<ToolBeforeResult<Arguments, Result, P>> {
+  toolBefore<C extends BoundaryContracts>(
+    input: ToolBeforeInput<C extends { arguments: Codec<infer A> } ? A : unknown>,
+    options: Omit<BoundaryOptions, "contracts"> & { contracts: C },
+  ): Promise<ToolBeforeResult<
+    C extends { arguments: Codec<infer A> } ? A : unknown,
+    C extends { result: Codec<infer R> } ? R : unknown,
+    C extends { provenance: Codec<infer P> } ? P : unknown
+  >>;
+  toolBefore(input: ToolBeforeInput, options?: BoundaryOptions): Promise<ToolBeforeResult>;
+  toolBefore(
+    input: ToolBeforeInput,
+    options?: BoundaryOptions,
+  ): Promise<ToolBeforeResult> {
     return this.boundary("tool.before", input, options).then(settled => {
       try {
         const contracts = options?.contracts;
         const accepted = contracts?.arguments
-          ? decodeContract(contracts.arguments, settled.input) : settled.input as Arguments;
+          ? decodeContract(contracts.arguments, settled.event.tool.input) : settled.event.tool.input;
         const candidate = settled.state.candidate;
         const typedCandidate = candidate === null ? null : freezeContractValue({
           ...candidate,
-          value: contracts?.result ? decodeContract(contracts.result, candidate.value) : candidate.value as Result,
+          value: contracts?.result ? decodeContract(contracts.result, candidate.value) : candidate.value,
           ...(candidate.provenance !== undefined ? { provenance: contracts?.provenance
-            ? decodeContract(contracts.provenance, candidate.provenance) : candidate.provenance as P } : {}),
+            ? decodeContract(contracts.provenance, candidate.provenance) : candidate.provenance } : {}),
         });
-        return { ...settled, input: accepted,
+        return { ...settled,
           event: { ...settled.event, tool: { ...settled.event.tool, input: accepted } },
           state: Object.freeze({ ...settled.state, candidate: typedCandidate }),
-        } as ToolBeforeResult<Arguments, Result, P>;
+        } as ToolBeforeResult;
       } catch (cause) {
         throw new SettlementDecodeError("Caller settlement decoding failed", settled.acceptedResponses, settled.state, { cause });
       }
@@ -1351,32 +1314,11 @@ export class Hooks {
   }
 }
 
-// Return independent copies of prepared or synthesized payloads. Never read an
-// unselected producer stream solely to construct a result.
-async function resultEvent(
-  value: any,
-  manager: ContentManager,
-  localSources = new Set<ReadableStream<Uint8Array>>(),
-): Promise<any> {
-  const prepared = await Promise.all(localParts(value).map(async ({ part, path }) => {
-    const body = part?.body;
-    const stream = body instanceof ContentSource ? body.stream : body;
-    if (!(stream instanceof ReadableStream)) return { path, part };
-    const result = await manager.resultBody(stream, localSources.has(stream));
-    const copy = { ...part };
-    if (result) copy.body = result;
-    else { delete copy.body; copy.selection = "metadata"; }
-    return { path, part: copy };
-  }));
-  const byPath = new Map(prepared.map(({ path, part }) => [JSON.stringify(path), part]));
-  return mapParts(value, (part, path) => byPath.get(JSON.stringify(path)) ?? part);
-}
-
 function cloneInput(value: any): any {
   return mapParts(value, (part) => {
     if (part === null || typeof part !== "object") return part;
     const copy = { ...part };
-    if (copy.body instanceof ContentSource) copy.body = copy.body.stream;
+
     return copy;
   });
 }
@@ -1496,10 +1438,10 @@ function cancellationCode(
 
 // Causes remain separate from delivery stage and never retain raw endpoint data.
 const diagnosticCauses = new WeakMap<
-  DeliveryError,
+  DeliveryFailure,
   DeliveryDiagnostic["code"]
 >();
-function deliveryDiagnostic(error: DeliveryError): DeliveryDiagnostic {
+function deliveryDiagnostic(error: DeliveryFailure): DeliveryDiagnostic {
   return { ...error, code: diagnosticCauses.get(error) ?? "transport" };
 }
 function classifyDiagnostic(
@@ -1542,11 +1484,8 @@ function bindContentSources(
 ): void {
   const used = new Set<string>();
   for (const binding of bindings ?? []) {
-    const source =
-      binding.source instanceof ContentSource
-        ? binding.source.stream
-        : binding.source;
-    if (!(source instanceof ReadableStream))
+    const source = binding.source;
+    if (!(source instanceof Attachment))
       throw new TypeError("Expected an owned content source");
     const path = binding.path;
     const allowed = isPartPath(type, path);

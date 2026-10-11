@@ -9,7 +9,7 @@ const text = id => ({ id, kind: 'text', mediaType: 'text/plain', selection: 'bod
 const message = id => ({ id, role: 'user', parts: [text(id + '.text')] });
 const context = () => ({ ...envelope('context.compact.before'), items: [], instructions: [text('old')], trigger: 'manual' });
 const model = () => ({ ...envelope('model.request.before'), call: { id: 'call' }, model: { id: 'model', provider: 'test' }, attempt: { id: 'attempt', number: 1 }, params: {}, items: [] });
-const options = { readContent: async () => { throw new Error('Unexpected attachment read'); } };
+const options = {};
 
 test('originating event selects text and message return contracts', async () => {
   const caps = { effects: ['return'] };

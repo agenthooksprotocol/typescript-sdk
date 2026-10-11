@@ -271,11 +271,11 @@ export async function send(endpoint, path, payload, config, token) {
     try {
       const { type, source, ...input } = event;
       const result = await client.dispatch(type, input);
-      const errors = [...result.errors, ...(await result.observations)];
+      const errors = result.diagnostics;
       if (errors.length)
         throw Object.assign(Error("SDK delivery failed"), { errors });
       if (observe) return null;
-      return { jsonrpc: "2.0", id: payload.id, result: result.response };
+      return result.acceptedResponses[0];
     } finally {
       await client.close();
     }

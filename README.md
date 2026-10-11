@@ -2,7 +2,7 @@
 
 TypeScript models, JSON codecs, and runtime utilities for the [Agent Hooks Protocol (AHP)](https://github.com/agenthooksprotocol/agent-hooks-protocol).
 
-The generated schema API follows the current AHP `draft` snapshot. The `/client` entrypoint provides the configuration-driven `Hooks` API for harness integrations. The root entrypoint provides the deny/no-effect `tool.before` runner; the draft entrypoint provides canonical validation and reference boundary helpers. Node.js 20 or newer is required.
+The generated schema API follows the current AHP `draft` snapshot. The `/client` entrypoint provides the configuration-driven `Hooks` API for harness integrations. The root entrypoint provides JSON admission, NDJSON framing, operational errors, and independent runtime helpers; the draft entrypoint provides canonical validation and reference boundary helpers. Node.js 20 or newer is required.
 
 ## Installation
 
@@ -35,7 +35,7 @@ console.log(result.value.effects);
 const encoded = encodeCapabilities(result.value);
 ```
 
-Every public AHP schema has a generated TypeScript type plus `parse<Type>` and `encode<Type>` functions. Successful parse results include the typed value, preserved raw JSON, and compatibility diagnostics.
+Every public AHP schema has a generated TypeScript type plus `parse<Type>` and `encode<Type>` functions. Successful parse results include the typed value, preserved raw JSON, and structural diagnostics.
 
 ## Intercept a tool call with `Hooks`
 
@@ -105,7 +105,7 @@ try {
   );
 
   for (const diagnostic of result.diagnostics) console.error(diagnostic);
-  const denied = result.permission === Permission.Deny;
+  const denied = result.state.permission === Permission.Deny;
   if (result.interrupted || denied) {
     throw new Error("File read interrupted or denied by hooks");
   }
@@ -120,7 +120,7 @@ try {
 
 `source` and `capabilities` belong to the constructor. `initialState` is an optional
 per-boundary snapshot, not a constructor option. No separate `await hooks.initialized`
-is required. Boundary calls return protocol effects and delivery errors; `Hooks`
+is required. Boundary calls return typed settlement, residual actions, and delivery diagnostics; `Hooks`
 does not execute or authorize host operations. Keep a client for the harness lifetime
 and close it in `finally`.
 
@@ -129,17 +129,25 @@ pending state, including `permission` and `candidate`. It reflects accepted
 composition and initial state without requiring callers to fold effects. Always
 check `result.interrupted` before execution; interruption does not authorize work.
 
-`result.permission` reads that canonical settled permission; `none` is not approval,
-`ask` requires host approval, and an interrupted result is not executable. For tool
-boundaries, `result.input` exposes accepted arguments as `unknown`; validate them
-against the host's tool schema. `result.event` and `result.response` expose the effective event and protocol response.
+`result.state.permission` is the canonical settled permission; `none` is not approval
+and `ask` requires host approval. For tool boundaries, `result.event.tool.input`
+contains accepted arguments. Caller contracts infer their application type; without
+an arguments contract, validate them against the host's tool schema.
+
+`result.event` is the authoritative decoded canonical event and `result.effects`
+contains residual typed actions for the harness to enact. Use `event` for edits
+and `state.candidate` for returns; do not replay them from receiver evidence.
+`result.acceptedResponses` contains complete decoded receiver envelopes in acceptance order, including
+omitted fields, opaque extras, and injection delivery timing. Invalid responses
+publish no edits or effects; prior accepted responses remain available. Do not
+replay responses to reconstruct `result.event` or `result.state`.
 
 ### Operation and resource ownership
 
 Awaiting a boundary also waits for its selected, bounded observation deliveries.
 Observations cannot change the settled decision. `result.diagnostics` includes both
-interception and observation delivery failures; the `observations`
-promise is already settled when the boundary returns. To run a call concurrently,
+interception and observation delivery evidence. Filter by `phase` to select
+preparation, interception, or observation diagnostics. To run a call concurrently,
 retain its promise in the harness. Do not execute a gated operation before that
 promise settles and its permission, interruption, and host-validation gates pass.
 
@@ -227,43 +235,10 @@ Effect grants and elicitation `form`/`url` grants must also be explicit.
 
 `ReadFileArguments` checks the host's original arguments at compile time. The SDK
 models tool input as structural JSON, not as a tool-specific generic schema. If you
-grant `modify`, validate the effective `result.input` against your own
+grant `modify`, validate the effective `result.event.tool.input` against your own
 tool schema before executing it; do not cast it back to `ReadFileArguments` or use
 the original arguments as though a rewrite had not occurred. The host is responsible
 for tool-specific runtime validation and for enacting any other granted effects.
-
-## `ToolBeforeRunner`
-
-```ts
-import { ToolBeforeRunner } from "agenthooksprotocol";
-
-const runner = new ToolBeforeRunner();
-const unregister = runner.register({
-  command: "/path/to/hook-backend",
-  args: [],
-  timeoutMs: 2_000,
-  failurePolicy: "fail-closed",
-  lifecycle: "persistent",
-});
-
-const outcome = await runner.intercept({
-  source: "https://example.com/agent",
-  session: {},
-  tool: {
-    name: "write_file",
-    kind: "file_write",
-    input: { path: "README.md", content: "example" },
-  },
-});
-
-if (outcome.decision === "deny") {
-  console.error(outcome.denial?.reason);
-}
-
-unregister();
-```
-
-Backends use UTF-8 NDJSON over stdin and stdout. Commands and argument arrays are passed directly to `spawn` without a shell. Both per-event and persistent process lifecycles are supported.
 
 ## Serve hooks over stdio (Node.js)
 
@@ -319,7 +294,7 @@ const result = await hooks.toolBefore({
   callId: "call-1", name: "read", path: "native", origin: "native",
   input: argumentsValue,
 }, { contracts: { arguments: argumentsContract, result: resultContract } });
-const count: number = result.input.count;
+const count: number = result.event.tool.input.count;
 if (result.state.candidate !== null) {
   const answer: string = result.state.candidate.value.answer;
 }
@@ -329,7 +304,8 @@ const answer = approval.decode({ action: "accept", content: { approved: true } }
 ```
 
 `ToolBeforeInput<Arguments>` and `ToolBeforeResult<Arguments, Result, Provenance>`
-name these typed boundary values. Canonical wire models and structural codecs
+name these typed boundary values. Supplied codecs determine caller-owned output
+types; slots without a codec are `unknown`. Canonical wire models and structural codecs
 remain available from `/draft` and `/generated`.
 
 ### Advanced delivery APIs
@@ -352,7 +328,7 @@ handling validates envelopes, not application contracts or boundary admission.
 ## Packages
 
 - `agenthooksprotocol/client` — configuration-driven harness client, typed event boundaries, and HTTP/stdio delivery
-- `agenthooksprotocol` — hook runner, stdio transport, runtime types, and operational errors
+- `agenthooksprotocol` — JSON admission, NDJSON framing, operational errors, and independent runtime helpers
 - `agenthooksprotocol/generated` — schema-derived models and structural codecs
 - `agenthooksprotocol/draft` — canonical draft validators, generated models, and reference boundary helpers
 - `@agenthooksprotocol/testing` — configurable fake backend for integration tests
@@ -382,8 +358,7 @@ The current draft contracts live in `packages/sdk/src/draft/`. The advanced `/ge
 
 `agenthooksprotocol/draft` exposes generated models and codecs for the full
 canonical draft catalogue, schema-backed validators, content-upload helpers, and
-synthetic boundary evaluators. `ToolBeforeRunner` supports only the deny/no-effect
-`tool.before` slice. The draft API is not a complete production adapter.
+synthetic boundary evaluators. Use `/client` for canonical consumer boundaries. The draft API is not a complete production adapter.
 See the [draft API guide](packages/sdk/DRAFT-API.md) for entrypoints and limits.
 
 The protocol authority is the sibling repository's
@@ -427,7 +402,7 @@ const result = await hooks.turnStart({
   }],
 });
 try {
-  if (result.interrupted || result.permission === "deny") throw new Error("Turn not permitted");
+  if (result.interrupted || result.state.permission === "deny") throw new Error("Turn not permitted");
   await hooks.close();
   const bytes = await result.content?.read("document");
 } finally {
@@ -439,7 +414,7 @@ try {
 opens at most once on byte demand; `open` returns a `Uint8Array` or its promise and
 must honor its abort signal. The optional asynchronous `dispose` releases producer
 resources, including unopened sources, and must finish promptly.
-`Attachment.fromStream(stream)` takes read/cancel ownership of a native stream.
+`Attachment.stream(stream)` takes read/cancel ownership of a native stream.
 Apply producer-side bounds when loading files: `maxContentBytes` bounds retained
 SDK bytes, not allocations inside a caller's loader.
 
@@ -467,8 +442,8 @@ to a boundary, let `result.content` manage cleanup. Explicit IDs must be
 unambiguous; omitted message and part IDs receive synthesized canonical identities.
 
 A successful non-interrupted result retains the actual owners, including unread
-sources, independently of `Hooks.close()`. `result.event` attachment bodies refer
-to those same owners. `result.content.ids` indexes local attachment IDs, and
+sources, independently of `Hooks.close()`. The canonical `result.event` selects
+metadata for local attachment bodies; `result.content` holds their owners. `result.content.ids` indexes local attachment IDs, and
 `read(id, signal?)` checks metadata and returns a fresh byte copy. Always await
 `result.content.close()` in `finally`, even when no bytes are read. Interrupted or
 thrown calls clean up sources instead of transferring usable owners. Remote refs

@@ -158,7 +158,7 @@ test('Hooks form requests serialize as generated inline text and admit typed for
   const hooks = formHooks([[returned(value)]], seen);
   try {
     const settled = await hooks.userElicitationRequest(formFacts(f), { contracts: { result: f.codec } });
-    assert.deepEqual(settled.errors, []);
+    assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
     assert.deepEqual(settled.state.candidate.value, value);
     assert.deepEqual(JSON.parse(seen[0].params.event.elicitation.request.text), f.request('Answer?'));
     assert.deepEqual(settled.event.elicitation.request.text, JSON.stringify(f.request('Answer?')));
@@ -181,7 +181,7 @@ for (const [label, invalid] of [
   const hooks = formHooks([[returned(accepted)], [returned(invalid)], []], seen);
   try {
     const settled = await hooks.userElicitationRequest(formFacts(f), { contracts: { result: f.codec } });
-    assert.equal(settled.errors.length, 1);
+    assert.equal(settled.diagnostics.filter(d => d.phase !== "observation").length, 1);
     assert.equal(seen.length, 3);
     assert.deepEqual(settled.state.candidate.value, accepted);
     assert.deepEqual(seen[2].params.state.candidate.value, accepted);

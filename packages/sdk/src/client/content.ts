@@ -7,40 +7,21 @@ import {
   type ContentUploadReceipt,
 } from "../draft/raw.js";
 
-/** Compatibility adapter for a native lazy stream. The stream is consumed by
- * its attachment owner, not staged in an invocation store. */
-export class ContentSource {
-  readonly #stream: ReadableStream<Uint8Array>;
-  constructor(stream: ReadableStream<Uint8Array>) {
-    if (!(stream instanceof ReadableStream))
-      throw new Error("Content source requires a native ReadableStream");
-    this.#stream = stream;
-  }
-  get stream(): ReadableStream<Uint8Array> { return this.#stream; }
-}
-
 type ContentMetadata = { size?: number | bigint | undefined; sha256?: string | undefined };
 type Snapshot = { bytes: Uint8Array; size: number; sha256: string };
 type Budget = { used: number; limit: number };
 type Loader = (signal: AbortSignal, reserve: (bytes: number) => void) => Promise<Uint8Array>;
-// This is only an identity index for legacy native streams, never a byte store.
-const streamOwners = new WeakMap<ReadableStream<Uint8Array>, Attachment>();
-const retainedOwners = new WeakSet<Attachment>();
 let ownerAccess: {
   claim(owner: Attachment, invocation: object, budget: Budget): void;
   snapshot(owner: Attachment, signal?: AbortSignal): Promise<Snapshot>;
-  peek(owner: Attachment): Promise<Snapshot> | undefined;
-  settled(owner: Attachment): boolean;
   retain(owner: Attachment): () => Promise<void>;
-  adapt(stream: ReadableStream<Uint8Array>): Attachment;
 };
 
 /** Sole backing owner for immutable bytes or an unread lazy source. Metadata
  * stays on content items. A handle may be shared within, but not across, calls. */
-export class Attachment extends ContentSource {
+export class Attachment {
   #load: Loader | undefined;
   #snapshot: Promise<Snapshot> | undefined;
-  #settled = false;
   #lifetime = new AbortController();
   #invocation: object | undefined;
   #budget: Budget = { used: 0, limit: 64 * 1024 * 1024 };
@@ -51,22 +32,9 @@ export class Attachment extends ContentSource {
   #primaryRelease: Promise<void> | undefined;
   #leases = 1;
 
-  private constructor(load: Loader, dispose: () => void | Promise<void>, retained = true) {
-    let owner: Attachment;
-    super(new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        try {
-          controller.enqueue(await owner.read());
-          controller.close();
-        } catch (error) { controller.error(error); }
-      },
-      cancel() { return owner.close(); },
-    }, { highWaterMark: 0 }));
-    owner = this;
+  private constructor(load: Loader, dispose: () => void | Promise<void>) {
     this.#load = load;
     this.#dispose = dispose;
-    streamOwners.set(this.stream, this);
-    if (retained) retainedOwners.add(this);
   }
 
   static {
@@ -83,9 +51,6 @@ export class Attachment extends ContentSource {
         }
       },
       snapshot: (owner, signal) => owner.#materialize(signal),
-      peek: (owner) => owner.#snapshot,
-      settled: (owner) => owner.#settled,
-      adapt: (stream) => Attachment.#fromStream(stream),
       retain(owner) {
         owner.#lifetime.signal.throwIfAborted();
         owner.#leases++;
@@ -121,18 +86,10 @@ export class Attachment extends ContentSource {
     }, dispose);
   }
 
-  /** Adapt a native source without a second snapshot cache. */
-  static fromStream(stream: ReadableStream<Uint8Array>): Attachment {
+  /** Explicitly own a lazy native source. The source is consumed at most once. */
+  static stream(stream: ReadableStream<Uint8Array>): Attachment {
     if (!(stream instanceof ReadableStream))
       throw new TypeError("Attachment source requires a native ReadableStream");
-    const owner = Attachment.#fromStream(stream);
-    retainedOwners.add(owner);
-    return owner;
-  }
-
-  static #fromStream(stream: ReadableStream<Uint8Array>): Attachment {
-    const existing = streamOwners.get(stream);
-    if (existing) return existing;
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     const owner = new Attachment(async (signal, reserve) => {
       reader = stream.getReader();
@@ -164,8 +121,7 @@ export class Attachment extends ContentSource {
       // Request cancellation without awaiting producer cleanup, which may never settle.
       if (reader) void reader.cancel().catch(() => {});
       else if (!stream.locked) void stream.cancel().catch(() => {});
-    }, false);
-    streamOwners.set(stream, owner);
+    });
     return owner;
   }
 
@@ -204,7 +160,7 @@ export class Attachment extends ContentSource {
           this.#reserved = 0;
           throw error;
         } finally {
-          try { await this.#cleanup(); } finally { this.#settled = true; }
+          await this.#cleanup();
         }
       })();
     }
@@ -241,9 +197,8 @@ export class AttachmentContent {
   private closed: Promise<void> | undefined;
   constructor(event: unknown) {
     for (const { part: value, path } of localParts(event)) {
-      const stream = sourceStream(value?.body);
-      if (!stream) continue;
-      const owner = ownerAccess.adapt(stream);
+      const owner = attachmentOwner(value?.body);
+      if (!owner) continue;
       const id = typeof value.id === "string" ? value.id : "/" + path.join("/");
       const previous = this.bodies.get(id);
       if (previous && (previous.owner !== owner || previous.size !== value.size || previous.sha256 !== value.sha256))
@@ -271,21 +226,8 @@ export class AttachmentContent {
   }
 }
 
-function sourceStream(value: unknown): ReadableStream<Uint8Array> | undefined {
-  if (value instanceof ContentSource) return value.stream;
-  return value instanceof ReadableStream ? value : undefined;
-}
-
-/** Producer content is metadata with an owned source or raw stream in `body`. */
-export interface StreamContentItem {
-  id: string;
-  kind: string;
-  mediaType: string;
-  body: ContentSource | ReadableStream<Uint8Array>;
-  category?: string;
-  size?: number;
-  sha256?: string;
-  [key: string]: unknown;
+function attachmentOwner(value: unknown): Attachment | undefined {
+  return value instanceof Attachment ? value : undefined;
 }
 
 /** Authenticate this upload independently, including discovery when auth is absent.
@@ -402,14 +344,14 @@ export class ContentManager {
 
   /** @internal Existing selected attachment references may reorder, never create bytes. */
   restoreAttachment(part: any, original: any, selected: any): any {
-    if (part?.kind !== "attachment" || sourceStream(part.body) || part.body === undefined) return part;
+    if (part?.kind !== "attachment" || attachmentOwner(part.body) || part.body === undefined) return part;
     const visible = localParts(selected).find(({ part: candidate }) => candidate?.kind === "attachment" && candidate.id === part.id)?.part;
     const local = localParts(original).find(({ part: candidate }) => candidate?.kind === "attachment" && candidate.id === part.id)?.part;
-    const stream = sourceStream(local?.body);
-    if (!stream || visible?.selection !== "body" || typeof visible.body?.ref !== "string" ||
+    const owner = attachmentOwner(local?.body);
+    if (!owner || visible?.selection !== "body" || typeof visible.body?.ref !== "string" ||
         part.body?.ref !== visible.body.ref || part.mediaType !== visible.mediaType || part.category !== visible.category)
       throw new Error("Effects cannot create or substitute binary attachment content");
-    return { ...part, body: stream };
+    return { ...part, body: owner };
   }
 
 
@@ -437,14 +379,11 @@ export class ContentManager {
       if (value === null || typeof value !== "object" || visited.has(value))
         return;
       visited.add(value);
-      const stream = sourceStream(value);
-      if (stream) {
-        const existing = streamOwners.get(stream);
-        const owner = ownerAccess.adapt(stream);
+      const owner = attachmentOwner(value);
+      if (owner) {
         try { ownerAccess.claim(owner, this.ownership, this.budget); }
         catch { conflict = true; return; }
-        // Explicit Attachment sources opt into retained result ownership.
-        if (existing && retainedOwners.has(existing)) this.hasAttachments = true;
+        this.hasAttachments = true;
         this.attachments.add(owner);
         return;
       }
@@ -459,17 +398,17 @@ export class ContentManager {
    * A waiter can cancel its own read without retiring another consumer's source.
    */
   async readBody(
-    body: ContentSource | ReadableStream<Uint8Array>,
+    body: Attachment,
     signal?: AbortSignal,
     metadata: ContentMetadata = {},
   ): Promise<Uint8Array> {
     this.lifetime.signal.throwIfAborted();
     this.own(body);
     signal?.throwIfAborted();
-    const stream = sourceStream(body);
-    if (!stream)
+    const owner = attachmentOwner(body);
+    if (!owner)
       throw new Error(
-        "Content body must be a ContentSource or raw ReadableStream",
+        "Content body must be an Attachment",
       );
     const controller = new AbortController();
     const abort = () =>
@@ -479,7 +418,7 @@ export class ContentManager {
     if (signal?.aborted || this.lifetime.signal.aborted) abort();
     try {
       const snapshot = await abortable(
-        this.snapshot(stream, controller.signal),
+        this.snapshot(owner, controller.signal),
         controller.signal,
       );
       controller.signal.throwIfAborted();
@@ -516,7 +455,7 @@ export class ContentManager {
         typeof value.kind === "string" &&
         typeof value.mediaType === "string"
       ) {
-        const stream = sourceStream(value.body);
+        const owner = attachmentOwner(value.body);
         const category =
           value.kind === "reasoning"
             ? "reasoning"
@@ -541,14 +480,13 @@ export class ContentManager {
           result.gap = await visit(value.gap, [...path, "gap"]);
           return result;
         }
-        if (!stream)
+        if (!owner)
           throw new Error(
-            "Body selection requires a ContentSource or raw ReadableStream, not a receiver reference",
+            "Body selection requires an Attachment, not a receiver reference",
           );
         if (!upload)
           throw new Error("Body selection requires upload configuration");
         this.validateUpload(upload);
-        const owner = ownerAccess.adapt(stream);
         let scope = this.receipts.get(receiver);
         if (!scope) { scope = new Map(); this.receipts.set(receiver, scope); }
         let receipt = scope.get(owner);
@@ -646,36 +584,12 @@ export class ContentManager {
   }
 
   /** @internal A protocol correlation lease shares the same owner, never bytes. */
-  async retainBody(body: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<{
+  async retainBody(body: Attachment, signal: AbortSignal): Promise<{
     owner: Attachment; size: number; release: () => Promise<void>;
   }> {
-    const owner = ownerAccess.adapt(body);
+    const owner = body;
     const snapshot = await ownerAccess.snapshot(owner, signal);
     return { owner, size: snapshot.size, release: ownerAccess.retain(owner) };
-  }
-
-  /** @internal Project compatibility results, or preserve the actual owner. */
-  async resultBody(body: ReadableStream<Uint8Array>, synthesized: boolean): Promise<Attachment | ReadableStream<Uint8Array> | undefined> {
-    const owner = ownerAccess.adapt(body);
-    if (this.hasAttachments) return owner;
-    const pending = ownerAccess.peek(owner);
-    // A cancelled/timed-out upload waiter cannot make result construction wait
-    // on unfinished legacy producer work. Unretained sources close with the call.
-    if (!synthesized && (!pending || !ownerAccess.settled(owner))) return undefined;
-    try {
-      if (synthesized) await ownerAccess.snapshot(owner);
-      else await pending;
-    } catch { return undefined; }
-    // Legacy callers receive a lazy view of this same owner, not a queued copy.
-    const release = ownerAccess.retain(owner);
-    return new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        try { controller.enqueue(await owner.read()); controller.close(); }
-        catch (error) { controller.error(error); }
-        finally { await release(); }
-      },
-      cancel() { return release(); },
-    }, { highWaterMark: 0 });
   }
 
   /** @internal Invocation-scoped borrow of an active protocol exchange. */
@@ -707,8 +621,8 @@ export class ContentManager {
     runtimeInteger(upload.timeoutMs, 1);
   }
 
-  private snapshot(stream: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<Snapshot> {
-    return ownerAccess.snapshot(ownerAccess.adapt(stream), signal);
+  private snapshot(owner: Attachment, signal: AbortSignal): Promise<Snapshot> {
+    return ownerAccess.snapshot(owner, signal);
   }
 }
 

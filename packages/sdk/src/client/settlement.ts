@@ -1,7 +1,7 @@
 import { parseEvent, parseInterceptRequest, responseForRequest } from "../draft/raw.js";
 import type { Event, EventType, InterceptRequest, InterceptResponse } from "../draft/raw.js";
 import { mapParts } from "./content-paths.js";
-import { ContentSource } from "./content.js";
+import { Attachment } from "./content.js";
 import { validateWire } from "./validation.js";
 
 
@@ -20,14 +20,14 @@ export class SettlementDecodeError extends Error {
 }
 
 /** Decode a schema-owned settlement without reading or uploading local bodies.
- * Local body ownership remains on `event`/`content`; the canonical view selects
+ * Local body ownership remains on `content`; the canonical event selects
  * metadata for those bodies. Unknown JSON fields are decoded losslessly. */
 export function decodeSettledEvent<K extends EventType>(event: unknown): Extract<Event, { type: K }> {
   const metadata = mapParts(event, part => {
     if (part === null || typeof part !== "object") return part;
-    if (part.kind === "text" && typeof part.text === "string" && part.selection === undefined)
-      return { ...part, selection: "body" };
-    if (!(part.body instanceof ReadableStream) && !(part.body instanceof ContentSource)) return part;
+    if (!(part.body instanceof Attachment)) return part;
+    if (part.selection !== "body")
+      throw new SettlementDecodeError("Local attachment bodies require canonical body selection");
     const { body: _, ...rest } = part;
     return { ...rest, selection: "metadata" };
   });
@@ -40,13 +40,14 @@ export function decodeSettledEvent<K extends EventType>(event: unknown): Extract
     jsonrpc: "2.0", method: "hooks/observe",
     params: { protocolVersion: "draft", event: metadata },
   }).length) throw new SettlementDecodeError("Invalid decoded settlement event");
-  if (hasNative) decoded.value.native = native;
-  return decoded.value as Extract<Event, { type: K }>;
+  const eventSnapshot = structuredClone(decoded.value);
+  if (hasNative) eventSnapshot.native = native;
+  return eventSnapshot as Extract<Event, { type: K }>;
 }
 
 /** Validate origin-correlated pending state before atomic publication. */
 export function decodeSettledState(event: Event, value: InterceptRequest["params"]["state"]) {
-  const state = value ?? { candidate: null, permission: "none" };
+  const state = value === undefined ? { candidate: null, permission: "none" } : value;
   // Observation-only events have no intercept-request variant. Decode their
   // generic ToolState through a neutral, schema-owned context, not a fabricated
   // intercept delivery for the originating observation.

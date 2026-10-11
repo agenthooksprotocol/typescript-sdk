@@ -342,7 +342,6 @@ export {
   contentItemSchemaRevision,
   contentReferenceSchemaRevision,
   contentSelectionSchemaRevision,
-  contentSlots,
   contentUploadReceiptSchemaRevision,
   contentUploadSchemaRevision,
   denyEffectSchemaRevision,

@@ -23,7 +23,12 @@ the filtered codecs for those same current draft contracts; it is not a separate
 wire version.
 
 See the [SDK documentation and examples](https://github.com/agenthooksprotocol/typescript-sdk#readme)
-for all entrypoints and integration guidance. The testing and conformance
+for all entrypoints and integration guidance. Consumer results expose one typed
+`event`, settled `state`, residual `effects`, complete `acceptedResponses`, and
+structured `diagnostics`. Use `event` for settled edits and `state.candidate` for
+returns; `effects` contains only the remaining actions to enact. Full receiver
+effects remain in `acceptedResponses`. Local attachment bytes are read through `result.content`;
+callers close that content owner explicitly. The testing and conformance
 workspace packages are not published.
 
 ## Typed caller contracts
@@ -45,7 +50,7 @@ const result = await hooks.toolBefore({
   callId: "call-1", name: "read", path: "native", origin: "native",
   input: argumentsValue,
 }, { contracts: { arguments: argumentsContract, result: resultContract } });
-const count: number = result.input.count;
+const count: number = result.event.tool.input.count;
 if (result.state.candidate !== null) {
   const answer: string = result.state.candidate.value.answer;
 }
@@ -55,7 +60,8 @@ const answer = approval.decode({ action: "accept", content: { approved: true } }
 ```
 
 `ToolBeforeInput<Arguments>` and `ToolBeforeResult<Arguments, Result, Provenance>`
-name these typed boundary values. Canonical wire models and structural codecs
+name these typed boundary values. Supplied codecs determine caller-owned output
+types; slots without a codec are `unknown`. Canonical wire models and structural codecs
 remain available from `/draft` and `/generated`.
 
 ### Advanced delivery APIs
@@ -75,11 +81,7 @@ caller-supplied fetch adapter. The adapter owns network policy and authenticatio
 close the transport to release its processes and pending requests. Transport
 handling validates envelopes, not application contracts or boundary admission.
 
-## License
-
-Apache-2.0. See [LICENSE](LICENSE).
-
-### Structural decoding and effect-family queries
+## Structural decoding and effect-family queries
 
 Use `draftCodecs.parseInterceptRequest(input)` (and the other generated `parse*`
 functions) from `agenthooksprotocol/draft` for runtime structural decoding of JSON
@@ -87,8 +89,8 @@ text or JSON-compatible objects. A type assertion or native `JSON.parse` alone
 is **not** an SDK decoding boundary. The parser checks the original composed
 schema descriptor once; it does not reconstruct and revalidate each child model.
 Its discriminated `ParseResult` retains diagnostics, raw JSON, extension fields,
-and compatibility warnings, including unknown event variants and open enums.
-This is structural compatibility validation, not complete canonical validation
+and structural warnings, including unknown event variants and open enums.
+Structural decoding preserves unknown data without granting it semantics; it is not complete canonical validation
 or contextual admission. The draft `validate*` APIs additionally apply canonical
 JSON Schema validation and have a different, narrower result shape.
 
@@ -109,12 +111,15 @@ mode, per-call, target, operation, or execution permission.
 Missing state candidates and candidates with missing `value` are rejected.
 `candidate: null` means no candidate; `{value: null}`, `{value: 0}`, and
 `{value: false}` remain distinct present candidates. Integer schema positions
-require JavaScript safe integers. Arbitrary JSON numbers use finite IEEE-754
-JavaScript numbers: numeric token spelling and integers above the safe range
-cannot be preserved exactly by JavaScript JSON parsing. Non-finite values are
-rejected. Use strings for application-owned exact large numeric identifiers.
+accept safe JavaScript integers and `bigint`. SDK JSON codecs preserve integer
+tokens outside the safe range as `bigint`; native `JSON.parse` does not. Non-finite
+numbers are rejected. Use SDK encoders to serialize lossless integer values.
 
 Object-input parsing requires plain JSON data. Class instances, sparse arrays,
 cycles, accessors, and non-JSON properties are rejected. Generated model aliases
 are static types; constructors and helpers do not claim runtime validation or
 authorization. Native untyped decoding is outside this contract.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).

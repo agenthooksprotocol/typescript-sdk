@@ -1,4 +1,4 @@
-import type { EventType, ContentItem, AttachmentBodyPart } from "../draft/raw.js";
+import type { EventType, ContentItem } from "../draft/raw.js";
 
 // Canonical schema-owned part locations. Application payloads are opaque.
 const contentPaths: Partial<Record<EventType, readonly (readonly string[])[]>> = {
@@ -70,11 +70,7 @@ export function isPartPath(type: string, path: readonly (string | number)[]): bo
   return pathsFor(type).some(pattern => pattern.length === path.length && pattern.every((key, i) =>
     key === "*" ? typeof path[i] === "number" && Number.isSafeInteger(path[i]) && Number(path[i]) >= 0 : key === path[i]));
 }
-// Wire leaves and the legacy host-owned stream leaf share the same schema slot.
-// Neither an attachment reference nor its stream is traversed or cloned here.
-type LocalPart = ContentItem | (Omit<AttachmentBodyPart, "body"> & {
-  body: ReadableStream<Uint8Array>;
-});
+type LocalPart = ContentItem;
 type Path = (string | number)[];
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);

@@ -239,8 +239,8 @@ test(
         assert.equal(result.event.source, options.source);
         assert.ok(result.event.id);
         assert.ok(Number.isFinite(Date.parse(result.event.time)));
-        assert.deepEqual(result.response.result.effects, []);
-        assert.deepEqual(result.errors, []);
+        assert.deepEqual(result.effects, []);
+        assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
         assert.equal(result.interrupted, false);
         assert.deepEqual(
           input,
@@ -359,8 +359,8 @@ for (const lifecycle of ["persistent", "per_event"]) {
         const one = await hooks.dispatch("tool.before", structuredClone(tool));
         const two = await hooks.dispatch("tool.before", structuredClone(tool));
         for (const result of [one, two]) {
-          assert.deepEqual(result.errors, []);
-          assert.deepEqual(result.response.result.effects, [
+          assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+          assert.deepEqual(result.effects, [
             { type: "message", text: "accepted" },
           ]);
         }

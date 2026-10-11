@@ -87,8 +87,8 @@ test("named boundaries project generated flattened host facts into canonical wir
     assert.equal(event.type, "tool.before");
     assert.equal("callId" in event, false);
     assert.equal("name" in event, false);
-    assert.equal(result.permission, Permission.Allow);
-    assert.deepEqual(result.input, { path: "accepted" });
+    assert.equal(result.state.permission, Permission.Allow);
+    assert.deepEqual(result.event.tool.input, { path: "accepted" });
     assert.deepEqual(facts.input, { path: "app-owned" });
   } finally {
     await client.close();
@@ -120,7 +120,7 @@ test("generated initial state distinguishes no candidate from a JSON-null candid
     const result = await client.toolBefore(facts, { initialState: supplied });
     assert.deepEqual(wire.params.state, supplied);
     assert.equal(result.state.candidate.value, null);
-    assert.equal(result.permission, Permission.Allow);
+    assert.equal(result.state.permission, Permission.Allow);
   } finally {
     await client.close();
   }
@@ -130,7 +130,7 @@ test("named generated inputs bind lazy sources without manual content paths", as
   let reads = 0,
     cancelled = 0,
     wire;
-  const source = Attachment.fromStream(
+  const source = Attachment.stream(
     new ReadableStream(
       {
         pull() {
@@ -172,7 +172,6 @@ test("named generated inputs bind lazy sources without manual content paths", as
 import {
   capabilities,
   events,
-  contentSlots,
 } from "agenthooksprotocol/client";
 import { createHash } from "node:crypto";
 
@@ -237,7 +236,7 @@ test("generated declarations are immutable, explicit and boundary-compatible", a
 test("named source binding prepares receiver references from descriptors without caller refs", async () => {
   let reads = 0;
   const bytes = new TextEncoder().encode("owned binary\u0000payload");
-  const source = Attachment.fromStream(
+  const source = Attachment.stream(
     new ReadableStream(
       {
         pull(controller) {
@@ -314,7 +313,7 @@ test("named source binding prepares receiver references from descriptors without
   try {
     const result = await client.toolBefore(
       { ...facts, items: [descriptor] },
-      { contentSources: [contentSlots[events.toolBefore].items(0, source)] },
+      { contentSources: [{ path: ["items", 0], source }] },
     );
     assert.deepEqual(result.diagnostics, []);
     assert.equal(reads, 1);
@@ -342,7 +341,7 @@ for (const mode of ["metadata", "omit"])
   test(`named source binding remains unread for ${mode} delivery`, async () => {
     let reads = 0,
       cancelled = 0;
-    const source = Attachment.fromStream(
+    const source = Attachment.stream(
       new ReadableStream(
         {
           pull() {
@@ -391,7 +390,7 @@ for (const mode of ["metadata", "omit"])
             },
           ],
         },
-        { contentSources: [contentSlots[events.toolBefore].items(0, source)] },
+        { contentSources: [{ path: ["items", 0], source }] },
       );
       assert.equal(reads, 0);
       assert.equal(cancelled, 0, "retained result keeps the attachment alive");

@@ -31,8 +31,8 @@ const caps: BoundaryCapabilities = {
     "inject",
   ],
   modify: {
-    input: { operations: ["merge", "replace"] },
-    output: { operations: ["replace"] },
+    input: { merge: true, replace: true },
+    output: { replace: true },
   },
   flow: { operations: ["continue", "stop"], remainingContinuations: 2 },
   inject: { context: { append: true, deliverAt: ["now", "next_turn"] } },
@@ -255,15 +255,15 @@ test("public boundaries settle intercepts before observers with one occurrence i
       path: "native",
       tool: { name: "task", origin: "native", input: { task: 123 } },
     });
-    assert.deepEqual(result.errors, []);
-    assert.deepEqual(await result.observations, []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
     assert.deepEqual(seen, ["first", "second", "observer"]);
     assert.equal(
       JSON.stringify(result.event.tool.input),
       JSON.stringify({ task: 124 }),
     );
     assert.ok(
-      result.response.result.effects.some(
+      result.effects.some(
         (effect) => effect.type === "message",
       ),
     );

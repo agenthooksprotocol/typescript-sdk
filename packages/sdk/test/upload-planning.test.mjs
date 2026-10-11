@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { Hooks, Attachment } from 'agenthooksprotocol/client';
 
-const part = body => ({ kind: 'attachment', mediaType: 'application/octet-stream', body });
+const part = body => ({ kind: 'attachment', mediaType: 'application/octet-stream', selection: 'body', body });
 const input = (...owners) => ({ turn: { id: 'turn' }, trigger: 'user', items: [{ role: 'user', parts: owners.map(part) }] });
 const subscription = (overrides = {}) => ({ mode: 'intercept', events: ['turn.start'], timeoutMs: 1000,
   failurePolicy: 'fail-closed', content: { default: 'body' },
@@ -26,7 +26,6 @@ const receipt = (init, ref = 'https://receipt.test/bytes') => Response.json({ re
 async function settle(t, hooks, event, options) {
   const result = await hooks.turnStart(event, options);
   t.after(() => result.content?.close());
-  await result.observations;
   return result;
 }
 const lazy = (open = () => new Uint8Array([1, 2, 3]), dispose) => Attachment.lazy(open, dispose);
@@ -46,7 +45,7 @@ for (const [label, cap, count] of [['default', undefined, 12], ['configured', 2,
       return reply(JSON.parse(init.body));
     }, cap === undefined ? {} : { maxConcurrentUploads: cap });
     const result = await settle(t, hooks, input(lazy()));
-    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
     assert.equal(calls, count);
     assert.equal(peak, cap ?? 8, 'uploads overlap but never exceed the global cap');
   });
@@ -74,7 +73,7 @@ test('one immutable lazy snapshot fans out to two routes and duplicate parts sha
     const wire = JSON.parse(init.body); wires.push(wire); return reply(wire);
   });
   const result = await settle(t, hooks, input(owner, owner));
-  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(opens, 1);
   assert.equal(uploads, 2);
   assert.equal(wires.length, 2);
@@ -90,7 +89,7 @@ test('subscriptions on the same backend remain distinct receipt destinations', a
     if (String(url).includes('upload.test')) return receipt(init, `https://receipt.test/${++uploads}`);
     const wire = JSON.parse(init.body); refs.push(wire.params.event.items[0].parts[0].body.ref); return reply(wire);
   });
-  assert.deepEqual((await settle(t, hooks, input(lazy()))).errors, []);
+  assert.deepEqual((await settle(t, hooks, input(lazy()))).diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(uploads, 2);
   assert.equal(new Set(refs).size, 2);
 });
@@ -102,7 +101,7 @@ for (const selection of ['metadata', 'omit']) test(`${selection} and unmatched b
     if (String(url).includes('upload.test')) { uploads++; return receipt(init); }
     calls++; return reply(JSON.parse(init.body));
   }, { capabilities: { 'turn.start': { modes: ['intercept'], capabilities: { effects: [] } }, 'tool.before': { effects: [] } } });
-  assert.deepEqual((await settle(t, hooks, input(lazy(() => { opens++; throw Error('no demand'); })))).errors, []);
+  assert.deepEqual((await settle(t, hooks, input(lazy(() => { opens++; throw Error('no demand'); })))).diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(opens, 0); assert.equal(uploads, 0); assert.equal(calls, 1);
 });
 
@@ -120,9 +119,9 @@ for (const failurePolicy of ['fail-open', 'fail-closed']) test(`failed upload is
   const result = await settle(t, hooks, input(lazy()));
   assert.equal(uploads.length, 2);
   assert.deepEqual(calls, ['https://backend0.test/hooks']);
-  assert.equal(result.errors.length, 1);
-  assert.equal(result.errors[0].backendId, 'test.planning.backend1');
-  assert.equal(result.errors[0].syntheticDenial, failurePolicy === 'fail-closed');
+  assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
+  assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0].backendId, 'test.planning.backend1');
+  assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0].syntheticDenial, failurePolicy === 'fail-closed');
 });
 
 test('early denial suppresses later interception and reuses its preuploaded receipt for settled observation', async t => {
@@ -134,7 +133,7 @@ test('early denial suppresses later interception and reuses its preuploaded rece
     return reply(wire, [{ type: 'deny', reason: 'policy' }]);
   });
   const result = await settle(t, hooks, input(lazy()));
-  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(uploads, 2);
   assert.deepEqual(calls.map(x => x.wire.method), ['hooks/intercept', 'hooks/observe']);
   assert.equal(calls[1].url, 'https://backend1.test/hooks');
@@ -155,8 +154,8 @@ test('early denial does not turn an uncalled route upload failure into synthetic
   const result = await settle(t, hooks, input(lazy()));
   assert.equal(uploads, 2);
   assert.deepEqual(calls, ['hooks/intercept']);
-  assert.deepEqual(result.response.result.effects.filter(e => e.type === 'deny'), [{ type: 'deny', reason: 'original policy' }]);
-  assert.ok(result.errors.every(e => !e.syntheticDenial));
+  assert.deepEqual(result.effects.filter(e => e.type === 'deny'), [{ type: 'deny', reason: 'original policy' }]);
+  assert.ok(result.diagnostics.filter(d => d.phase !== "observation").every(e => !e.syntheticDenial));
 });
 
 test('equal upload URLs still authenticate and cache receipts separately per backend', async t => {
@@ -175,7 +174,7 @@ test('equal upload URLs still authenticate and cache receipts separately per bac
     assert.equal(new Headers(init.headers).get('authorization'), null, 'upload identity must not leak into event requests');
     const wire = JSON.parse(init.body); refs.push(wire.params.event.items[0].parts[0].body.ref); return reply(wire);
   }, { auth });
-  assert.deepEqual((await settle(t, hooks, input(lazy()))).errors, []);
+  assert.deepEqual((await settle(t, hooks, input(lazy()))).diagnostics.filter(d => d.phase !== "observation"), []);
   assert.deepEqual(uploads.sort(), ['Bearer test.planning.backend0', 'Bearer test.planning.backend1']);
   assert.equal(authCalls.filter(c => c.purpose === 'upload').length, 2);
   assert.equal(new Set(refs).size, 2);
@@ -193,7 +192,7 @@ test('attachment removal can waste preupload without reintroducing removed conte
     effects: ['modify'], modify: { prompt: { replace: true, merge: false } },
   } } } });
   const result = await settle(t, hooks, input(lazy()));
-  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(uploads, 2);
   assert.equal(wires[1].params.event.items[0].parts[0].kind, 'text');
   assert.equal(result.event.items[0].parts[0].text, 'removed');
@@ -239,7 +238,7 @@ test('no selected destinations leave a lazy source unread until explicit result 
       'turn.start': { effects: [] }, 'tool.before': { effects: [] },
     } });
   const result = await settle(t, hooks, input(lazy(() => { opens++; throw Error('no demand'); }, () => { closes++; })));
-  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(opens, 0); assert.equal(closes, 0);
   await result.content.close();
   assert.equal(closes, 1);
@@ -257,7 +256,7 @@ for (const [key, projection] of [['paths', { path: 'private/file' }], ['toolKind
     event.items[0].parts[0].selection = 'body';
     const result = await hooks.dispatch('turn.start', { ...event, ...projection });
     t.after(() => result.content?.close());
-    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
     assert.equal(opens, 0); assert.equal(calls, 0);
   });
 }
@@ -267,7 +266,7 @@ test('missing filter projections retain authorized routes', async t => {
     if (String(url).includes('upload.test')) { uploads++; return receipt(init); }
     return reply(JSON.parse(init.body));
   });
-  assert.deepEqual((await settle(t, hooks, input(lazy()))).errors, []);
+  assert.deepEqual((await settle(t, hooks, input(lazy()))).diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(uploads, 1);
 });
 
@@ -288,11 +287,11 @@ for (const substitute of [false, true]) test(substitute ? 'effects cannot substi
   const result = await settle(t, hooks, input(lazy(() => new Uint8Array([1])), lazy(() => new Uint8Array([2]))));
   assert.equal(uploads, 4);
   if (substitute) {
-    assert.equal(result.errors.length, 1);
-    assert.equal(result.errors[0].phase, 'interception');
-    assert.equal(result.permission, 'deny');
+    assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
+    assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0].phase, 'interception');
+    assert.equal(result.state.permission, 'deny');
   } else {
-    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
     assert.deepEqual(wires[1].params.event.items[0].parts.map(p => p.id), wires[0].params.event.items[0].parts.map(p => p.id).reverse());
     assert.ok(wires[1].params.event.items[0].parts.every(p => !wires[0].params.event.items[0].parts.some(original => original.body.ref === p.body.ref)));
     assert.deepEqual(await result.content.read(result.event.items[0].parts[0].id), new Uint8Array([2]));
@@ -306,11 +305,11 @@ test('inline text body demand never uploads', async t => {
     assert.equal(wire.params.event.items[0].parts[0].text, 'inline');
     return reply(wire);
   });
-  const result = await settle(t, hooks, { turn: { id: 'turn' }, trigger: 'user', items: [{ role: 'user', parts: [{ kind: 'text', text: 'inline' }] }] });
-  assert.deepEqual(result.errors, []); assert.equal(uploads, 0);
+  const result = await settle(t, hooks, { turn: { id: 'turn' }, trigger: 'user', items: [{ role: 'user', parts: [{ kind: 'text', mediaType: 'text/plain', selection: 'body', text: 'inline' }] }] });
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []); assert.equal(uploads, 0);
 });
 
-test('timed-out raw source preparation settles and releases unfinished source work', { timeout: 2000 }, async t => {
+test('timed-out explicit stream source preparation settles and retains result ownership until close', { timeout: 2000 }, async t => {
   let cancels = 0, uploads = 0;
   const stream = new ReadableStream({
     pull() { return new Promise(() => {}); },
@@ -319,12 +318,14 @@ test('timed-out raw source preparation settles and releases unfinished source wo
   const hooks = client(t, [backend(0, [subscription({ failurePolicy: 'fail-open', upload: { ...subscription().upload, timeoutMs: 20 } })])], async () => {
     uploads++; throw Error('unfinished source must not send');
   });
-  const result = await hooks.dispatch('turn.start', { turn: { id: 'turn' }, trigger: 'user', items: [{ id: 'message', role: 'user', parts: [{ id: 'part', kind: 'attachment', mediaType: 'application/octet-stream', selection: 'body', body: stream }] }] });
-  assert.equal(result.errors.length, 1);
-  assert.equal(result.errors[0].phase, 'preparation');
-  assert.equal(uploads, 0); assert.equal(cancels, 1);
-  assert.equal(stream.locked, false);
+  const result = await hooks.dispatch('turn.start', { turn: { id: 'turn' }, trigger: 'user', items: [{ id: 'message', role: 'user', parts: [{ id: 'part', kind: 'attachment', mediaType: 'application/octet-stream', selection: 'body', body: Attachment.stream(stream) }] }] });
+  assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
+  assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0].phase, 'preparation');
+  assert.equal(uploads, 0); assert.equal(cancels, 0);
   assert.equal(result.event.items[0].parts[0].selection, 'metadata');
+  await result.content.close();
+  assert.equal(cancels, 1);
+  assert.equal(stream.locked, false);
 });
 
 // Yield to the next event-loop turn so all immediately runnable planning work drains.
@@ -352,7 +353,7 @@ for (const cap of [undefined, 2, 12]) {
     assert.equal(active, expectedCap, 'all boundaries together fill, but do not exceed, the cap');
     release();
     const results = await Promise.all(pending);
-    for (const result of results) assert.deepEqual(result.errors, []);
+    for (const result of results) assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
     assert.equal(uploads, 2 * (expectedCap + 1));
     assert.equal(peak, expectedCap);
     assert.equal(active, 0);
@@ -385,7 +386,7 @@ test('a shared upload slot covers materialization through confirmed transfer', {
   assert.equal(uploads, 1);
   assert.equal(opens, 1, 'the slot remains occupied until the transfer confirms');
   confirmTransfer();
-  for (const result of await Promise.all([first, second])) assert.deepEqual(result.errors, []);
+  for (const result of await Promise.all([first, second])) assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(opens, 2); assert.equal(uploads, 2);
 });
 
@@ -425,7 +426,7 @@ for (const cancellation of ['queued', 'active']) {
     assert.equal((await cancelled).interrupted, true);
     release();
     const results = await Promise.all([first, ...healthy]);
-    for (const result of results.slice(cancellation === 'active' ? 1 : 0)) assert.deepEqual(result.errors, []);
+    for (const result of results.slice(cancellation === 'active' ? 1 : 0)) assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
     assert.deepEqual(order, [1, 3, 4], 'cancelled queue entries do not consume a slot or reorder waiters');
     assert.deepEqual(opened, [1, 3, 4]);
     assert.equal(peak, 1); assert.equal(active, 0);

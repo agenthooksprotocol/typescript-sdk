@@ -6,7 +6,7 @@ import {
 } from "agenthooksprotocol/draft";
 const { uploadContent, prepareWireContent, stageBoundary } = reference;
 
-import { Hooks, auth } from "agenthooksprotocol/client";
+import { Hooks, auth, Attachment } from "agenthooksprotocol/client";
 import { hooks, attachments } from "agenthooksprotocol/server";
 
 // Positive deliveries use public boundaries; draft tests below retain malformed
@@ -116,7 +116,8 @@ for (const selection of ["body", "metadata", "omit"] as const) {
                 id: "item",
                 kind: "attachment",
                 mediaType: "application/octet-stream",
-                body: new ReadableStream<Uint8Array>(
+                selection: "body",
+                body: Attachment.stream(new ReadableStream<Uint8Array>(
                   {
                     pull(controller) {
                       reads++;
@@ -125,13 +126,13 @@ for (const selection of ["body", "metadata", "omit"] as const) {
                     },
                   },
                   { highWaterMark: 0 },
-                ),
+                )),
               },
             ] }],
           },
         });
-        assert.deepEqual(result.errors, []);
-        assert.deepEqual(await result.observations, []);
+        assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+        assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
         assert.equal(deliveries, 1);
         assert.equal(uploads, selection === "body" ? 1 : 0);
         assert.equal(reads, selection === "body" ? 1 : 0);
@@ -470,11 +471,11 @@ for (const selection of ["body", "metadata", "omit"] as const) {
       const result = await client.dispatch("user.message.inbound", { message: {
         channel: "chat", sender: "user", messages: [0, 1].map((index) => ({
           id: `message-${index}`, role: "user" as const,
-          parts: [{ id: `text-${index}`, kind: "text" as const, mediaType: "text/plain" as const, text }],
+          parts: [{ id: `text-${index}`, kind: "text" as const, mediaType: "text/plain" as const, selection: "body" as const, text }],
         })),
       } });
-      assert.deepEqual(result.errors, []);
-      assert.deepEqual(await result.observations, []);
+      assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+      assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
       assert.equal(deliveries, 1);
     } finally { await client.close(); }
   });

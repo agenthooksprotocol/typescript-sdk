@@ -1,3 +1,4 @@
+import { Attachment } from "agenthooksprotocol/client";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { composeResponse, composeResponseAsync } from '../dist/src/client/composition.js';
@@ -8,7 +9,7 @@ const envelope = (type) => ({ id: 'event', source: 'urn:test:inline', time: '202
 const response = (...effects) => ({ jsonrpc: '2.0', id: 'request', result: { protocolVersion: 'draft', effects } });
 const edit = (target, operation, value) => ({ type: 'modify', target, operation, value });
 const capabilities = (target) => ({ effects: ['modify'], modify: { [target]: { replace: true, merge: true } } });
-const options = { readContent: async () => { throw new Error('Attachments must not be read'); } };
+const options = {};
 
 for (const [type, target, role] of [
   ['user.message.inbound', 'prompt', 'user'],
@@ -44,11 +45,12 @@ test('model request edits canonical messages, not provider params', () => {
 });
 
 test('attachments are preserved without reading or rewriting binary streams', async () => {
-  const body = new ReadableStream({ pull() { throw new Error('Unexpected binary read'); } });
+  const stream = new ReadableStream({ pull() { throw new Error('Unexpected binary read'); } });
+  const body = Attachment.stream(stream);
   const event = { ...envelope('user.message.inbound'), message: { channel: 'chat', sender: 'user', messages: [{ id: 'binary', role: 'user', parts: [{ id: 'image', kind: 'attachment', mediaType: 'image/png', selection: 'body', body }] }] } };
   const result = await composeResponseAsync(event, [], response(edit('prompt', 'merge', [message('new')])), capabilities('prompt'), options);
   assert.equal(result.event.message.messages[0].parts[0].body, body);
-  assert.equal(body.locked, false);
+  assert.equal(stream.locked, false);
 });
 
 test('a later invalid role rejects the whole response without changing the source', async () => {

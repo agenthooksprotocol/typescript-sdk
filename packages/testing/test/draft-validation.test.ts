@@ -1,4 +1,4 @@
-// Low-level codec/validator compatibility contracts, not positive harness fixtures.
+// Low-level codec/validator contracts, not positive harness fixtures.
 // Public-client integration coverage lives in the transport, atomic, interruption,
 // content and public-fixtures suites.
 import test from "node:test";
@@ -13,7 +13,6 @@ import {
 const { stageResponse } = reference;
 
 import {
-  parseInterceptResponse as parseRootResponse,
   validateElicitationMode,
 } from "agenthooksprotocol";
 import { atomicScenarios } from "../src/interop/atomic-client.js";
@@ -300,35 +299,7 @@ test("extensible registration, authentication, upload and capabilities preserve 
   );
 });
 
-test("root response parser accepts envelope and extension data but rejects unknown deny fields", () => {
-  const deny = {
-    type: "deny",
-    reason: "policy",
-    code: "com.example.denied",
-    extensions: { "com.example.detail": { future: true } },
-  };
-  const wire = {
-    ...response([deny]),
-    futureEnvelope: true,
-    result: { ...response([deny]).result, futureResult: { enabled: true } },
-  };
-  // Wire JSON equality does not depend on decoder object prototypes.
-  assert.deepEqual(structuredClone(parseRootResponse(JSON.stringify(wire), "first")), {
-    protocolVersion: "draft",
-    effects: [deny],
-  });
-  const invalid = {
-    ...wire,
-    result: { ...wire.result, effects: [{ ...deny, ignoredEffect: true }] },
-  };
-  let rejected = false;
-  try {
-    parseRootResponse(JSON.stringify(invalid), "first");
-  } catch {
-    rejected = true;
-  }
-  assert.equal(rejected, true);
-});
+
 test("elicitation capabilities accept unknown fields while validating recognized modes", () => {
   const capabilities = {
     form: { futureOption: true },

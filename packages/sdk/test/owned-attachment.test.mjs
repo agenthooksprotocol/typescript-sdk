@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { Attachment, Hooks } from 'agenthooksprotocol/client';
 
 const type = 'turn.start';
-const item = (body) => ({ id: 'instructions', kind: 'attachment', mediaType: 'application/octet-stream', body });
+const item = (body) => ({ id: 'instructions', kind: 'attachment', mediaType: 'application/octet-stream', selection: 'body', body });
 const input = (body) => ({ trigger: "user", turn: { id: "turn" }, items: [{ id: "message", role: "user", parts: [item(body)] }], session: { id: 'session' } });
 function client(mode, extra = {}) {
   return new Hooks({ protocolVersion: 'draft', hooks: [1, 2].map(n => ({
@@ -53,7 +53,7 @@ test('eager bytes snapshot caller buffers and fan out independent uploads', asyn
     return Response.json({ jsonrpc: '2.0', id: JSON.parse(init.body).id, result: { protocolVersion: 'draft', effects: [] } });
   } });
   const result = await hooks.dispatch(type, input(attachment));
-  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(uploads, 2);
   await hooks.close();
   assert.equal(new TextDecoder().decode(await result.content.read('instructions')), 'hello');
@@ -117,7 +117,7 @@ for (const mode of ['timeout', 'read-error', 'invalid']) {
         assert.equal(opens, 0);
       } else {
         const result = await hooks.dispatch(type, input(attachment));
-        assert.ok(result.errors.length > 0);
+        assert.ok(result.diagnostics.filter(d => d.phase !== "observation").length > 0);
         await result.content?.close();
         assert.equal(opens, 1);
       }
@@ -151,7 +151,7 @@ test('result accessor reflects accepted text edits without mutating original inp
       result: { protocolVersion: 'draft', effects: [{ type: 'modify', target: 'prompt', operation: 'replace', value: [{ id: 'replacement-message', role: 'user', parts: [{ id: 'instructions', kind: 'text', mediaType: 'text/plain', selection: 'body', text: 'replacement' }] }] }] } }),
   });
   const result = await hooks.dispatch(type, original);
-  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.ok(original.items[0].parts[0].body instanceof Attachment);
   await hooks.close();
   assert.equal(result.event.items[0].parts[0].text, 'replacement');
@@ -190,7 +190,7 @@ for (const mode of [undefined, 'metadata']) {
       const result = await hooks.dispatch(type, event);
       await hooks.close();
       assert.equal(opens, 0);
-      // Neither producer mutations nor compatibility event mutations can relax validation.
+      // Neither producer mutations nor canonical event mutations can relax validation.
       Object.assign(event.items[0].parts[0], valid);
       Object.assign(result.event.items[0].parts[0], valid);
       try {
@@ -217,7 +217,7 @@ test('matching result metadata allows repeated independent reads after shutdown'
 });
 test('selected uploads and returned content retain the exact attachment owner without stream staging', async () => {
   const attachment = Attachment.bytes(new TextEncoder().encode('one owner'));
-  attachment.stream.getReader = () => { throw Error('must not stage the attachment stream'); };
+  assert.equal('stream' in attachment, false);
   let uploads = 0;
   const hooks = client('body', { fetch: async (url, init) => {
     const manager = [...hooks.managers][0];
@@ -234,9 +234,10 @@ test('selected uploads and returned content retain the exact attachment owner wi
     return Response.json({ jsonrpc: '2.0', id: JSON.parse(init.body).id, result: { protocolVersion: 'draft', effects: [] } });
   } });
   const result = await hooks.dispatch(type, input(attachment));
-  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(uploads, 2);
-  assert.equal(result.event.items[0].parts[0].body, attachment);
+  assert.equal(result.event.items[0].parts[0].body, undefined);
+  assert.equal(result.event.items[0].parts[0].selection, 'metadata');
   assert.equal(result.content.bodies.get('instructions').owner, attachment);
   await hooks.close();
   assert.equal(new TextDecoder().decode(await result.content.read('instructions')), 'one owner');
@@ -251,11 +252,12 @@ test('explicit native-stream attachments retain the same unopened owner', async 
   const source = new ReadableStream({ pull(controller) {
     pulls++; controller.enqueue(new Uint8Array([7])); controller.close();
   } }, { highWaterMark: 0 });
-  const attachment = Attachment.fromStream(source);
+  const attachment = Attachment.stream(source);
   const hooks = client();
   const result = await hooks.dispatch(type, input(attachment));
   assert.equal(pulls, 0);
-  assert.equal(result.event.items[0].parts[0].body, attachment);
+  assert.equal(result.event.items[0].parts[0].body, undefined);
+  assert.equal(result.event.items[0].parts[0].selection, 'metadata');
   await hooks.close();
   assert.deepEqual(await result.content.read('instructions'), new Uint8Array([7]));
   assert.equal(pulls, 1);

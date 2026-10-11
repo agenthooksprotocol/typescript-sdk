@@ -9,7 +9,7 @@ test("draft tool.before atomic responses: public Hooks exact state and real tran
   for (const row of rows) {
     assert.equal(row.client, "public-hooks", row.id);
     assert.deepEqual(
-      row.effectiveInput,
+      structuredClone(row.effectiveInput),
       row.actual.state.input,
       `${row.id}: no rejected input leaked`,
     );

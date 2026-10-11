@@ -168,12 +168,11 @@ export async function runChain(row, options) {
         eventId: id,
         count: remaining.length,
       });
-    await result.observations;
     return {
       called,
-      failures: result.errors
+      failures: result.diagnostics.filter(d => d.phase !== "observation")
         .filter(
-          (/** @type {{code: string}} */ error) => error.code !== "INTERRUPTED",
+          (/** @type {{code: string}} */ error) => error.code !== "cancelled",
         )
         .map(
           (/** @type {{subscriptionIndex: number}} */ error) =>

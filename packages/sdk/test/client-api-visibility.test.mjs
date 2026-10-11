@@ -12,11 +12,14 @@ const root = fileURLToPath(new URL('../../..', import.meta.url));
 const sdk = join(root, 'packages/sdk');
 
 test('client facade exposes intentional APIs, not internal coordinators', () => {
-  for (const name of ['Hooks', 'Attachment', 'AttachmentContent', 'ContentSource', 'ContentManager', 'BackendTransport', 'contract', 'form']) {
+  for (const name of ['Hooks', 'Attachment', 'AttachmentContent', 'ContentManager', 'BackendTransport', 'contract', 'form']) {
     assert.equal(typeof client[name], 'function', name);
   }
   assert.equal(typeof client.Type.Object, 'function');
-  for (const name of ['UploadLimiter', 'createSharedContentManager', 'composeResponse', 'composeResponseAsync', 'normalizeEffects', 'decodeContract', 'admitContracts', 'encodeContract', 'freezeContractValue', 'projectHostInput']) {
+  assert.equal('fromStream' in client.Attachment, false);
+  assert.equal('resultBody' in client.ContentManager.prototype, false);
+  assert.equal('stream' in client.Attachment.prototype, false);
+  for (const name of ['contentSlots', 'ContentSource', 'UploadLimiter', 'createSharedContentManager', 'composeResponse', 'composeResponseAsync', 'normalizeEffects', 'decodeContract', 'admitContracts', 'encodeContract', 'freezeContractValue', 'projectHostInput']) {
     assert.equal(name in client, false, name);
   }
 });
@@ -47,4 +50,21 @@ test('packed client declarations compile with inference and no skipLibCheck', { 
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('consumer outcome exposes a single typed representation for each settled fact', async () => {
+  const hooks = new client.Hooks({ protocolVersion: 'draft', hooks: [{ id: 'outcome.backend', transport: { type: 'http', url: 'https://backend.test/hooks' }, subscriptions: [{ mode: 'intercept', events: ['tool.before'], timeoutMs: 1000, failurePolicy: 'fail-open', content: { default: 'metadata' } }] }] }, {
+    source: 'urn:test:outcome', capabilities: { 'tool.before': { effects: [] } },
+    fetch: async (_url, init) => Response.json({ jsonrpc: '2.0', id: JSON.parse(init.body).id, result: { protocolVersion: 'draft', effects: [] } }),
+  });
+  try {
+    const result = await hooks.toolBefore({ callId: 'call', name: 'read', path: 'native', origin: 'native', input: { count: 1 } });
+    assert.deepEqual(result.event.tool.input, { count: 1 });
+    assert.equal(result.state.permission, 'none');
+    assert.deepEqual(result.effects, []);
+    assert.deepEqual(result.diagnostics, []);
+    assert.equal(result.acceptedResponses.length, 1);
+    for (const field of ['input', 'permission', 'response', 'errors', 'settledEvent', 'effectiveEvent', 'observations'])
+      assert.equal(Object.hasOwn(result, field), false, field);
+  } finally { await hooks.close(); }
 });

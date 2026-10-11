@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
-const { ContentManager } = await import(
+const { ContentManager, Attachment } = await import(
   require.resolve("agenthooksprotocol/client")
 );
 import { createHash } from "node:crypto";
@@ -15,16 +15,23 @@ const upload = {
   timeoutMs: 1000,
   maxBytes: 100,
 };
+// Fixture owners are cached so repeated reads exercise one Attachment snapshot.
+const owners = new WeakMap();
+const owned = body => {
+  if (!(body instanceof ReadableStream)) return body;
+  if (!owners.has(body)) owners.set(body, Attachment.stream(body));
+  return owners.get(body);
+};
 const attachment = (body, extra = {}) => ({
   id: "p",
-  kind: "attachment",
+  kind: "attachment", selection: "body",
   mediaType: "application/octet-stream",
-  body,
+  body: owned(body),
   ...extra,
 });
 const text = (value, extra = {}) => ({
   id: "p",
-  kind: "text",
+  kind: "text", selection: "body",
   mediaType: "text/plain",
   text: value,
   ...extra,
@@ -95,7 +102,7 @@ test("content metadata and omit are lazy cloned views", async () => {
     assert.equal(content.reads, 0);
     assert.equal(content.stream.locked, false);
   }
-  assert.equal(event.items[0].parts[0].body, content.stream);
+  assert.equal(event.items[0].parts[0].body, owned(content.stream));
   await manager.close();
   assert.equal(content.cancelled, true);
 });
@@ -302,10 +309,10 @@ test("readBody reuses preparation snapshots and returns independent byte copies"
   const content = source();
   const event = { type: "model.response.after", items: [item(content.stream)] };
   await manager.prepare(event, { default: "body" }, upload, sender());
-  const first = await manager.readBody(content.stream);
+  const first = await manager.readBody(owned(content.stream));
   assert.deepEqual(first, new Uint8Array([0, 255, 128]));
   first.fill(17);
-  const second = await manager.readBody(content.stream);
+  const second = await manager.readBody(owned(content.stream));
   assert.deepEqual(second, new Uint8Array([0, 255, 128]));
   assert.notEqual(first, second);
   assert.equal(content.reads, 1);
@@ -316,7 +323,7 @@ test("readBody before preparation and composed replacement streams share the man
   const manager = new ContentManager({ maxSnapshotBytes: 6 });
   const original = source();
   assert.deepEqual(
-    await manager.readBody(original.stream),
+    await manager.readBody(owned(original.stream)),
     new Uint8Array([0, 255, 128]),
   );
   const calls = [];
@@ -337,11 +344,11 @@ test("readBody before preparation and composed replacement streams share the man
   assert.deepEqual(wire.items[0].parts[0].body, { ref: "receiver-ref" });
   assert.equal(calls.at(-1).init.headers["ahp-content-sha256"], hash(new Uint8Array([1, 2, 3])));
   assert.deepEqual(
-    await manager.readBody(replacement.stream),
+    await manager.readBody(owned(replacement.stream)),
     new Uint8Array([1, 2, 3]),
   );
   await assert.rejects(
-    manager.readBody(source(new Uint8Array([4])).stream),
+    manager.readBody(owned(source(new Uint8Array([4])).stream)),
     /memory limit/,
   );
   await assert.rejects(
@@ -350,7 +357,7 @@ test("readBody before preparation and composed replacement streams share the man
       size: 0,
       sha256: hash(new Uint8Array()),
     }),
-    /raw ReadableStream/,
+    /Attachment/,
   );
   await manager.close();
 });
@@ -361,7 +368,7 @@ test("readBody honors pre-abort, in-flight abort, and manager close", async () =
   const alreadyAborted = new AbortController();
   alreadyAborted.abort(new Error("already aborted"));
   await assert.rejects(
-    manager.readBody(untouched.stream, alreadyAborted.signal),
+    manager.readBody(owned(untouched.stream), alreadyAborted.signal),
     /already aborted/,
   );
   assert.equal(untouched.reads, 0);
@@ -379,7 +386,7 @@ test("readBody honors pre-abort, in-flight abort, and manager close", async () =
       { highWaterMark: 0 },
     );
     const controller = new AbortController();
-    const pending = manager.readBody(stream, controller.signal);
+    const pending = manager.readBody(owned(stream), controller.signal);
     const rejected = assert.rejects(
       pending,
       action === "abort" ? /read cancelled/ : /closed/,
@@ -389,7 +396,7 @@ test("readBody honors pre-abort, in-flight abort, and manager close", async () =
     await rejected;
     assert.equal(cancelled, action === "close");
   }
-  await assert.rejects(manager.readBody(untouched.stream), /closed/);
+  await assert.rejects(manager.readBody(owned(untouched.stream)), /closed/);
 });
 
 test("close never waits for producer cancellation and pending reads release their locks", async () => {
@@ -416,7 +423,7 @@ test("close never waits for producer cancellation and pending reads release thei
     undefined,
     sender(),
   );
-  const read = manager.readBody(active);
+  const read = manager.readBody(owned(active));
   const rejected = assert.rejects(read, /Content manager closed/);
   const closing = manager.close();
   assert.equal(manager.close(), closing);
@@ -453,7 +460,7 @@ test("caller abort releases its wait; manager close releases the pending reader 
     { highWaterMark: 0 },
   );
   const controller = new AbortController();
-  const reading = manager.readBody(stream, controller.signal);
+  const reading = manager.readBody(owned(stream), controller.signal);
   const rejected = assert.rejects(reading, /caller stopped/);
   controller.abort(new Error("caller stopped"));
   await rejected;
@@ -529,7 +536,7 @@ test("file.changed attachments upload once per receiver from reusable snapshots"
   assert.deepEqual(calls.slice(2).map((call) => call.init.headers["ahp-content-sha256"]).sort(), [hash(new Uint8Array([1])), hash(new Uint8Array([2, 3]))].sort());
   assert.deepEqual(calls.slice(2).map((call) => call.init.headers["content-length"]).sort(), ["1", "2"]);
   assert.equal(two.changes[0].path, "file.txt");
-  assert.equal(event.changes[0].before.body, before.stream);
+  assert.equal(event.changes[0].before.body, owned(before.stream));
   await manager.close();
 });
 

@@ -7,7 +7,7 @@ if (!configPath || !documentPath) throw Error('Expected hooks.json and binary do
 const hooks = new Hooks(JSON.parse(await readFile(configPath, 'utf8')), {
   source: 'urn:example:document-agent',
   maxContentBytes: 4 * 1024 * 1024,
-  capabilities: { 'turn.start': { modes: ['intercept'], capabilities: { effects: ['deny'] } } },
+  capabilities: { 'turn.start': { modes: ['intercept'], effects: ['deny'] } },
 });
 let result;
 try {
@@ -28,7 +28,7 @@ try {
     ] }],
   });
   await hooks.close();
-  if (result.interrupted || result.permission === 'deny') throw Error('Turn not permitted');
+  if (result.interrupted || result.state.permission === 'deny') throw Error('Turn not permitted');
   // Local effective content remains readable after transport shutdown.
   console.log(await result.content.read('document'));
 } finally {

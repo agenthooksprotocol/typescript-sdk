@@ -314,11 +314,11 @@ export async function runInterop(): Promise<{
           tool: event.tool,
         };
         const result = await hooks.dispatch("tool.before", boundary);
-        const observations = await result.observations;
-        if (result.errors.length || observations.length || result.interrupted)
+        const observations = result.diagnostics.filter(d => d.phase === "observation");
+        if (result.diagnostics.filter(d => d.phase !== "observation").length || observations.length || result.interrupted)
           return "sdk-delivery-error";
         if (result.event.id !== event.id) return "unexpected-event";
-        return result.response.result.effects.length === 0
+        return result.effects.length === 0
           ? "no-effect"
           : "unexpected-effect";
       } finally {

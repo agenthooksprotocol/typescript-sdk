@@ -16,9 +16,9 @@ declare const hooks: Hooks;
 void hooks.toolBefore({ callId: 'call', name: 'read', path: 'native', origin: 'native', input: { count: 1, nullable: null } }, {
   contracts: { arguments: argumentsContract, result: resultContract, provenance: provenanceContract },
 }).then(settled => {
-  const count: number = settled.input.count;
+  const count: number = settled.event.tool.input.count;
   const eventCount: number = settled.event.tool.input.count;
-  const nullable: string | null = settled.input.nullable;
+  const nullable: string | null = settled.event.tool.input.nullable;
   if (settled.state.candidate !== null) {
     const answer: string = settled.state.candidate.value.answer;
     const supplier: string | undefined = settled.state.candidate.provenance?.supplier;
@@ -43,6 +43,18 @@ if (typed.action === 'accept' && typed.content !== undefined) {
 
 const date: Codec<Date> = { decode(value) { if (typeof value !== 'string') throw Error('date'); return new Date(value); }, encode(value) { return value.toISOString(); } };
 void hooks.toolBefore({ callId: 'call', name: 'date', path: 'native', origin: 'native', input: new Date() }, { contracts: { arguments: date, result: resultContract } }).then(result => {
-  const accepted: Date = result.input;
+  const accepted: Date = result.event.tool.input;
   void accepted;
+});
+
+// @ts-expect-error Explicit codec types cannot claim a decoded result without supplied codecs.
+void hooks.toolBefore<{ arguments: Codec<Date> }>({ callId: 'call', name: 'read', path: 'native', origin: 'native', input: {} });
+void hooks.toolBefore({ callId: 'call', name: 'read', path: 'native', origin: 'native', input: { count: 1 } }).then(result => {
+  // @ts-expect-error Interceptors can replace unvalidated input; the settled slot is unknown.
+  result.event.tool.input.count;
+  for (const effect of result.effects) {
+    // @ts-expect-error Edits and returns have authoritative event/state representations.
+    const edited: 'modify' | 'return' = effect.type;
+    void edited;
+  }
 });

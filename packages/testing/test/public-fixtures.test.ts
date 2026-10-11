@@ -56,12 +56,12 @@ for (const mode of ["no-effect", "deny"] as const) {
             input: { text: "Zażółć 🚀" },
           },
         });
-        assert.deepEqual(result.errors, []);
-        assert.deepEqual(await result.observations, []);
+        assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+        assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
         assert.equal(result.interrupted, false);
         assert.equal(result.event.id, `occurrence-${occurrence}`);
         assert.deepEqual(
-          result.response.result.effects,
+          result.effects,
           mode === "deny"
             ? [{ type: "deny", reason: "Denied by fake backend" }]
             : [],

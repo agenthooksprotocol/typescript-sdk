@@ -26,7 +26,7 @@ test('normal Hooks method accepts direct ordered inline messages and uploads the
     const wire = JSON.parse(init.body); events.push(wire.params.event); return accept(wire);
   }, 2);
   const result = await client.turnStart({ ...facts, items: [{ role: 'user', parts: [{ kind: 'text', text: JSON.stringify({ question: 'read this' }) }, attachmentPart(owner)] }] });
-  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(opens, 1);
   assert.equal(uploads.length, 2);
   for (const bytes of uploads) assert.deepEqual([...bytes], [1, 2, 3]);
@@ -38,7 +38,8 @@ test('normal Hooks method accepts direct ordered inline messages and uploads the
     assert.equal(event.items[0].parts[1].selection, 'body');
     assert.match(event.items[0].parts[1].body.ref, /^https:/);
   }
-  assert.equal(result.event.items[0].parts[1].body, owner);
+  assert.equal(result.event.items[0].parts[1].body, undefined);
+  assert.equal(result.content.bodies.get(result.event.items[0].parts[1].id).owner, owner);
   await client.close();
   assert.deepEqual([...await result.content.read(result.event.items[0].parts[1].id)], [1, 2, 3]);
   await result.content.close();
@@ -50,7 +51,7 @@ for (const selection of ['metadata', 'omit']) test(`${selection} selection strip
   const owner = Attachment.lazy(() => { opens++; throw Error('read forbidden'); }, () => { disposes++; });
   const client = hooks(selection, async (_, init) => { const wire = JSON.parse(init.body); event = wire.params.event; return accept(wire); });
   const result = await client.turnStart({ ...facts, items: [{ role: 'user', parts: [{ kind: 'text', text: 'private' }, attachmentPart(owner)] }] });
-  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   for (const part of event.items[0].parts) {
     assert.equal(part.selection, selection);
     assert.equal('text' in part, false); assert.equal('body' in part, false);
@@ -58,7 +59,8 @@ for (const selection of ['metadata', 'omit']) test(`${selection} selection strip
   await client.close();
   assert.equal(opens, 0);
   assert.equal(disposes, 0);
-  assert.equal(result.event.items[0].parts[1].body, owner);
+  assert.equal(result.event.items[0].parts[1].body, undefined);
+  assert.equal(result.content.bodies.get(result.event.items[0].parts[1].id).owner, owner);
   await result.content.close();
   assert.equal(disposes, 1);
 });
@@ -79,7 +81,7 @@ test('native and provider payloads are never inspected for ownership', async () 
   const hidden = Attachment.lazy(() => { throw Error('unexpected read'); }, () => { disposed++; });
   const client = hooks('metadata', async (_, init) => accept(JSON.parse(init.body)));
   const result = await client.turnStart({ ...facts, native: { type: 'test', payload: opaque, hidden }, items: [{ role: 'user', parts: [{ kind: 'text', text: 'public' }] }] });
-  assert.deepEqual(result.errors, []); assert.equal(examined, 0); assert.equal(disposed, 0);
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []); assert.equal(examined, 0); assert.equal(disposed, 0);
   await client.close(); await hidden.close();
 });
 
@@ -105,7 +107,7 @@ test('schema traversal preserves absent optional content fields', async () => {
   }] }, { source: 'urn:test:optional', capabilities: { 'tool.before': { effects: [] } },
     fetch: async (_, init) => { wire = JSON.parse(init.body); return accept(wire); } });
   const result = await client.toolBefore({ callId: 'call', name: 'read', input: {}, path: 'native', origin: 'native' });
-  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(Object.hasOwn(result.event, 'items'), false);
   assert.equal(Object.hasOwn(wire.params.event, 'items'), false);
   await client.close();
@@ -131,8 +133,9 @@ test('failed conversion cleans fresh sources but preserves earlier result-owned 
   let result;
   try {
     result = await client.turnStart({ ...facts, items: [{ role: 'user', parts: [{ ...attachmentPart(a), id: 'a' }] }] });
-    assert.deepEqual(result.errors, []);
-    assert.equal(result.event.items[0].parts[0].body, a);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.equal(result.event.items[0].parts[0].body, undefined);
+    assert.equal(result.content.bodies.get('a').owner, a);
     await assert.rejects(client.turnStart({ ...facts, items: [{ role: 'user', parts: [
       { ...attachmentPart(a), id: 'a' },
       { kind: 'text', text: 123 },
@@ -184,7 +187,7 @@ test('failed conversion cannot interrupt an earlier in-flight attachment owner',
     assert.equal(opensB, 0); assert.equal(disposesB, 1);
     release();
     result = await pending;
-    assert.deepEqual(result.errors, []); assert.equal(result.interrupted, false);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []); assert.equal(result.interrupted, false);
     assert.equal(uploads, 1); assert.equal(deliveries, 1); assert.equal(opensA, 1);
     await client.close();
     assert.deepEqual([...await result.content.read('a')], [9]);
