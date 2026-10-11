@@ -129,3 +129,52 @@ test('raw pre-cancelled retirement remains compatible but its typed view and nam
     await assert.rejects(hooks.sessionEnd({ session: { id: 'retired' } }, { signal: AbortSignal.abort() }), error => error.code === 'INVALID_SETTLEMENT');
   } finally { await hooks.close(); }
 });
+
+test('pre-aborted named boundaries reject invalid origin candidates and retain raw evidence', async () => {
+  for (const [type, method, input, value] of [
+    ['context.compact.before', 'contextCompactBefore', { instructions: [], trigger: 'manual', items: [] }, 42],
+    ['model.request.before', 'modelRequestBefore', { model: { provider: 'test', id: 'model' }, attempt: { id: 'attempt', number: 1 }, params: {}, items: [] }, null],
+  ]) {
+    const hooks = hooksFor(type);
+    const initialState = { permission: 'none', candidate: { value, provenance: { supplier: 'cache' }, future: { retained: true } } };
+    try {
+      await assert.rejects(hooks[method](input, { signal: AbortSignal.abort(), initialState }), error => {
+        assert.equal(error.code, 'INVALID_SETTLEMENT');
+        assert.deepEqual(error.canonicalState, initialState);
+        assert.deepEqual(error.acceptedResponses, []);
+        assert.equal(error.permission, undefined);
+        return true;
+      });
+    } finally { await hooks.close(); }
+  }
+});
+
+test('pre-aborted named boundaries decode valid origin candidates losslessly and remain interrupted', async () => {
+  for (const [type, method, input, value] of [
+    ['context.compact.before', 'contextCompactBefore', { instructions: [], trigger: 'manual', items: [] }, [text]],
+    ['model.request.before', 'modelRequestBefore', { model: { provider: 'test', id: 'model' }, attempt: { id: 'attempt', number: 1 }, params: {}, items: [] }, [{ id: 'message', role: 'assistant', parts: [text] }]],
+  ]) {
+    const hooks = hooksFor(type);
+    const initialState = { permission: 'none', candidate: { value, provenance: { supplier: 'cache' }, future: { retained: true } } };
+    try {
+      const settled = await hooks[method](input, { signal: AbortSignal.abort(), initialState });
+      assert.equal(settled.interrupted, true);
+      assert.deepEqual(settled.state, initialState);
+      assert.deepEqual(settled.acceptedResponses, []);
+      assert.notEqual(settled.state.candidate.value, value);
+      assert.equal(Object.isFrozen(settled.state.candidate.value[0]), true);
+    } finally { await hooks.close(); }
+  }
+});
+
+test('raw pre-aborted dispatch retains undecoded state for retirement compatibility', async () => {
+  const hooks = hooksFor('context.compact.before');
+  const initialState = { permission: 'none', candidate: { value: 42 } };
+  try {
+    const settled = await hooks.dispatch('context.compact.before', { instructions: [], trigger: 'manual', items: [] }, { signal: AbortSignal.abort(), initialState });
+    assert.equal(settled.interrupted, true);
+    assert.deepEqual(settled.state, initialState);
+    assert.equal(settled.settledEvent.type, 'context.compact.before');
+    assert.deepEqual(settled.acceptedResponses, []);
+  } finally { await hooks.close(); }
+});

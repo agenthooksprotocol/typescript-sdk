@@ -11,7 +11,6 @@ import type { BoundaryContracts } from "./contracts.js";
 import type {
   Capabilities,
   ContentReference,
-  ExecutionEventContextCompactBefore,
   InterceptResponse,
   EventResponses,
   ResponseFor,
@@ -33,32 +32,24 @@ type Fields<T> = {
       : K]: T[K];
 };
 /** Harness content bodies may be owned streams instead of uploaded references. */
-export type HarnessValue<T> = T extends ContentReference
-  ? ContentReference | ContentSource | ReadableStream<Uint8Array>
-  : T extends readonly (infer V)[]
-    ? HarnessValue<V>[]
-    : T extends { selection: string }
-      ? Omit<
-          { [K in keyof Fields<T>]: HarnessValue<Fields<T>[K]> },
-          "selection"
-        > & { selection?: T["selection"] }
-      : T extends object
-        ? keyof Fields<T> extends never
-          ? T
-          : { [K in keyof Fields<T>]: HarnessValue<Fields<T>[K]> }
-        : T;
-// The generated compact-before JsonValue intersection includes impossible
-// primitive/array event branches. Remove those branches before mapping content
-// bodies; otherwise Omit sees their shared keys and loses canonical fields.
-type CompactBeforeObject = Exclude<
-  ExecutionEventContextCompactBefore,
-  string | number | boolean | readonly unknown[]
->;
+export type HarnessValue<T> = T extends string | number | boolean | null | undefined
+  ? T
+  : T extends ContentReference
+    ? ContentReference | ContentSource | ReadableStream<Uint8Array>
+    : T extends readonly (infer V)[]
+      ? HarnessValue<V>[]
+      : T extends { selection: string }
+        ? Omit<
+            { [K in keyof Fields<T>]: HarnessValue<Fields<T>[K]> },
+            "selection"
+          > & { selection?: T["selection"] }
+        : T extends object
+          ? keyof Fields<T> extends never
+            ? T
+            : { [K in keyof Fields<T>]: HarnessValue<Fields<T>[K]> }
+          : T;
 export type HarnessEvent<K extends EventType = EventType> =
-  K extends "context.compact.before"
-    ? Omit<HarnessValue<CompactBeforeObject>, "trigger"> &
-        Pick<CompactBeforeObject, "trigger">
-    : HarnessValue<Extract<Event, { type: K }>>;
+  HarnessValue<Extract<Event, { type: K }>>;
 /** Passing a body stream transfers its read/cancel ownership to the SDK.
  * Keep host execution data separately; canonical effects carry accepted rewrites. */
 export type BoundaryInput<K extends EventType> = K extends EventType

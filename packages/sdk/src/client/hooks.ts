@@ -1113,8 +1113,19 @@ export class Hooks {
       }
       bindContentSources(type, projection.event, projection.bindings as any);
       return this.dispatch(type, projection.event as unknown as BoundaryInput<K>, options).then(result => {
-        void result.settledEvent;
-        return result;
+        try {
+          const settledEvent = result.settledEvent;
+          if (result.interrupted) {
+            // Raw cancellation can skip admission for retirement-only calls.
+            // Named boundaries must still decode the origin-correlated state.
+            const state = decodeSettledState(settledEvent, result.state as BoundaryOptions["initialState"]);
+            admitContracts(options?.contracts, settledEvent, state);
+            return { ...result, state: freezeContractValue(structuredClone(state)) } as BoundaryResult<K>;
+          }
+          return result;
+        } catch (cause) {
+          throw new SettlementDecodeError("Named boundary settlement decoding failed", result.acceptedResponses, result.state, { cause });
+        }
       });
     } catch (error) {
       const owners = new Set(localParts({ ...input, type }).map(({ part }) => part?.body).filter(body => body instanceof Attachment));

@@ -801,8 +801,7 @@ export type ExecutionEventContextCompactBefore = {
     synthesized?: boolean;
   } & AdditionalProperties;
   type: "context.compact.before";
-} & AdditionalProperties &
-  JsonValue & {
+} & AdditionalProperties & {
     tokenCounts?: JsonValue;
   } & AdditionalProperties;
 
