@@ -382,8 +382,9 @@ response) is discarded too. It fails the request it names, or else the single
 in-flight request (stdio calls are serialized), with `HookOperationalError`;
 the process keeps running. Three consecutive malformed frames terminate the
 backend; the next request starts a new process. Per-event backends still fail
-on the first bad frame. Both cases are published, without frame content, as `StdioDiagnostic` messages on the
-`node:diagnostics_channel` named by `STDIO_DIAGNOSTICS_CHANNEL`:
+on the first bad frame. Both cases are published, without frame content, as
+`StdioDiagnostic` messages on the `node:diagnostics_channel` named by
+`STDIO_DIAGNOSTICS_CHANNEL`:
 
 ```ts
 import { subscribe } from "node:diagnostics_channel";
