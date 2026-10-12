@@ -3,6 +3,8 @@
 TypeScript models, JSON codecs, and runtime utilities for the
 [Agent Hooks Protocol](https://github.com/agenthooksprotocol/agent-hooks-protocol).
 Requires Node.js 20 or newer. The schema API follows the current AHP `draft` snapshot.
+Upgrading from 0.4? See the
+[migration guide](https://github.com/agenthooksprotocol/typescript-sdk/blob/main/MIGRATING.md).
 
 ```sh
 npm install agenthooksprotocol

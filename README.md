@@ -4,6 +4,8 @@ TypeScript models, JSON codecs, and runtime utilities for the [Agent Hooks Proto
 
 The generated schema API follows the current AHP `draft` snapshot. The `/client` entrypoint provides the configuration-driven `Hooks` API for harness integrations. The root entrypoint provides JSON admission, NDJSON framing, operational errors, and independent runtime helpers; the draft entrypoint provides canonical validation and reference boundary helpers. Node.js 20 or newer is required.
 
+Upgrading from 0.4? See the [migration guide](MIGRATING.md).
+
 ## Installation
 
 ```sh
