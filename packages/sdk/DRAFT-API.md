@@ -162,4 +162,5 @@ Server `intercept` and `observe` maps use generated event families to correlate
 contexts and replies. `effect` helpers construct literal values, not authority.
 HTTP `hooks.handle` and `serveStdio` use one admission core that preserves trusted
 correlation and checks dynamic request grants. Empty intercept replies are valid
-no-ops; observation callbacks return void and cannot return controls.
+no-ops; observation callbacks return void and cannot return controls. The
+optional `observe.any` catch-all runs only for events without their own observer.

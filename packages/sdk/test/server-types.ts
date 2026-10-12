@@ -46,6 +46,22 @@ hooks.handle(request, { intercept: { toolBefore() {} } });
 hooks.handle(request, { observe: { sessionEnd() { return { effects: [] }; } } });
 // @ts-expect-error observation-only events cannot intercept.
 hooks.handle(request, { intercept: { sessionEnd() { return { effects: [] }; } } });
+hooks.handle(request, {
+  observe: {
+    sessionEnd() {},
+    any(ctx) {
+      const type: string = ctx.notification.params.event.type;
+      void type;
+      if (ctx.event.type === "tool.before") {
+        const toolName: string = ctx.event.tool.name;
+        void toolName;
+      }
+    },
+  },
+});
+hooks.handle(request, { observe: { async any() {} } });
+// @ts-expect-error catch-all observers cannot return control replies.
+hooks.handle(request, { observe: { any() { return { effects: [] }; } } });
 // @ts-expect-error raw method-switch callbacks are no longer supported.
 hooks.handle(request, () => ({ effects: [] }));
 // @ts-expect-error descriptor digest is required.

@@ -1,6 +1,6 @@
 export { hooks } from "./hooks.js";
 export type { ServerHandlers, ServerInterceptHandlers, ServerObserveHandlers, ServerReply,
-  InterceptContext, ObservationContext } from "./types.js";
+  InterceptContext, ObservationContext, AnyObservationContext } from "./types.js";
 export { attachments, UploadError } from "./attachments.js";
 export type { Upload } from "./attachments.js";
 export type {
