@@ -23,6 +23,50 @@ type ProcessState = {
   stopped: boolean;
 };
 
+/** SDK options for `BackendTransport`; not part of the protocol registration. */
+export interface BackendTransportOptions {
+  /** Start stdio backends with the full host environment instead of the minimal
+   * base environment. Registration `env` entries still apply on top. Default false. */
+  inheritEnvironment?: boolean;
+}
+
+// Smallest practical base environment for stdio backends (transports/stdio.md).
+const BASE_ENVIRONMENT = [
+  "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TZ", "TMPDIR", "TEMP", "TMP",
+];
+const WINDOWS_BASE_ENVIRONMENT = [
+  "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
+];
+
+/** Build a stdio backend environment: a base allowlist (or the full host
+ * environment when inherited), then registration `env` entries as literal
+ * overrides. Windows names compare case-insensitively. Values are never logged. */
+export function backendEnvironment(
+  env: Readonly<Record<string, string>> | undefined,
+  inherit: boolean,
+  host: Readonly<Record<string, string | undefined>> = process.env,
+  platform: string = process.platform,
+): Record<string, string> {
+  const windows = platform === "win32";
+  const fold = (name: string) => (windows ? name.toUpperCase() : name);
+  const allowed = new Set(
+    (windows ? [...BASE_ENVIRONMENT, ...WINDOWS_BASE_ENVIRONMENT] : BASE_ENVIRONMENT).map(fold),
+  );
+  const result: Record<string, string> = {};
+  for (const [name, value] of Object.entries(host)) {
+    if (value === undefined) continue;
+    const key = fold(name);
+    if (inherit || allowed.has(key) || key.startsWith("LC_")) result[name] = value;
+  }
+  for (const [name, value] of Object.entries(env ?? {})) {
+    if (windows)
+      for (const existing of Object.keys(result))
+        if (fold(existing) === fold(name)) delete result[existing];
+    result[name] = value;
+  }
+  return result;
+}
+
 function failure(message: string): Error {
   return new HookOperationalError("IO_ERROR", message);
 }
@@ -68,6 +112,7 @@ function responseFor(value: any, message: any): unknown {
 export class BackendTransport {
   readonly #transport: StdioTransport | HttpTransport;
   readonly #fetcher: Fetcher;
+  readonly #inheritEnvironment: boolean;
   readonly #controllers = new Set<AbortController>();
   readonly #processes = new Set<ProcessState>();
   #process: ProcessState | undefined;
@@ -75,7 +120,7 @@ export class BackendTransport {
   #closed = false;
   #closing: Promise<void> | undefined;
 
-  constructor(backend: Backend, fetcher: Fetcher) {
+  constructor(backend: Backend, fetcher: Fetcher, options: BackendTransportOptions = {}) {
     const transport = backend.transport;
     if (transport.type !== "http" && transport.type !== "stdio") {
       throw new HookOperationalError(
@@ -95,6 +140,7 @@ export class BackendTransport {
     }
     this.#transport = transport as StdioTransport | HttpTransport;
     this.#fetcher = fetcher;
+    this.#inheritEnvironment = options.inheritEnvironment === true;
   }
 
   request(message: any, signal?: AbortSignal): Promise<unknown> {
@@ -250,6 +296,7 @@ export class BackendTransport {
     const transport = this.#transport as StdioTransport;
     const child = spawn(transport.command, transport.args ?? [], {
       cwd: transport.cwd,
+      env: backendEnvironment(transport.env, this.#inheritEnvironment),
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
     });

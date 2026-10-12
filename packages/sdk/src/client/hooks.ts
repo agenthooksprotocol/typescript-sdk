@@ -301,6 +301,7 @@ export class Hooks {
           "event",
           backend.id,
         ),
+        { inheritEnvironment: this.options.inheritEnvironment === true },
       );
       backend.subscriptions.forEach((subscription, index) =>
         this.routes.push({

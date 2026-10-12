@@ -360,6 +360,20 @@ caller-supplied fetch adapter. The adapter owns network policy and authenticatio
 close the transport to release its processes and pending requests. Transport
 handling validates envelopes, not application contracts or boundary admission.
 
+### Stdio backend environment
+
+Stdio backends do not inherit the host environment. Each child starts with a
+minimal base environment copied from the host: `PATH`, `HOME`, `USER`, `LOGNAME`,
+`SHELL`, `LANG`, `LC_ALL`, `LC_*`, `TZ`, `TMPDIR`, `TEMP` and `TMP`. On Windows,
+`SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`, `USERPROFILE`, `APPDATA`,
+`LOCALAPPDATA` and `PROGRAMDATA` are added, and names match case-insensitively.
+The registration's stdio `env` entries are then applied as literal values, with
+no interpolation, and override base values. Use `env` for backend
+configuration, not AHP endpoint credentials. The SDK never logs `env` values.
+To give children the full host environment, set `inheritEnvironment: true` in
+`HooksOptions` (or in the third `BackendTransport` argument). Registration `env`
+still applies on top.
+
 ## Migrating
 
 Breaking changes between releases are listed in [MIGRATING.md](MIGRATING.md).

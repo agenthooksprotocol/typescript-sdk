@@ -15,6 +15,8 @@ declare const Buffer: {
 
 declare const process: {
   argv: string[];
+  env: Record<string, string | undefined>;
+  platform: string;
   stdin: unknown;
   stdout: { write(value: string | Uint8Array): boolean };
   stderr: { write(value: string | Uint8Array): boolean };
