@@ -153,9 +153,7 @@ test("canonical interruption scenarios through public Hooks and server over HTTP
             result.diagnostics.filter(d => d.phase !== "observation")[0]?.code,
             scenario.phase === "timeout"
               ? "deadline_exceeded"
-              : kind === "http"
-                ? "protocol_rejection"
-                : "transport",
+              : "protocol_rejection",
             id,
           );
           assert.equal(

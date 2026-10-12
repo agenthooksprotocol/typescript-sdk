@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { channel } from "node:diagnostics_channel";
 import type {
   Backend,
   HttpTransport,
@@ -71,6 +72,36 @@ function failure(message: string): Error {
   return new HookOperationalError("IO_ERROR", message);
 }
 
+/** Consecutive malformed frames a persistent backend may emit before it is terminated. */
+const MALFORMED_FRAME_BUDGET = 3;
+
+/** Out-of-band stdio diagnostics. Messages carry no frame content. */
+export interface StdioDiagnostic {
+  backendId: string;
+  /** `unsolicited`: a well-formed response for no pending request.
+   * `malformed`: a frame that is not one valid JSON-RPC response. */
+  kind: "unsolicited" | "malformed";
+  code?: HookOperationalError["code"];
+  /** Consecutive malformed frames, including this one. */
+  strikes: number;
+  /** Whether this frame exhausted the budget and the backend was terminated. */
+  terminated: boolean;
+}
+/** `node:diagnostics_channel` name that receives {@link StdioDiagnostic} messages. */
+export const STDIO_DIAGNOSTICS_CHANNEL = "agenthooksprotocol:stdio";
+const diagnostics = channel(STDIO_DIAGNOSTICS_CHANNEL);
+function diagnose(diagnostic: StdioDiagnostic): void {
+  if (diagnostics.hasSubscribers) diagnostics.publish(diagnostic);
+}
+
+/** Decoder errors that leave framing intact; anything else (an oversize frame) is fatal. */
+function recoverableFrameError(error: unknown): boolean {
+  return (
+    error instanceof HookOperationalError &&
+    (error.code === "MALFORMED_UTF8" || error.message === "Empty NDJSON frame")
+  );
+}
+
 /** Validate only the JSON-RPC envelope; the caller validates method-specific results. */
 function responseFor(value: any, message: any): unknown {
   if (
@@ -110,6 +141,7 @@ function responseFor(value: any, message: any): unknown {
 
 /** Client-side transport. Deadlines are supplied by the caller's AbortSignal. */
 export class BackendTransport {
+  readonly #backendId: string;
   readonly #transport: StdioTransport | HttpTransport;
   readonly #fetcher: Fetcher;
   readonly #inheritEnvironment: boolean;
@@ -138,6 +170,7 @@ export class BackendTransport {
         "Unsupported stdio lifecycle",
       );
     }
+    this.#backendId = backend.id;
     this.#transport = transport as StdioTransport | HttpTransport;
     this.#fetcher = fetcher;
     this.#inheritEnvironment = options.inheritEnvironment === true;
@@ -319,29 +352,80 @@ export class BackendTransport {
     child.on("error", fail);
     child.stdin.on("error", fail);
     child.stdout.on("error", fail);
-    child.stdout.on("data", (chunk: Uint8Array) => {
+    const persistent = transport.lifecycle === "persistent";
+    // A persistent backend survives isolated bad frames; per-event output must be exact.
+    const budget = persistent ? MALFORMED_FRAME_BUDGET : 1;
+    let strikes = 0;
+    const malformed = (error: unknown, value?: any) => {
+      strikes++;
+      const terminated = strikes >= budget;
+      if (persistent)
+        diagnose({
+          backendId: this.#backendId,
+          kind: "malformed",
+          ...(error instanceof HookOperationalError ? { code: error.code } : {}),
+          strikes,
+          terminated,
+        });
+      if (terminated) return fail(error);
+      // Fail only the request this frame answers: the one it names, or else the
+      // single in-flight request (stdio calls are serialized). The process survives.
+      const named = value && typeof value === "object" && !Array.isArray(value) && "id" in value;
+      const target = named
+        ? state.pending.get(value.id)
+        : state.pending.size === 1
+          ? state.pending.values().next().value
+          : undefined;
+      target?.reject(error);
+    };
+    const frame = (line: string) => {
+      let value: any;
       try {
-        const lines = decoder.push(chunk);
-        for (const line of lines) {
-          const value = parseJson(line) as any;
-          if (transport.lifecycle === "persistent") {
-            // Validate protocol output, but ignore replies to abandoned/unknown IDs.
-            const response = responseFor(value, { id: value?.id });
-            const pending = state.pending.get(value.id);
-            if (pending) pending.resolve(response);
-          } else {
-            const pending = state.pending.values().next().value;
-            if (
-              !pending ||
-              pending.notification ||
-              pending.response !== undefined
-            )
-              throw failure("Unexpected backend response");
-            pending.response = responseFor(value, pending.message);
-          }
+        value = parseJson(line);
+      } catch {
+        return malformed(
+          new HookOperationalError("MALFORMED_JSON", "Malformed backend response"),
+        );
+      }
+      if (persistent) {
+        let response: unknown;
+        try {
+          response = responseFor(value, { id: value?.id });
+        } catch (error) {
+          return malformed(error, value);
         }
+        strikes = 0;
+        const pending = state.pending.get(value.id);
+        if (pending) pending.resolve(response);
+        // Never consume unmatched frames as the next response.
+        else
+          diagnose({ backendId: this.#backendId, kind: "unsolicited", strikes, terminated: false });
+        return;
+      }
+      const pending = state.pending.values().next().value;
+      if (!pending || pending.notification || pending.response !== undefined)
+        return fail(failure("Unexpected backend response"));
+      try {
+        pending.response = responseFor(value, pending.message);
       } catch (error) {
-        fail(error);
+        malformed(error);
+      }
+    };
+    child.stdout.on("data", (chunk: Uint8Array) => {
+      // Feed one line at a time so a bad frame cannot discard its neighbours.
+      for (let start = 0; start < chunk.length && !state.stopped; ) {
+        const newline = chunk.indexOf(0x0a, start);
+        const end = newline === -1 ? chunk.length : newline + 1;
+        let lines: string[];
+        try {
+          lines = decoder.push(chunk.subarray(start, end));
+        } catch (error) {
+          if (recoverableFrameError(error)) malformed(error);
+          else fail(error);
+          lines = [];
+        }
+        for (const line of lines) if (!state.stopped) frame(line);
+        start = end;
       }
     });
     child.on("close", (code: number | null) => {
