@@ -7,7 +7,6 @@ export interface Credential {
   refreshToken?: string;
   scopes?: string[];
 }
-export type AuthCredential = Credential;
 
 /** Context for a selected delivery binding, or an optional standalone auth helper. */
 export interface AuthContext {
@@ -129,7 +128,7 @@ export interface AuthOptions extends Partial<AuthProvider> {
   now?: () => number;
   expirySkewMs?: number;
 }
-export interface AuthProvider {
+export interface AuthProvider extends DeliveryAuthProvider {
   authenticate(
     context: AuthContext,
     options?: AuthOptions,
@@ -178,7 +177,6 @@ export interface AuthProvider {
     options?: AuthOptions,
   ): Promise<Credential>;
 }
-export type AuthOverrides = AuthOptions;
 
 function error(message: string): never {
   // Never include credential values, callback URLs, or token endpoint bodies.
@@ -506,6 +504,15 @@ function validateResource(
 }
 
 const defaults: AuthProvider = {
+  async credential(context) {
+    const credential = await this.authenticate(context);
+    if (credential?.expiresAt !== undefined &&
+        (!Number.isFinite(credential.expiresAt) || credential.expiresAt <= Date.now()))
+      throw new Error("Invalid authentication credential expiry");
+    return credential === undefined ? undefined : { type: "bearer", token: credential.token };
+  },
+  // authenticate receives challenged context on the next SDK-controlled attempt.
+  challenge() {},
   getToken(key, context) {
     return context.cache?.get(key);
   },
@@ -972,7 +979,7 @@ const defaults: AuthProvider = {
 
 /** Compose host-specific policy with SDK defaults; defaults remain callable for delegation. */
 export const auth = Object.assign(
-  function auth(overrides: AuthOverrides = {}): AuthProvider {
+  function auth(overrides: AuthOptions = {}): AuthProvider {
     const provider = { ...defaults, ...overrides } as AuthProvider;
     // Each composed provider owns its fallback cache. Callers can supply endpoint-
     // scoped caches when sharing a provider; keys also include the full endpoint.

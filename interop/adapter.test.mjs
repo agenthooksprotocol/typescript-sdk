@@ -335,8 +335,10 @@ for (const mode of ["none", "bearer", "oauth", "workload", "mtls"])
             certFile: join(fixtures, "untrusted-client.pem"),
             keyFile: join(fixtures, "untrusted-client-key.pem"),
           };
+          // Retain the malformed state as a raw probe so client validation
+          // cannot reject locally before the untrusted TLS identity is presented.
           await assert.rejects(() =>
-            send(ready.endpoint, "/intercept", invalid, untrusted),
+            rawExchange(ready.endpoint, "/intercept", invalid, untrusted),
           );
           const health = await (
             await fetch(ready.controlEndpoint + "/health")

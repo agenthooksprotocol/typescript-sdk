@@ -63,8 +63,12 @@ export function stageResponse(
     else if (effect.operation === "merge")
       staged.input = { ...staged.input, ...clone(effect.value) };
     else throw new Error("Unsupported operation");
+    // Every complete temporary operation must be valid. A later edit cannot
+    // repair an invalid edit within the same atomic response.
+    if (!validateInput(staged.input))
+      throw new Error("Invalid effective tool input");
   }
-  // Validate the final effective operation, never a partially staged replacement.
+  // Validate unchanged input as well when there are no modifications.
   if (!validateInput(staged.input))
     throw new Error("Invalid effective tool input");
   if (!equal(before.input, staged.input)) {

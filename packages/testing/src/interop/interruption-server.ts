@@ -4,7 +4,7 @@ import process from "node:process";
 import { createInterface } from "node:readline";
 import {
   hooks,
-  type Message,
+  type InterceptRequest,
 } from "agenthooksprotocol/server";
 import type { ToolBeforeEffect } from "agenthooksprotocol/client";
 
@@ -25,7 +25,7 @@ export interface Script {
 }
 export async function openBackend() {
   const scripts = new Map<string, Script>();
-  const requests: Message[] = [];
+  const requests: InterceptRequest[] = [];
   const server = createServer(async (req: any, res: any) => {
     req.on("error", () => {});
     res.on("error", () => {});
@@ -47,13 +47,17 @@ export async function openBackend() {
       const decoded = JSON.parse(body);
       const script = scripts.get(decoded.id);
       if (!script) throw new Error("Missing script");
-      const response = await hooks.handle(request, async (message) => {
-        if (message.method !== "hooks/intercept")
-          throw new Error("Unexpected method");
-        requests.push(message);
-        script.received.resolve();
-        await script.released.promise;
-        return { effects: script.effects };
+      const response = await hooks.handle(request, {
+        intercept: {
+          toolBefore: async (ctx) => {
+            // The public context preserves the validated envelope; its Omit-based
+            // type loses named fields through the wire extension index signature.
+            requests.push(ctx.request as InterceptRequest);
+            script.received.resolve();
+            await script.released.promise;
+            return { effects: script.effects };
+          },
+        },
       });
       // Negative tests alone bypass the public server's response validation.
       res.writeHead(response.status, { "content-type": "application/json" });

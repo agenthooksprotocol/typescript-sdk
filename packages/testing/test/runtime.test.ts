@@ -31,8 +31,8 @@ const caps: BoundaryCapabilities = {
     "inject",
   ],
   modify: {
-    input: { operations: ["merge", "replace"] },
-    output: { operations: ["replace"] },
+    input: { merge: true, replace: true },
+    output: { replace: true },
   },
   flow: { operations: ["continue", "stop"], remainingContinuations: 2 },
   inject: { context: { append: true, deliverAt: ["now", "next_turn"] } },
@@ -206,43 +206,43 @@ test("public boundaries settle intercepts before observers with one occurrence i
           request.headers.get("authorization"),
           "Bearer runtime-token",
         );
-        return hooks.handle(request, (message) => {
-          if (message.method === "hooks/capabilities")
-            throw Error("Unexpected discovery");
-          const event = message.params.event;
-          assert.equal(event.id, "event-1");
-          assert.equal(event.type, "tool.before");
-          if (event.type !== "tool.before") throw Error("Unexpected event");
-          const route = new URL(request.url).hostname.split(".")[0]!;
-          seen.push(route);
-          assert.equal(
-            JSON.stringify((event as import("agenthooksprotocol/client").ToolBeforeEvent).tool.input),
-            JSON.stringify({ task: route === "first" ? 123 : 124 }),
-          );
-          if (message.method === "hooks/observe") return;
-          assert.equal(message.id, "event-1");
-          return {
-            effects:
-              route === "first"
-                ? [
-                    {
-                      type: "modify",
-                      target: "input",
-                      operation: "merge",
-                      value: { task: 124 },
-                    },
-                  ]
-                : [{ type: "message", text: "settled" }],
-          };
+        return hooks.handle(request, {
+          intercept: {
+            toolBefore: (ctx) => {
+              const event = ctx.event;
+              assert.equal(event.id, "event-1");
+              assert.equal(event.type, "tool.before");
+              const route = new URL(request.url).hostname.split(".")[0]!;
+              seen.push(route);
+              assert.equal(
+                JSON.stringify(event.tool.input),
+                JSON.stringify({ task: route === "first" ? 123 : 124 }),
+              );
+              assert.equal(ctx.request.id, "event-1");
+              return {
+                effects:
+                  route === "first"
+                    ? [{ type: "modify", target: "input", operation: "merge", value: { task: 124 } }]
+                    : [{ type: "message", text: "settled" }],
+              };
+            },
+          },
+          observe: {
+            toolBefore: (ctx) => {
+              assert.equal(ctx.event.id, "event-1");
+              assert.equal(ctx.event.type, "tool.before");
+              const route = new URL(request.url).hostname.split(".")[0]!;
+              seen.push(route);
+              assert.equal(JSON.stringify(ctx.event.tool.input), JSON.stringify({ task: 124 }));
+            },
+          },
+          capabilities: () => { throw Error("Unexpected discovery"); },
         });
       },
       capabilities: {
-        "tool.before": {
-          modes: ["intercept", "observe"],
-          capabilities: {
-            effects: ["modify", "message"],
-            modify: { input: { replace: false, merge: true } },
-          },
+        toolBefore: {
+          observe: true,
+          intercept: { modifyInput: "merge", message: true },
         },
       },
       auth: auth({ authenticate: async () => ({ token: "runtime-token" }) }),
@@ -255,15 +255,15 @@ test("public boundaries settle intercepts before observers with one occurrence i
       path: "native",
       tool: { name: "task", origin: "native", input: { task: 123 } },
     });
-    assert.deepEqual(result.errors, []);
-    assert.deepEqual(await result.observations, []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
     assert.deepEqual(seen, ["first", "second", "observer"]);
     assert.equal(
       JSON.stringify(result.event.tool.input),
       JSON.stringify({ task: 124 }),
     );
     assert.ok(
-      result.response.result.effects.some(
+      result.effects.some(
         (effect) => effect.type === "message",
       ),
     );
@@ -517,7 +517,7 @@ test("task comparisons ignore object key order and expose committed partial chan
 });
 
 test("observation routing stays local and never adds subscription identity to the wire", async () => {
-  const event = { id: "event", source: "urn:ahp:test", type: "tool.before" };
+  const event = { id: "event", source: "urn:ahp:test", type: "tool.before" as const };
   const subscriptions = [
     { id: "local-observer", mode: "observe" as const },
     { id: "called-interceptor", mode: "intercept" as const },

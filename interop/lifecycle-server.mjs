@@ -211,6 +211,14 @@ async function dispatch(request) {
 }
 // The application supplies fixture decisions; public helpers own canonical
 // envelope validation, correlation, safe errors, and notification suppression.
+const observeFixture = async ({ notification: message }) => {
+  if (cfg.fixtureEndpoint) {
+    await fixtureControl(cfg.fixtureEndpoint, "/evaluate", {
+      message,
+      deliveryId: cfg.deliveryId,
+    });
+  } else await dispatch(message);
+};
 async function publicDispatch(request) {
   const handled = await serverHooks.handle(
     new Request("http://localhost/hooks", {
@@ -218,16 +226,63 @@ async function publicDispatch(request) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(request),
     }),
-    async (message) => {
-      const response = cfg.fixtureEndpoint
-        ? await fixtureControl(cfg.fixtureEndpoint, "/evaluate", {
-            message,
-            deliveryId: cfg.deliveryId,
-          })
-        : await dispatch(message);
-      if (message.method === "hooks/observe") return;
-      const { protocolVersion, ...result } = response.result;
-      return result;
+    {
+      intercept: {
+        toolBefore: async ({ request: message }) => {
+          const response = cfg.fixtureEndpoint
+            ? await fixtureControl(cfg.fixtureEndpoint, "/evaluate", {
+                message,
+                deliveryId: cfg.deliveryId,
+              })
+            : await dispatch(message);
+          const { protocolVersion, ...result } = response.result;
+          return result;
+        },
+      },
+      observe: {
+        toolBefore: observeFixture,
+        toolAfter: observeFixture,
+        sessionStart: observeFixture,
+        configChangeBefore: observeFixture,
+        turnStart: observeFixture,
+        turnFinishBefore: observeFixture,
+        modelRequestBefore: observeFixture,
+        modelResponseAfter: observeFixture,
+        modelSwitchBefore: observeFixture,
+        toolPermissionRequest: observeFixture,
+        toolBatchAfter: observeFixture,
+        contextCompactBefore: observeFixture,
+        contextCompactAfter: observeFixture,
+        taskChangeBefore: observeFixture,
+        userElicitationRequest: observeFixture,
+        userElicitationResult: observeFixture,
+        userMessageInbound: observeFixture,
+        userMessageOutbound: observeFixture,
+        workspaceChangeBefore: observeFixture,
+        sessionEnd: observeFixture,
+        configChangeAfter: observeFixture,
+        turnEnd: observeFixture,
+        turnProgress: observeFixture,
+        modelError: observeFixture,
+        modelSwitchAfter: observeFixture,
+        toolPermissionResolved: observeFixture,
+        toolProgress: observeFixture,
+        taskChangeAfter: observeFixture,
+        userAttention: observeFixture,
+        workspaceChangeAfter: observeFixture,
+        fileChanged: observeFixture,
+        hookFailure: observeFixture,
+      },
+      capabilities: async ({ request: message }) => {
+        const response = cfg.fixtureEndpoint
+          ? await fixtureControl(cfg.fixtureEndpoint, "/evaluate", {
+              message,
+              deliveryId: cfg.deliveryId,
+            })
+          : await dispatch(message);
+        const { protocolVersion, ...result } = response.result;
+        return result;
+      },
     },
   );
   const text = await handled.text();

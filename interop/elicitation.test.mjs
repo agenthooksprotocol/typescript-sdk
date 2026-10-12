@@ -60,6 +60,56 @@ function run(plan, args = ["client"]) {
   });
 }
 
+test("elicitation sender preserves complete correlated no-effect wire responses losslessly", async () => {
+  const responses = [];
+  const incomingMessages = [];
+  const server = createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    const incoming = JSON.parse(body);
+    incomingMessages.push(incoming);
+    // Deliberately retain whitespace: reserialization is not wire preservation.
+    const response = ` {\n  "jsonrpc": "2.0", "id": ${JSON.stringify(incoming.id)},\n  "result": { "protocolVersion": "draft", "effects": [] }\n}\n`;
+    responses.push(response);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(response);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const requests = ["request-one", "request-two-λ"].map((id) => {
+      const request = message();
+      request.id = request.params.event.id = id;
+      return request;
+    });
+    const result = await run({
+      endpoint: `http://127.0.0.1:${server.address().port}`,
+      token: "event-secret",
+      steps: requests.map((request) => ({
+        path: "/hooks/intercept",
+        bytes: Buffer.from(JSON.stringify(request)).toString("base64"),
+      })),
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const outputs = JSON.parse(result.stdout);
+    assert.equal(outputs.length, requests.length);
+    assert.equal(responses.length, requests.length);
+    for (const [index, output] of outputs.entries()) {
+      assert.equal(output.status, 200);
+      assert.equal(output.body, responses[index]);
+      const envelope = JSON.parse(output.body);
+      assert.equal(envelope.id, incomingMessages[index].id);
+      assert.deepEqual(envelope, {
+        jsonrpc: "2.0",
+        id: requests[index].id,
+        result: { protocolVersion: "draft", effects: [] },
+      });
+      assert.deepEqual(output.contentUploads, []);
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("elicitation sender preserves inline text without uploads; bypass keeps legacy refs raw", async () => {
   const uploads = [],
     messages = [];

@@ -71,6 +71,41 @@ export const catalogueManifest = {
     },
   ],
 };
+/** Synthetic catalogue declarations are separate from wire discovery.
+ * @type {import("agenthooksprotocol/client").HostCapabilities}
+ */
+const catalogueHostCapabilities = {
+  toolBefore: {
+    observe: true,
+    intercept: {
+      deny: true, allow: true, ask: true, message: true, returnResult: true,
+      modifyInput: "replace-and-merge",
+      flow: { operations: ["stop"] },
+      inject: { context: { append: true, deliverAt: ["now", "next_turn"] } },
+    },
+  },
+  toolAfter: { observe: true },
+  turnStart: { observe: true },
+  turnFinishBefore: { observe: true },
+  turnEnd: { observe: true },
+  turnProgress: { observe: true },
+  modelRequestBefore: { observe: true },
+  modelResponseAfter: { observe: true },
+  modelError: { observe: true },
+  modelSwitchBefore: { observe: true },
+  modelSwitchAfter: { observe: true },
+  toolPermissionRequest: { observe: true },
+  toolPermissionResolved: { observe: true },
+  toolProgress: { observe: true },
+  toolBatchAfter: { observe: true },
+  contextCompactBefore: { observe: true },
+  contextCompactAfter: { observe: true },
+  taskChangeBefore: { observe: true },
+  taskChangeAfter: { observe: true },
+  workspaceChangeBefore: { observe: true },
+  workspaceChangeAfter: { observe: true },
+  fileChanged: { observe: true },
+};
 /** Hooks validates registration; host policy checks credential availability and application requirements. */
 export async function evaluateRegistration(
   registration,
@@ -84,7 +119,7 @@ export async function evaluateRegistration(
     if (!parsed.ok) return { accepted: false };
     hooks = new Hooks(parsed.value, {
       source: "urn:ahp:interop:catalogue",
-      capabilities: manifest,
+      capabilities: catalogueHostCapabilities,
       auth: hooksAuth({
         resolveEnvironmentVariable: (name) => context.environment?.[name],
       }),

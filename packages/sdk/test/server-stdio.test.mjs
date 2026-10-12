@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { PassThrough, Readable, Writable } from "node:stream";
 import { setImmediate } from "node:timers/promises";
-import { hooks } from "agenthooksprotocol/server";
+import { NdjsonDecoder } from "agenthooksprotocol";
 import { serveStdio } from "agenthooksprotocol/server/stdio";
 
 function capture(options = {}) {
@@ -54,14 +54,18 @@ test("stdio composes hooks.handle: correlation, parse errors, and silent notific
     ].join("\n"),
   );
   await serveStdio(
-    (request) => {
-      assert.equal(request.method, "POST");
-      assert.equal(request.headers.get("content-type"), "application/json");
-      return hooks.handle(request, (message) => {
-        seen.push(message.method);
-        if (message.method === "hooks/observe") return;
-        return { effects: [{ type: "deny", reason: "é🪝" }] };
-      });
+    {
+      intercept: {
+        toolBefore(ctx) {
+          seen.push(ctx.request.method);
+          return { effects: [{ type: "deny", reason: "é🪝" }] };
+        },
+      },
+      observe: {
+        toolBefore(ctx) {
+          seen.push(ctx.notification.method);
+        },
+      },
     },
     {
       stdin: Readable.from([...bytes].map((byte) => Buffer.from([byte]))),
@@ -93,25 +97,26 @@ test("stdio composes hooks.handle: correlation, parse errors, and silent notific
   output.stream.end();
 });
 
-test("raw lines, CRLF, EOF, statuses and multiline response framing", async () => {
-  const seen = [];
-  const output = capture();
-  await serveStdio(
-    async (request) => {
-      seen.push(await request.text());
-      if (seen.length === 2) return new Response(null, { status: 500 });
-      return new Response('{\n  "error": true\r\n}', { status: 400 });
-    },
-    { stdin: Readable.from(["first\r\n\nlast"]), stdout: output.stream },
-  );
-  assert.deepEqual(seen, ["first\r", "", "last"]);
-  assert.equal(output.text(), '{   "error": true  }\n{   "error": true  }\n');
-  output.stream.end();
+// Root framing is independent from server admission and typed dispatch.
+test("root NDJSON preserves split UTF-8 and CRLF and requires complete frames", () => {
+  const decoder = new NdjsonDecoder();
+  const text = JSON.stringify(intercept());
+  const frames = [];
+  for (const byte of Buffer.from(text + "\r\n")) {
+    frames.push(...decoder.push(Buffer.from([byte])));
+  }
+  assert.deepEqual(frames, [text]);
+  decoder.end();
+  const incomplete = new NdjsonDecoder();
+  assert.deepEqual(incomplete.push(Buffer.from(text)), []);
+  assert.throws(() => incomplete.end(), /incomplete NDJSON frame/);
+  assert.throws(() => new NdjsonDecoder().push(Buffer.from("\n")), /Empty NDJSON frame/);
+  assert.throws(() => new NdjsonDecoder().push(Buffer.from([0xff, 0x0a])), /valid UTF-8/);
 });
 
 test("empty input invokes no handler and writes nothing", async () => {
   const output = capture();
-  await serveStdio(() => assert.fail("no request"), {
+  await serveStdio({ intercept: { toolBefore() { assert.fail("no request"); } } }, {
     stdin: Readable.from([]),
     stdout: output.stream,
   });
@@ -126,10 +131,7 @@ test("notification handler failures remain silent through the shim", async () =>
   message.method = "hooks/observe";
   const output = capture();
   await serveStdio(
-    (request) =>
-      hooks.handle(request, () => {
-        throw Error("policy failed");
-      }),
+    { observe: { toolBefore() { throw Error("policy failed"); } } },
     {
       stdin: Readable.from([JSON.stringify(message) + "\n"]),
       stdout: output.stream,
@@ -152,8 +154,8 @@ test(
         writes.push({ text: chunk.toString(), callback });
       },
     });
-    const serving = serveStdio(() => new Response(String(++calls)), {
-      stdin: Readable.from(["a\nb\n"]),
+    const serving = serveStdio({ intercept: { toolBefore() { calls++; return { effects: [] }; } } }, {
+      stdin: Readable.from([JSON.stringify(intercept("a")) + "\n" + JSON.stringify(intercept("b")) + "\n"]),
       stdout: output,
     }).then(() => {
       completed = true;
@@ -168,15 +170,15 @@ test(
     writes[1].callback();
     await serving;
     assert.deepEqual(
-      writes.map(({ text }) => text),
-      ["1\n", "2\n"],
+      writes.map(({ text }) => JSON.parse(text).id),
+      ["a", "b"],
     );
     assert.equal(output.writableEnded, false);
     output.end();
   },
 );
 
-for (const kind of ["handler", "response", "input", "output"]) {
+for (const kind of ["input", "output"]) {
   test(
     `stdio propagates ${kind} errors without fabricated replies`,
     { timeout: 5000 },
@@ -198,20 +200,9 @@ for (const kind of ["handler", "response", "input", "output"]) {
                 this.destroy(failure);
               },
             })
-          : Readable.from(["request\n"]);
+          : Readable.from([JSON.stringify(intercept()) + "\n"]);
       const serving = serveStdio(
-        () => {
-          if (kind === "handler") throw failure;
-          if (kind === "response")
-            return new Response(
-              new ReadableStream({
-                start(controller) {
-                  controller.error(failure);
-                },
-              }),
-            );
-          return new Response("reply");
-        },
+        { intercept: { toolBefore() { return { effects: [] }; } } },
         { stdin: input, stdout: output },
       );
       await assert.rejects(serving, (error) => error === failure);
@@ -227,7 +218,7 @@ test("abort tears down idle input and output", { timeout: 5000 }, async () => {
   const input = new PassThrough();
   const output = capture().stream;
   const controller = new AbortController();
-  const serving = serveStdio(() => new Response("unused"), {
+  const serving = serveStdio({ intercept: { toolBefore() { return { effects: [] }; } } }, {
     stdin: input,
     stdout: output,
     signal: controller.signal,
@@ -239,7 +230,7 @@ test("abort tears down idle input and output", { timeout: 5000 }, async () => {
 });
 
 test(
-  "abort reaches an active handler's Request signal",
+  "abort reaches an active handler's context signal",
   { timeout: 5000 },
   async () => {
     const input = new PassThrough();
@@ -248,16 +239,16 @@ test(
     const entered = new PassThrough();
     const ready = once(entered, "data");
     const serving = serveStdio(
-      async (request) => {
-        const aborted = once(request.signal, "abort");
+      { intercept: { async toolBefore(ctx) {
+        const aborted = once(ctx.signal, "abort");
         entered.write("ready");
         await aborted;
-        request.signal.throwIfAborted();
-        return new Response("unreachable");
-      },
+        ctx.signal.throwIfAborted();
+        return { effects: [] };
+      } } },
       { stdin: input, stdout: output.stream, signal: controller.signal },
     );
-    input.write("request\n");
+    input.write(JSON.stringify(intercept()) + "\n");
     await ready;
     controller.abort();
     await assert.rejects(serving, { name: "AbortError" });
@@ -270,7 +261,7 @@ test("output errors interrupt an idle input", { timeout: 5000 }, async () => {
   const failure = Error("output closed");
   const input = new PassThrough();
   const output = capture().stream;
-  const serving = serveStdio(() => new Response("unused"), {
+  const serving = serveStdio({ intercept: { toolBefore() { return { effects: [] }; } } }, {
     stdin: input,
     stdout: output,
   });
@@ -283,12 +274,12 @@ test("abort interrupts output backpressure", { timeout: 5000 }, async () => {
   const input = new PassThrough();
   const output = new PassThrough({ highWaterMark: 1 });
   const controller = new AbortController();
-  const serving = serveStdio(() => new Response("reply"), {
+  const serving = serveStdio({ intercept: { toolBefore() { return { effects: [] }; } } }, {
     stdin: input,
     stdout: output,
     signal: controller.signal,
   });
-  input.write("request\n");
+  input.write(JSON.stringify(intercept()) + "\n");
   await setImmediate();
   assert.equal(output.writableNeedDrain, true);
   controller.abort();
@@ -308,8 +299,8 @@ test(
         release = callback;
       },
     });
-    const serving = serveStdio(() => new Response("reply"), {
-      stdin: Readable.from(["request\n"]),
+    const serving = serveStdio({ intercept: { toolBefore() { return { effects: [] }; } } }, {
+      stdin: Readable.from([JSON.stringify(intercept()) + "\n"]),
       stdout: output,
     }).then(() => {
       completed = true;
@@ -332,7 +323,7 @@ test(
     const controller = new AbortController();
     controller.abort();
     await assert.rejects(
-      serveStdio(() => assert.fail("aborted"), {
+      serveStdio({ intercept: { toolBefore() { assert.fail("aborted"); } } }, {
         stdin: input,
         stdout: output,
         signal: controller.signal,

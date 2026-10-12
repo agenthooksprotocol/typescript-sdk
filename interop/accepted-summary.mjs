@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { mutableValues } from "./settlement.mjs";
 
 /** Present the actual public Hooks result. This enacts accepted decisions; it
@@ -6,18 +5,10 @@ import { mutableValues } from "./settlement.mjs";
  * In particular, an SDK-accepted invalid compound cannot become a rejection here.
  */
 export function summarizeAccepted(request, result) {
-  const { event, response } = result;
-  const effects = response.result.effects;
+  const { event, effects } = result;
   const prior = request.params.state ?? { permission: "none", candidate: null };
-  const input = structuredClone(event.tool?.input ?? event.input ?? {});
+  const input = structuredClone(event.type === "tool.before" ? event.tool.input : {});
   const values = mutableValues(event);
-  const changed =
-    !isDeepStrictEqual(
-      input,
-      structuredClone(
-        request.params.event.tool?.input ?? request.params.event.input ?? {},
-      ),
-    ) || !isDeepStrictEqual(values, mutableValues(request.params.event));
   const decision =
     prior.permission === "deny" || effects.some((e) => e.type === "deny")
       ? "deny"
@@ -32,9 +23,7 @@ export function summarizeAccepted(request, result) {
           flows.some((e) => e.operation === "continue")
         ? "continue"
         : undefined;
-  const candidate =
-    effects.findLast((e) => e.type === "return") ??
-    (changed ? null : prior.candidate);
+  const candidate = result.state.candidate;
   const instructions = [
     ...(prior.instructions ?? []),
     ...flows.flatMap((e) =>

@@ -66,6 +66,8 @@ export async function runCompaction(
   after = [],
   options = {},
 ) {
+  if (options.observeOnly && after.length)
+    throw new TypeError("observeOnly requires explicit observers, not after interceptors");
   const itemId = options.itemId ?? "summary-1";
   const state = {
     instructions: typeof instructions === "string" ? textParts(instructions) : structuredClone(instructions),
@@ -86,7 +88,7 @@ export async function runCompaction(
   const rows = [
     ...before.map((row) => ({ ...row, boundary: "before" })),
     ...after.map((row) => ({ ...row, boundary: "after" })),
-    ...(options.observers ?? []).map((row) => ({ ...row, boundary: "after" })),
+    ...(options.observers ?? []).map((row) => ({ ...row, boundary: "after", observation: true })),
   ];
   const server = createServer(async (req, res) => {
     try {
@@ -111,12 +113,12 @@ export async function runCompaction(
           return;
         }
         const row = rows[Number(req.url.slice(1))];
-        const invoke = async (message) => {
-          const event = message.params.event;
+        const invoke = async (ctx) => {
+          const event = ctx.event;
           const snapshot = structuredClone(state);
           if (row.boundary === "before") {
             snapshot.instructions = structuredClone(event.instructions);
-            const candidate = message.params.state?.candidate;
+            const candidate = ctx.state?.candidate;
             snapshot.candidate = candidate
               ? {
                   body: structuredClone(candidate.value),
@@ -130,33 +132,14 @@ export async function runCompaction(
             boundary: row.boundary,
             capabilities: compactionCapabilities(
               row.boundary,
-              options.observeOnly && row.boundary === "after",
+              row.observation === true,
             ),
           });
-          if (options.observeOnly && row.boundary === "after")
+          if (row.observation === true)
             Object.assign(snapshot, { applied: true, generated, provenance });
           seen.push(structuredClone(snapshot));
-          const suppliedEffects = await row.run(snapshot);
-          const effects = row.bypass !== true && Array.isArray(suppliedEffects)
-            ? suppliedEffects.map(effect => effect.type === "return" && typeof effect.value === "string"
-              ? { ...effect, value: summary(effect.value) } : effect)
-            : suppliedEffects;
-          // This fixture compacts inline text parts; other JSON effect values
-          // are valid elsewhere but outside this application's contract.
-          if (
-            row.bypass !== true &&
-            Array.isArray(effects) &&
-            effects.some(
-              (effect) =>
-                ((effect.type === "return" || effect.type === "modify") &&
-                  (!Array.isArray(effect.value) ||
-                    effect.value.some(
-                      (part) => part.kind !== "text" || typeof part.text !== "string",
-                    ))),
-            )
-          )
-            throw Error("Text compaction requires text effects");
-          return message.method === "hooks/observe" ? undefined : { effects };
+          const effects = await row.run(snapshot);
+          return row.observation === true ? undefined : { effects };
         };
         // Explicit adversarial fixture escape hatch, never a positive response path.
         if (row.bypass === true) {
@@ -164,9 +147,13 @@ export async function runCompaction(
           response = Response.json({
             jsonrpc: "2.0",
             id: message.id,
-            result: { protocolVersion: "draft", ...(await invoke(message)) },
+            result: { protocolVersion: "draft", ...(await invoke({ event: message.params.event, state: message.params.state })) },
           });
-        } else response = await hooks.handle(request, invoke);
+        } else response = await hooks.handle(request, row.observation === true
+          ? { observe: { contextCompactAfter: invoke } }
+          : { intercept: row.boundary === "before"
+              ? { contextCompactBefore: invoke }
+              : { contextCompactAfter: invoke } });
         // Attribute only an authenticated, valid emitted response. A rejected
         // compound must not overwrite the supplier of an equal earlier value.
         if (row.bypass !== true && response.ok) {
@@ -202,11 +189,11 @@ export async function runCompaction(
               rows.length ? "context.compact." + row.boundary : "session.end",
             ],
             mode:
-              !rows.length || (options.observeOnly && row.boundary === "after")
+              !rows.length || (row.observation === true)
                 ? "observe"
                 : "intercept",
             ...(!rows.length ||
-            (options.observeOnly && row.boundary === "after")
+            (row.observation === true)
               ? {}
               : {
                   failurePolicy: row.failurePolicy ?? "fail-closed",
@@ -220,11 +207,16 @@ export async function runCompaction(
     {
       source: "urn:ahp:compaction-host",
       capabilities: {
-        "context.compact.before": compactionCapabilities("before"),
-        "context.compact.after": options.observeOnly
-          ? { modes: ["observe"] }
-          : compactionCapabilities("after"),
-        "session.end": { modes: ["observe"] },
+        contextCompactBefore: {
+          intercept: { modifyInstructions: "replace", message: true, returnResult: true, deny: true },
+        },
+        contextCompactAfter: options.observeOnly
+          ? { observe: true }
+          : {
+              intercept: { modifySummary: "replace", message: true },
+              ...(options.observers?.length ? { observe: true } : {}),
+            },
+        sessionEnd: { observe: true },
       },
       auth: auth({
         resolveEnvironmentVariable: (name) =>
@@ -237,27 +229,23 @@ export async function runCompaction(
    * @param {import("agenthooksprotocol/client").BoundaryInput<"context.compact.before" | "context.compact.after">} input
    */
   async function settle(boundary, input) {
-    const result = await client.dispatch(
-      boundary === "before"
-        ? "context.compact.before"
-        : "context.compact.after",
-      input,
-    );
+    const result = await (boundary === "before"
+      ? client.contextCompactBefore(/** @type {import("agenthooksprotocol/client").BoundaryInput<"context.compact.before">} */ (input), { capabilities: compactionCapabilities("before") })
+      : client.contextCompactAfter(/** @type {import("agenthooksprotocol/client").BoundaryInput<"context.compact.after">} */ (input), options.observeOnly ? {} : { capabilities: compactionCapabilities("after") }));
     failures.push(
-      ...result.errors.map((error) => ({
+      ...result.diagnostics.filter(d => d.phase !== "observation").map((error) => ({
         boundary,
         supplier: rows[Number(error.backendId.split("hook")[1])].supplier,
       })),
     );
-    const effects = result.response.result.effects;
-    // Enact accepted effects on host-owned data.
+    const effects = result.effects;
+    // Event modifications are already committed; residual effects are host actions.
+    if (boundary === "before") state.instructions = structuredClone(result.event.instructions);
+    else state.summary = structuredClone(result.event.summary);
     for (const effect of effects) {
-      if (effect.type === "modify") {
-        if (boundary === "before") state.instructions = structuredClone(result.event.instructions);
-        else state.summary = structuredClone(result.event.summary);
-      } else if (effect.type === "message") state.messages.push(effect.text);
+      if (effect.type === "message") state.messages.push(effect.text);
     }
-    const candidate = effects.find((effect) => effect.type === "return");
+    const candidate = result.state.candidate;
     if (boundary === "before")
       state.candidate = candidate
         ? { body: candidate.value, supplier: suppliers.get(JSON.stringify(candidate.value)) }
@@ -303,7 +291,7 @@ export async function runCompaction(
       applied = !state.denied;
       if (options.observeOnly) {
         detached = true;
-        void result.observations.finally(close);
+        await close();
       }
     }
     return structuredClone({
@@ -333,11 +321,14 @@ async function receive(request) {
           return row.effects;
         },
       }));
+    // The synthetic request declares after-boundary disposition explicitly.
+    // Configure notification subscriptions, not control callbacks, for observe-only.
     const result = await runCompaction(
       p.instructions,
       hooks("before"),
-      hooks("after"),
-      { itemId: p.itemId, observeOnly: p.observeOnly },
+      p.observeOnly ? [] : hooks("after"),
+      { itemId: p.itemId, observeOnly: p.observeOnly,
+        observers: p.observeOnly ? hooks("after") : [] },
     );
     return { jsonrpc: "2.0", id: request.id ?? null, result };
   } catch {

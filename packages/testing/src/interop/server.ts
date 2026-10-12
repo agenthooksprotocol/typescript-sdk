@@ -4,7 +4,7 @@ import { createServer as createTlsServer } from "node:https";
 import { readFileSync } from "node:fs";
 import process from "node:process";
 import { NdjsonDecoder } from "agenthooksprotocol";
-import { parseInterceptRequest as parseDraftRequest, type CanonicalMessage, type UserMessageInboundEvent } from "agenthooksprotocol/draft";
+import { parseInterceptRequest as parseDraftRequest, type CanonicalMessage } from "agenthooksprotocol/draft";
 import { hooks, attachments } from "agenthooksprotocol/server";
 import { createAuth } from "./auth.js";
 
@@ -41,12 +41,10 @@ async function intercept(body: string): Promise<string> {
         headers: { "content-type": "application/json" },
         body,
       }),
-      (message) => {
-        if (
-          message.method === "hooks/intercept" &&
-          message.params.event.type === "user.message.inbound"
-        ) {
-          const event = message.params.event as UserMessageInboundEvent;
+      { intercept: {
+        toolBefore: () => ({ effects: [] }),
+        userMessageInbound: (ctx) => {
+          const event = ctx.event;
           for (const item of event.message.messages.flatMap((message: CanonicalMessage) => message.parts)) {
             if (item.kind !== "attachment") continue;
             if (
@@ -59,9 +57,9 @@ async function intercept(body: string): Promise<string> {
             )
               throw Error("Uncommitted attachment");
           }
-        }
-        return { effects: [] };
-      },
+          return { effects: [] };
+        },
+      } },
     );
     return response.text();
   } catch {

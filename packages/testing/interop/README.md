@@ -57,15 +57,15 @@ Adapters in other languages may implement these test bindings and reuse the JSON
 but this runner launches TypeScript only. No production agent, external issuer
 or LLM is involved. Positive adapter paths use the public
 `agenthooksprotocol/client` `Hooks` and `auth` surface. Canonical successful
-server replies use `agenthooksprotocol/server` `hooks.handle`; content
+server replies use `agenthooksprotocol/server` `hooks.handle` with separate
+intercept and observe maps; content
 fixtures use its `attachments.parse` and `attachments.response` helpers.
 
 Raw transport probes remain intentional for malformed envelopes, invalid
 credentials, TLS rejection and deliberately invalid backend replies. Low-level
-draft codec, state and receiver unit tests are compatibility contracts, not
-claims of public-client interoperability. `public-fixtures.test.ts` additionally
-checks the canonical fake backend through persistent, chunked stdio; its legacy
-main-package `ToolBeforeRunner` branch remains available for compatibility.
+draft codec, state and receiver unit tests exercise independent wire and host
+algorithms. `public-fixtures.test.ts` checks the canonical fake backend through
+persistent, chunked stdio using the public `Hooks` API.
 
 Subscription IDs and candidate suppliers are local harness bookkeeping, never
 wire identity or authorization claims. Atomic request snapshots omit local

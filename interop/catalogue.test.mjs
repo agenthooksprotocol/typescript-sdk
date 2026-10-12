@@ -110,36 +110,43 @@ test("catalogue native payloads and lineage negatives run through public server 
     ),
   );
   const lineage = new TaskLineage();
+  const observeLineage = (ctx) => lineage.accept(ctx.notification);
+  const handlers = {
+    observe: {
+      fileChanged: observeLineage,
+      modelError: observeLineage,
+      modelSwitchAfter: observeLineage,
+      taskChangeAfter: observeLineage,
+      toolPermissionResolved: observeLineage,
+      toolProgress: observeLineage,
+      turnEnd: observeLineage,
+      turnProgress: observeLineage,
+      workspaceChangeAfter: observeLineage,
+      contextCompactAfter: observeLineage,
+      contextCompactBefore: observeLineage,
+      modelRequestBefore: observeLineage,
+      modelResponseAfter: observeLineage,
+      modelSwitchBefore: observeLineage,
+      taskChangeBefore: observeLineage,
+      toolAfter: observeLineage,
+      toolBatchAfter: observeLineage,
+      toolBefore: observeLineage,
+      toolPermissionRequest: observeLineage,
+      turnFinishBefore: observeLineage,
+      turnStart: observeLineage,
+      workspaceChangeBefore: observeLineage
+    }
+  };
   for (const row of scenarios)
     for (const step of row.steps) {
       if (step.op !== "notify" && step.op !== "rawNotify") continue;
-      // Normalize positive legacy catalogue fixtures at the producer boundary.
-      // Raw negative probes remain unchanged.
-      if (step.op === "notify") {
-        const event = step.message.params.event;
-        for (const [slot, role] of [["delta", "assistant"], ["partialOutput", "tool"]]) {
-          const part = event[slot];
-          if (part && !part.parts) {
-            event[slot] = {
-              id: `${part.id}:message`, role,
-              parts: [{ id: part.id, kind: "text", mediaType: "text/plain", selection: part.selection }],
-            };
-          }
-        }
-        if (event.summary && !Array.isArray(event.summary)) {
-          const part = event.summary;
-          event.summary = [{ id: part.id, kind: "text", mediaType: "text/plain", selection: part.selection }];
-        }
-      }
       const response = await sdkServer.hooks.handle(
         new Request("http://localhost/observe", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(step.message),
         }),
-        (message) => {
-          lineage.accept(message);
-        },
+        handlers,
       );
       if (step.op === "notify") assert.equal(response.status, 204, row.id);
       else assert.notEqual(response.status, 204, row.id);

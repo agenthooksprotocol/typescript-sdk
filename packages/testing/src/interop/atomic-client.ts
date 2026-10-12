@@ -9,7 +9,6 @@ import {
   type BoundaryResult,
 } from "agenthooksprotocol/client";
 import {
-  parseInterceptResponse,
   type Capabilities,
   type InterceptRequest,
   type JsonValue,
@@ -44,10 +43,10 @@ export interface AtomicScenario {
 }
 export interface AtomicRow {
   client: "public-hooks";
-  effects: Effect[];
+  effects: BoundaryResult<"tool.before">["effects"];
   effectiveInput: unknown;
   hostAccepted: boolean;
-  sdkErrors: BoundaryResult<"tool.before">["errors"];
+  sdkErrors: BoundaryResult<"tool.before">["diagnostics"];
   id: string;
   transport: "http" | "stdio";
   actual: AtomicOutcome;
@@ -121,7 +120,7 @@ export async function runAtomicInterop(): Promise<AtomicRow[]> {
               headers: { "content-type": "application/json" },
               body,
             }),
-            () => result,
+            { intercept: { toolBefore: () => result } },
           );
           response.writeHead(handled.status, {
             "content-type": "application/json",
@@ -165,7 +164,7 @@ export async function runAtomicInterop(): Promise<AtomicRow[]> {
         {
           source: "urn:ahp:interop",
           capabilities: {
-            "tool.before": scenario.subscribers[0]!.capabilities,
+            toolBefore: { intercept: { deny: true, allow: true, ask: true, message: true, returnResult: true, modifyInput: "replace-and-merge" } },
           },
           auth: auth(),
         },
@@ -200,6 +199,7 @@ export async function runAtomicInterop(): Promise<AtomicRow[]> {
             },
           },
           {
+            capabilities: scenario.subscribers[0]!.capabilities,
             initialState: {
               permission: scenario.initial.denied
                 ? "deny"
@@ -213,16 +213,16 @@ export async function runAtomicInterop(): Promise<AtomicRow[]> {
             },
           },
         );
-        if (result.interrupted || (await result.observations).length)
+        if (result.interrupted || result.diagnostics.filter(d => d.phase === "observation").length)
           throw new Error(
             `Unexpected interruption/observation: ${scenario.id}`,
           );
         rows.push({
           client: "public-hooks",
-          effects: result.response.result.effects,
+          effects: result.effects,
           effectiveInput: result.event.tool.input,
           hostAccepted: validHostInput(result.event.tool.input),
-          sdkErrors: result.errors,
+          sdkErrors: result.diagnostics.filter(d => d.phase !== "observation"),
           id: scenario.id,
           transport,
           actual: enact(scenario, result, requests),
@@ -252,6 +252,7 @@ function enact(
   const state = structuredClone(scenario.initial);
   const trace: string[] = [],
     emittedMessages: string[] = [];
+  let acceptedIndex = 0;
   for (const [index, subscriber] of scenario.subscribers.entries()) {
     const request = requests[index];
     if (!request)
@@ -259,7 +260,7 @@ function enact(
         `Missing public delivery: ${scenario.id}/${subscriber.id}`,
       );
     trace.push(`dispatch:${subscriber.id}`);
-    const error = result.errors.find(
+    const error = result.diagnostics.filter(d => d.phase !== "observation").find(
       (error) => error.backendId === `interop.${subscriber.id}`,
     );
     if (error) {
@@ -278,15 +279,11 @@ function enact(
       if (state.approval === "approved") state.approval = "pending";
     }
     state.input = structuredClone(input);
-    // Public errors established atomic acceptance. Decode the accepted fixture
-    // only to attach host provenance/messages that BoundaryResult does not tag.
-    const accepted = parseInterceptResponse(
-      subscriber.rawResponse ?? JSON.stringify(subscriber.response),
-    );
-    if (!accepted.ok)
-      throw new Error("SDK accepted an invalid fixture response");
+    // Use the actual SDK-accepted response, not a reconstructed fixture envelope.
+    const accepted = result.acceptedResponses[acceptedIndex++];
+    if (!accepted) throw new Error("Missing SDK accepted response");
     trace.push(`accept:${subscriber.id}`);
-    for (const effect of (accepted.value.result.effects ?? [])) {
+    for (const effect of (accepted.result.effects ?? [])) {
       switch (effect.type) {
         case "return":
           state.candidate = {
@@ -314,6 +311,9 @@ function enact(
     }
     if (state.denied) state.candidate = null;
   }
+  state.candidate = result.state.candidate === null
+    ? null
+    : { ...state.candidate!, value: structuredClone(result.state.candidate.value) };
   const actions = [
     "policy",
     !validHostInput(result.event.tool.input)
@@ -331,7 +331,7 @@ function enact(
     state,
     actions,
     trace,
-    failures: result.errors.length,
+    failures: result.diagnostics.filter(d => d.phase !== "observation").length,
     executions: actions.includes("execute") ? 1 : 0,
     emittedMessages,
     requests,

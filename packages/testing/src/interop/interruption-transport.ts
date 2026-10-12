@@ -66,7 +66,7 @@ export async function openInterruptionTransport(
     },
     {
       source: "urn:ahp:interruption",
-      capabilities: { "tool.before": capabilities },
+      capabilities: { toolBefore: { intercept: { deny: true, allow: true, ask: true, message: true, returnResult: true, modifyInput: "replace-and-merge" } } },
       auth: auth(),
     },
   );
@@ -109,7 +109,7 @@ export async function openInterruptionTransport(
           path: "native",
           tool: { origin: "native", name: "task", kind: "task", input },
         },
-        { signal: controller.signal },
+        { signal: controller.signal, capabilities },
       );
       return {
         response,

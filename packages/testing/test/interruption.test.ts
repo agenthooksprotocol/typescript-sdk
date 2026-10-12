@@ -88,12 +88,12 @@ test("canonical interruption scenarios through public Hooks and server over HTTP
           await run; // SDK abort settles without releasing the backend.
           const result = await exchange.response;
           assert.equal(result.interrupted, true, id);
-          assert.equal(result.errors[0]?.code, "INTERRUPTED", id);
-          assert.equal(result.errors[0]?.syntheticDenial, false, id);
-          assert.deepEqual(result.response.result.effects, [], id);
+          assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0]?.code, "cancelled", id);
+          assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0]?.syntheticDenial, false, id);
+          assert.deepEqual(result.effects, [], id);
           await other.release();
           assert.equal((await other.response).interrupted, false, id);
-          assert.deepEqual((await other.response).errors, [], id);
+          assert.deepEqual((await other.response).diagnostics.filter(d => d.phase !== "observation"), [], id);
           await exchange.release();
           assert.deepEqual(transport.routeRequests[1], [], id);
           assert.deepEqual(pipeline.state, initial, id);
@@ -106,7 +106,7 @@ test("canonical interruption scenarios through public Hooks and server over HTTP
         } else if (scenario.phase === "accepted") {
           await exchange.release();
           await accepted.promise;
-          assert.deepEqual((await exchange.response).errors, [], id);
+          assert.deepEqual((await exchange.response).diagnostics.filter(d => d.phase !== "observation"), [], id);
           pipeline.interrupt();
           execute.resolve();
           await run;
@@ -148,21 +148,23 @@ test("canonical interruption scenarios through public Hooks and server over HTTP
           if (scenario.phase === "timeout") await exchange.release();
           const result = await exchange.response;
           assert.equal(result.interrupted, false, id);
-          assert.equal(result.errors.length, 1, id);
+          assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1, id);
           assert.equal(
-            result.errors[0]?.code,
+            result.diagnostics.filter(d => d.phase !== "observation")[0]?.code,
             scenario.phase === "timeout"
-              ? "DEADLINE_EXCEEDED"
-              : "DELIVERY_FAILED",
+              ? "deadline_exceeded"
+              : kind === "http"
+                ? "protocol_rejection"
+                : "transport",
             id,
           );
           assert.equal(
-            result.errors[0]?.syntheticDenial,
+            result.diagnostics.filter(d => d.phase !== "observation")[0]?.syntheticDenial,
             scenario.failurePolicy === "fail-closed",
             id,
           );
           assert.equal(
-            result.response.result.effects.filter((e) => e.type === "deny")
+            result.effects.filter((e) => e.type === "deny")
               .length,
             scenario.failurePolicy === "fail-closed" ? 1 : 0,
             id,
@@ -251,7 +253,7 @@ test("delivered public result queued for host acceptance is discarded on interru
       await exchange.received;
       await exchange.release();
       const result = await exchange.response;
-      assert.deepEqual(result.errors, []);
+      assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
       // Real SDK result is resolved; host acceptance remains a queued continuation.
       const run = pipeline.run("queued", () => exchange);
       pipeline.interrupt();
@@ -286,7 +288,7 @@ test("cancelled SDK-owned stdio process closes without a backend reply", async (
     const fresh = replacement.start("replacement", initial.input, []);
     await fresh.received;
     await fresh.release();
-    assert.deepEqual((await fresh.response).errors, []);
+    assert.deepEqual((await fresh.response).diagnostics.filter(d => d.phase !== "observation"), []);
   } finally {
     await replacement.dispose();
   }
@@ -360,7 +362,7 @@ test("native pre-execution interruption preserves accepted SDK effects", async (
           release.resolve();
         }
         await run;
-        assert.deepEqual((await exchange.response).errors, []);
+        assert.deepEqual((await exchange.response).diagnostics.filter(d => d.phase !== "observation"), []);
         assert.equal(pipeline.interrupted, true);
         assert.equal(pipeline.executions, 0);
         assert.equal(pipeline.failures, 0);
@@ -445,10 +447,10 @@ test("one Hooks boundary composes ordered routes and invalidates earlier grants/
       await exchange.routes[1]!.release();
       await run;
       const result = await exchange.response;
-      assert.deepEqual(result.errors, []);
+      assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
       assert.equal(
-        result.response.result.effects.some(
-          (effect) => effect.type === "allow" || effect.type === "return",
+        result.effects.some(
+          (effect) => effect.type === "allow",
         ),
         false,
       );
@@ -526,22 +528,21 @@ test("interruption of an ordered SDK route prevents later routes and late compou
         await run;
         const result = await exchange.response;
         assert.equal(result.interrupted, true);
-        assert.equal(result.errors.length, 1);
-        assert.equal(result.errors[0]?.backendId, "test.interruption1");
-        assert.equal(result.errors[0]?.code, "INTERRUPTED");
-        assert.equal(result.errors[0]?.syntheticDenial, false);
+        assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
+        assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0]?.backendId, "test.interruption1");
+        assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0]?.code, "cancelled");
+        assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0]?.syntheticDenial, false);
         assert.deepEqual(structuredClone(result.event.tool.input), { task: 2 });
         assert.equal(
-          result.response.result.effects.some(
+          result.effects.some(
             (effect) =>
               effect.type === "allow" ||
-              effect.type === "return" ||
               effect.type === "deny",
           ),
           false,
         );
         assert.deepEqual(
-          result.response.result.effects
+          result.effects
             .filter((effect) => effect.type === "message")
             .map((effect) => effect.text),
           ["earlier SDK message"],

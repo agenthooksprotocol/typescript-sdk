@@ -1,18 +1,16 @@
 import { readFile } from "node:fs/promises";
 import {
   Hooks,
-  capabilities as capability,
-  events,
   state,
   Permission,
-  type EventCapabilities,
+  type HostCapabilities,
 } from "agenthooksprotocol/client";
 
 // Hooks validates registration; JSON.parse alone does not validate it.
 const config: unknown = JSON.parse(await readFile("hooks.json", "utf8"));
-const capabilities: EventCapabilities = {
-  [events.toolBefore]: capability.intercept().deny(),
-};
+const capabilities = {
+  toolBefore: { intercept: { deny: true } },
+} satisfies HostCapabilities;
 const hooks = new Hooks(config, {
   source: "urn:example:agent",
   capabilities,
@@ -35,7 +33,7 @@ try {
   );
 
   for (const diagnostic of result.diagnostics) console.error(diagnostic);
-  const denied = result.permission === Permission.Deny;
+  const denied = result.state.permission === Permission.Deny;
   if (result.interrupted || denied) {
     throw new Error("File read interrupted or denied by hooks");
   }

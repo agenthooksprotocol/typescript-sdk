@@ -57,9 +57,29 @@ const registration = (endpoint, events, content = "body") => ({
     },
   ],
 });
+// Only these two boundaries are implemented by the fixture host. Original
+// occurrence grants are supplied separately, without converting their wire data.
+/** @type {import("agenthooksprotocol/client").HostCapabilities} */
+const elicitationHostCapabilities = {
+  userElicitationRequest: {
+    intercept: {
+      deny: true,
+      returnResult: true,
+      message: true,
+      elicitation: { form: true, url: true },
+    },
+  },
+  userElicitationResult: {
+    intercept: {
+      modifyContent: "replace-and-merge",
+      message: true,
+      elicitation: { form: true, url: true },
+    },
+  },
+};
 /**
  * @param {string} source
- * @param {import("agenthooksprotocol/client").EventCapabilities} capabilities
+ * @param {import("agenthooksprotocol/client").HostCapabilities} capabilities
  * @param {string} token
  * @param {string} [uploadToken]
  * @returns {import("agenthooksprotocol/client").HooksOptions}
@@ -78,13 +98,16 @@ const clientOptions = (source, capabilities, token, uploadToken) => ({
 });
 /**
  * @param {import("agenthooksprotocol/client").Hooks} client
- * @param {{ params: { event: ({ type: import("agenthooksprotocol/client").EventType, source: string } & import("agenthooksprotocol/client").BoundaryInput<import("agenthooksprotocol/client").EventType>) } }} message
+ * @param {{ params: { capabilities: import("agenthooksprotocol/draft").Capabilities, state?: import("agenthooksprotocol/draft").InterceptRequest["params"]["state"], event: ({ type: import("agenthooksprotocol/client").EventType, source: string } & import("agenthooksprotocol/client").BoundaryInput<import("agenthooksprotocol/client").EventType>) } }} message
  */
 const dispatch = async (client, message) => {
   const { type, source, ...event } = message.params.event;
-  const result = await client.dispatch(type, event);
-  if (result.errors.length || (await result.observations).length)
-    throw Error("SDK delivery rejected: " + JSON.stringify(result.errors));
+  const result = await client.dispatch(type, event, {
+    capabilities: message.params.capabilities,
+    initialState: message.params.state,
+  });
+  if (result.diagnostics.filter(d => d.phase !== "observation").length || result.diagnostics.filter(diagnostic => diagnostic.phase === 'observation').length)
+    throw Error("SDK delivery rejected: " + JSON.stringify(result.diagnostics.filter(d => d.phase !== "observation")));
   return result;
 };
 
@@ -157,20 +180,29 @@ if (process.argv[2] === "client") {
       ]);
       // Elicitation request/result are inline text; source descriptors and
       // upload streams must never replace these protocol-owned slots.
+      /** @type {Response | undefined} */
+      let wireResponse;
       const client = new Hooks(config, {
         ...clientOptions(
           event.source,
-          { [event.type]: message.params.capabilities },
+          elicitationHostCapabilities,
           plan.token,
           plan.uploadToken,
         ),
-        fetch: adapter.fetch,
+        fetch: async (input, init) => {
+          const response = await adapter.fetch(input, init);
+          // Preserve the actual HTTP envelope without consuming the SDK stream.
+          if (new Request(input, init).url === plan.endpoint + step.path)
+            wireResponse = response.clone();
+          return response;
+        },
       });
       try {
-        const result = await dispatch(client, message);
+        await dispatch(client, message);
+        if (!wireResponse) throw Error("Missing intercept wire response");
         results.push({
-          status: 200,
-          body: JSON.stringify(result.response),
+          status: wireResponse.status,
+          body: await wireResponse.text(),
           contentUploads: adapter.contentUploads,
         });
       } finally {
@@ -293,9 +325,16 @@ if (process.argv[2] === "client") {
             ),
             body: Buffer.concat(chunks),
           }),
-          (message) => ({
-            effects: message.params.event.type === target ? effects : [],
-          }),
+          {
+            intercept: {
+              userElicitationRequest: (ctx) => ({
+                effects: ctx.event.type === target ? effects : [],
+              }),
+              userElicitationResult: (ctx) => ({
+                effects: ctx.event.type === target ? effects : [],
+              }),
+            },
+          },
         );
         res.writeHead(response.status, Object.fromEntries(response.headers));
         res.end(new Uint8Array(await response.arrayBuffer()));
@@ -312,12 +351,6 @@ if (process.argv[2] === "client") {
     const endpoint = `http://127.0.0.1:${address.port}`;
     const exercise = async (c) => {
       const messages = [c.request, c.result].filter(Boolean);
-      const capabilities = Object.fromEntries(
-        messages.map((message) => [
-          message.params.event.type,
-          message.params.capabilities,
-        ]),
-      );
       effects = c.op === "apply" ? c.effects : [];
       target = messages.at(-1).params.event.type;
       const selection =
@@ -330,7 +363,7 @@ if (process.argv[2] === "client") {
         ),
         clientOptions(
           c.request.params.event.source,
-          capabilities,
+          elicitationHostCapabilities,
           token,
           uploadToken,
         ),
@@ -349,12 +382,12 @@ if (process.argv[2] === "client") {
     // text and decisions come from the actual accepted SDK boundary. No second
     // effect interpreter or semantic validator participates in acceptance.
     const presentAtomic = async (c, accepted) => {
-      const acceptedEffects = accepted.response.result.effects;
+      const acceptedEffects = accepted.acceptedResponses.flatMap(reply => reply.result.effects);
       const result = c.result
         ? JSON.parse(accepted.event.elicitation.result.text)
-        : acceptedEffects.some((effect) => effect.type === "deny")
+        : accepted.state.permission === "deny"
           ? { action: "decline" }
-          : acceptedEffects.find((effect) => effect.type === "return").value;
+          : accepted.state.candidate.value;
       return {
         request: JSON.parse(c.request.params.event.elicitation.request.text),
         result,
@@ -394,12 +427,7 @@ if (process.argv[2] === "client") {
               registration(endpoint, ["user.elicitation.request"], "omit"),
               clientOptions(
                 "urn:fixture:elicitation",
-                {
-                  "user.elicitation.request": {
-                    effects: [],
-                    elicitation: modes,
-                  },
-                },
+                elicitationHostCapabilities,
                 token,
               ),
             );
@@ -407,8 +435,8 @@ if (process.argv[2] === "client") {
               const result = await client.dispatch("user.elicitation.request", {
                 session: { id: "capability" },
                 elicitation: { mode: c.mode, server: "fixture" },
-              });
-              if (result.errors.length || (await result.observations).length)
+              }, { capabilities: { effects: [], elicitation: modes } });
+              if (result.diagnostics.filter(d => d.phase !== "observation").length || result.diagnostics.filter(diagnostic => diagnostic.phase === 'observation').length)
                 throw Error("SDK capability delivery rejected");
             } finally {
               await client.close();
@@ -426,7 +454,6 @@ if (process.argv[2] === "client") {
                 : validateElicitationExchange(
                     c.request,
                     c.result,
-                    resolve,
                     validate,
                     principal,
                     c.effect,
@@ -495,6 +522,62 @@ if (process.argv[2] === "client") {
         if (!validateInterceptRequest(JSON.parse(raw.toString("utf8"))).ok)
           throw Error("Invalid interception request");
         let rejected = false;
+        /** @param {import("agenthooksprotocol/server").InterceptContext<"user.elicitation.request" | "user.elicitation.result">} ctx */
+        const receiveElicitation = async (ctx) => {
+          const message = ctx.request;
+          try {
+            validate("intercept-request", message);
+            const event = ctx.event,
+              meta = event.elicitation;
+            const parent =
+              event.type === "user.elicitation.request"
+                ? event.id
+                : event.parentEventId;
+            if (typeof parent !== "string") throw Error("Missing parent");
+            const key = JSON.stringify([event.source, parent]);
+            if (message.id !== event.id) throw Error("ID mismatch");
+            let body, summary;
+            if (event.type === "user.elicitation.request") {
+              if (pending.has(key))
+                throw Error("Duplicate pending request identity");
+              validateElicitationMode(meta.mode, { form: {}, url: {} });
+              const payload = readSelectedElicitation(
+                meta,
+                "request",
+                validate,
+              );
+              body =
+                payload === null
+                  ? Buffer.alloc(0)
+                  : Buffer.from(meta.request.text, "utf8");
+              pending.set(key, message);
+              summary =
+                payload === null
+                  ? { selection: meta.request?.selection ?? "omit" }
+                  : { request: payload };
+            } else if (event.type === "user.elicitation.result") {
+              summary = validateElicitationExchange(
+                pending.get(key),
+                message,
+                validate,
+                principal,
+              );
+              body = meta.result?.text !== undefined
+                ? Buffer.from(meta.result.text, "utf8")
+                : Buffer.alloc(0);
+              pending.delete(key);
+            } else throw Error("Not elicitation");
+            receipts.push({
+              message,
+              bytes: body.toString("base64"),
+              summary,
+            });
+            return { effects: [] };
+          } catch (error) {
+            rejected = true;
+            throw error;
+          }
+        };
         const response = await hooks.handle(
           new Request("http://localhost/hooks/intercept", {
             method: "POST",
@@ -508,61 +591,11 @@ if (process.argv[2] === "client") {
             ),
             body: raw,
           }),
-          async (message) => {
-            try {
-              validate("intercept-request", message);
-              const event = message.params.event,
-                meta = event.elicitation;
-              const parent =
-                event.type === "user.elicitation.request"
-                  ? event.id
-                  : event.parentEventId;
-              if (typeof parent !== "string") throw Error("Missing parent");
-              const key = JSON.stringify([event.source, parent]);
-              if (message.id !== event.id) throw Error("ID mismatch");
-              let body, summary;
-              if (event.type === "user.elicitation.request") {
-                if (pending.has(key))
-                  throw Error("Duplicate pending request identity");
-                validateElicitationMode(meta.mode, { form: {}, url: {} });
-                const payload = readSelectedElicitation(
-                  meta,
-                  "request",
-                  resolve,
-                  validate,
-                );
-                body =
-                  payload === null
-                    ? Buffer.alloc(0)
-                    : Buffer.from(meta.request.text, "utf8");
-                pending.set(key, message);
-                summary =
-                  payload === null
-                    ? { selection: meta.request?.selection ?? "omit" }
-                    : { request: payload };
-              } else if (event.type === "user.elicitation.result") {
-                summary = validateElicitationExchange(
-                  pending.get(key),
-                  message,
-                  resolve,
-                  validate,
-                  principal,
-                );
-                body = meta.result?.text !== undefined
-                  ? Buffer.from(meta.result.text, "utf8")
-                  : Buffer.alloc(0);
-                pending.delete(key);
-              } else throw Error("Not elicitation");
-              receipts.push({
-                message,
-                bytes: body.toString("base64"),
-                summary,
-              });
-              return { effects: [] };
-            } catch (error) {
-              rejected = true;
-              throw error;
-            }
+          {
+            intercept: {
+              userElicitationRequest: receiveElicitation,
+              userElicitationResult: receiveElicitation,
+            },
           },
         );
         if (rejected) throw Error("Rejected elicitation");

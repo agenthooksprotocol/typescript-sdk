@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { ContentManager, ContentSource } from "agenthooksprotocol/client";
+import { Attachment, ContentManager } from "agenthooksprotocol/client";
 
 function fixture(stalled = false) {
   const state = { pulls: 0, cancels: 0 };
@@ -20,7 +20,7 @@ function fixture(stalled = false) {
     },
     { highWaterMark: 0 },
   );
-  const source = new ContentSource(stream);
+  const source = Attachment.stream(stream);
   return {
     state,
     stream,
@@ -31,6 +31,7 @@ function fixture(stalled = false) {
         id: "i",
         kind: "attachment",
         mediaType: "application/octet-stream",
+        selection: "body",
         body: source,
       }] }],
     },
@@ -48,7 +49,8 @@ const unexpected = () => {
 for (const mode of ["metadata", "omit"]) {
   test(`lazy source ${mode} selection never reads bytes`, async () => {
     const { source, stream, state, event } = fixture();
-    assert.equal(source.stream, stream);
+    assert.ok(source instanceof Attachment);
+    assert.equal("stream" in source, false);
     assert.equal(stream.locked, false);
     await Promise.resolve();
     assert.equal(state.pulls, 0);
@@ -71,11 +73,11 @@ for (const mode of ["metadata", "omit"]) {
   });
 }
 
-test("unmatched sources and raw streams are owned without consumption", async () => {
+test("unmatched attachment owners are closed without consumption", async () => {
   const first = fixture(),
     second = fixture();
   const manager = new ContentManager();
-  const event = { opaque: { source: first.source }, hidden: [second.stream] };
+  const event = { opaque: { source: first.source }, hidden: [second.source] };
   event.self = event;
   manager.own(event);
   const closed = manager.close();
@@ -86,7 +88,7 @@ test("unmatched sources and raw streams are owned without consumption", async ()
 });
 
 test("concurrent body fanout shares one snapshot and independent receiver uploads", async () => {
-  const { stream, state, event } = fixture();
+  const { source, stream, state, event } = fixture();
   const manager = new ContentManager();
   const digest = createHash("sha256").update("hello").digest("hex");
   const seen = [];
@@ -101,7 +103,7 @@ test("concurrent body fanout shares one snapshot and independent receiver upload
     const results = await Promise.all([
       manager.prepare(event, { default: "body" }, upload, send),
       manager.prepare(
-        { ...event, items: [{ ...event.items[0], parts: [{ ...event.items[0].parts[0], body: stream }] }] },
+        { ...event, items: [{ ...event.items[0], parts: [{ ...event.items[0].parts[0], body: source }] }] },
         { default: "body" },
         upload,
         send,
@@ -160,4 +162,18 @@ test("pre-aborted operations still register unused sources for cleanup", async (
   );
   await manager.close();
   assert.deepEqual(state, { pulls: 0, cancels: 1 });
+});
+
+
+test("raw streams are not implicit content owners", async () => {
+  const { stream, state, event } = fixture();
+  event.items[0].parts[0].body = stream;
+  const manager = new ContentManager();
+  try {
+    await assert.rejects(manager.readBody(stream), /must be an Attachment/);
+    await assert.rejects(manager.prepare(event, { default: "body" }, upload, unexpected), /requires an Attachment/);
+    manager.own({ opaque: stream });
+  } finally { await manager.close(); }
+  assert.deepEqual(state, { pulls: 0, cancels: 0 });
+  await stream.cancel();
 });

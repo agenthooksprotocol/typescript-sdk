@@ -59,10 +59,14 @@ const manifest = {
 };
 
 test("server handle supplies canonical correlation and version to synchronous policy results", async () => {
-  const response = await hooks.handle(request(intercept()), (message) => {
-    assert.equal(message.method, "hooks/intercept");
-    assert.equal(message.params.event.tool.input.path, "a");
-    return { effects: [{ type: "deny", reason: "policy" }] };
+  const response = await hooks.handle(request(intercept()), {
+    intercept: {
+      toolBefore: (ctx) => {
+        assert.equal(ctx.request.method, "hooks/intercept");
+        assert.equal(ctx.event.tool.input.path, "a");
+        return { effects: [{ type: "deny", reason: "policy" }] };
+      }
+    }
   });
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("content-type"), "application/json");
@@ -93,14 +97,18 @@ test("server accepts complete supported compound without applying it to host sta
     },
     { type: "flow", operation: "stop", reason: "done" },
   ];
-  const response = await hooks.handle(request(intercept()), async () => ({
-    effects,
-  }));
+  const response = await hooks.handle(request(intercept()), {
+    intercept: {
+      toolBefore: async () => ({
+        effects,
+      })
+    }
+  });
   const body = await response.json();
   assert.deepEqual(body.result?.effects, effects, JSON.stringify(body));
 });
 
-test("canonical capabilities method uses the same callback and endpoint", async () => {
+test("canonical capabilities method uses its context handler on the same endpoint", async () => {
   const response = await hooks.handle(
     request({
       jsonrpc: "2.0",
@@ -108,10 +116,10 @@ test("canonical capabilities method uses the same callback and endpoint", async 
       method: "hooks/capabilities",
       params: { protocolVersion: "draft" },
     }),
-    (message) => {
-      assert.equal(message.method, "hooks/capabilities");
-      return { manifest };
-    },
+    { capabilities: (ctx) => {
+        assert.equal(ctx.request.method, "hooks/capabilities");
+        return { manifest };
+      } },
   );
   assert.deepEqual(await response.json(), {
     jsonrpc: "2.0",
@@ -129,15 +137,15 @@ test("observe accepts void and never returns a JSON-RPC body including callback 
     },
     () => ({ effects: [] }),
   ]) {
-    const response = await hooks.handle(request(observe()), handler);
+    const response = await hooks.handle(request(observe()), { observe: { toolBefore: handler } });
     assert.ok([204, 500].includes(response.status));
     assert.equal(await response.text(), "");
   }
   const invalid = observe();
   invalid.params.event.time = "invalid";
-  const response = await hooks.handle(request(invalid), () => {
-    assert.fail("must not call");
-  });
+  const response = await hooks.handle(request(invalid), { observe: { toolBefore: () => {
+        assert.fail("must not call");
+      } } });
   assert.equal(response.status, 400);
   assert.equal(await response.text(), "");
 });
@@ -158,9 +166,13 @@ for (const effect of [
   { type: "flow", operation: "continue" },
 ])
   test(`atomic rejection of invalid/unsupported effect ${JSON.stringify(effect)}`, async () => {
-    const response = await hooks.handle(request(intercept()), () => ({
-      effects: [{ type: "deny", reason: "valid" }, effect],
-    }));
+    const response = await hooks.handle(request(intercept()), {
+      intercept: {
+        toolBefore: () => ({
+          effects: [{ type: "deny", reason: "valid" }, effect],
+        })
+      }
+    });
     const body = await response.json();
     assert.equal(body.error?.code, -32004);
     assert.equal(body.result, undefined);
@@ -174,15 +186,22 @@ test("incoming canonical schema validation prevents invoking policy and mutation
   ]) {
     const m = intercept();
     mutate(m);
-    const result = await hooks.handle(request(m), () =>
-      assert.fail("invalid input invoked handler"),
+    const result = await hooks.handle(request(m), {
+      intercept: {
+        toolBefore: () => assert.fail("invalid input invoked handler")
+      }
+    },
     );
     assert.equal((await result.json()).error.code, -32602);
   }
-  const result = await hooks.handle(request(intercept()), (m) => {
-    m.id = "changed";
-    m.params.capabilities.effects.push("allow");
-    return { effects: [{ type: "allow" }] };
+  const result = await hooks.handle(request(intercept()), {
+    intercept: {
+      toolBefore: (ctx) => {
+        ctx.request.id = "changed";
+        ctx.capabilities.effects.push("allow");
+        return { effects: [{ type: "allow" }] };
+      }
+    }
   });
   assert.deepEqual(await result.json(), {
     jsonrpc: "2.0",
@@ -197,7 +216,11 @@ test("JSON-RPC parse, batch, method, version and HTTP framing failures are safe"
     headers: { "content-type": "application/json" },
     body: "{Bearer SECRET",
   });
-  const parse = await hooks.handle(bad, () => assert.fail());
+  const parse = await hooks.handle(bad, {
+    intercept: {
+      toolBefore: () => assert.fail()
+    }
+  });
   assert.equal(parse.status, 400);
   assert.equal((await parse.json()).error.code, -32700);
   for (const [message, code] of [
@@ -205,18 +228,29 @@ test("JSON-RPC parse, batch, method, version and HTTP framing failures are safe"
     [{ jsonrpc: "2.0", id: "x", method: "other" }, -32601],
     [{ ...intercept(), params: { protocolVersion: "wrong" } }, -32001],
   ]) {
-    const response = await hooks.handle(request(message), () => assert.fail());
+    const response = await hooks.handle(request(message), {
+      intercept: {
+        toolBefore: () => assert.fail()
+      }
+    });
     assert.equal((await response.json()).error.code, code);
   }
   const unknown = await hooks.handle(
     request({ jsonrpc: "2.0", method: "other" }),
-    () => assert.fail(),
+    {
+      intercept: {
+        toolBefore: () => assert.fail()
+      }
+    },
   );
   assert.equal(await unknown.text(), "");
   assert.equal(
     (
-      await hooks.handle(new Request("https://receiver.test"), () =>
-        assert.fail(),
+      await hooks.handle(new Request("https://receiver.test"), {
+        intercept: {
+          toolBefore: () => assert.fail()
+        }
+      },
       )
     ).status,
     405,
@@ -225,13 +259,21 @@ test("JSON-RPC parse, batch, method, version and HTTP framing failures are safe"
     (
       await hooks.handle(
         new Request("https://receiver.test", { method: "POST", body: "{}" }),
-        () => assert.fail(),
+        {
+          intercept: {
+            toolBefore: () => assert.fail()
+          }
+        },
       )
     ).status,
     415,
   );
-  const exception = await hooks.handle(request(intercept()), async () => {
-    throw new Error("https://user:password@host Bearer SECRET");
+  const exception = await hooks.handle(request(intercept()), {
+    intercept: {
+      toolBefore: async () => {
+        throw new Error("https://user:password@host Bearer SECRET");
+      }
+    }
   });
   assert.deepEqual(await exception.json(), {
     jsonrpc: "2.0",
@@ -299,7 +341,11 @@ test("whole callback results reject atomically, including malformed and non-JSON
       ],
     },
   ]) {
-    const response = await hooks.handle(request(intercept()), () => result);
+    const response = await hooks.handle(request(intercept()), {
+      intercept: {
+        toolBefore: () => result
+      }
+    });
     const body = await response.json();
     assert.equal(body.error?.code, -32004, JSON.stringify(body));
     assert.equal(body.result, undefined);
@@ -314,7 +360,7 @@ test("canonical capabilities callback result validation rejects malformed manife
       method: "hooks/capabilities",
       params: { protocolVersion: "draft" },
     }),
-    () => ({ manifest: {} }),
+    { capabilities: () => ({ manifest: {} }) },
   );
   assert.equal((await response.json()).error.code, -32004);
 });
@@ -333,16 +379,23 @@ for (const depth of [32, 512, 1500, 2500, 5000, 10000]) {
         const body = JSON.stringify(message).replace('"NESTED_INPUT"', nested);
         assert.ok(body.length < 65000, "keep adversarial input bounded");
         let called = false;
+        const handler = () => {
+          called = true;
+          return notification ? undefined : { effects: [] };
+        };
         const response = await hooks.handle(
           new Request("https://receiver.test/hooks", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body,
           }),
-          () => {
-            called = true;
-            return notification ? undefined : { effects: [] };
-          },
+          notification
+            ? { observe: { toolBefore: handler } }
+            : {
+              intercept: {
+                toolBefore: handler
+              }
+            },
         );
         assert.ok(response instanceof Response);
         if (malformed) assert.equal(called, false);

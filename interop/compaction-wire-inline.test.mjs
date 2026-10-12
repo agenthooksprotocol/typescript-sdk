@@ -118,3 +118,25 @@ test("wire call requires independently supplied event and upload credentials", {
     assert.match(run.stderr, /Missing independent compaction credentials/);
   });
 });
+
+test("after-closed host stops at two wire exchanges without applying staged edits", { timeout: 15000 }, async () => {
+  const before = "after-closed-before-0", invalid = "after-closed-after-0", unreachable = "after-closed-after-1";
+  await fixture({
+    [before]: { effects: [] },
+    [invalid]: { effects: [modify("summary", textParts("leaked")), modify("instructions", textParts("wrong"))] },
+    [unreachable]: { effects: [] },
+  }, async (plan, store) => {
+    const row = supplier => ({ supplier, failurePolicy: "fail-closed" });
+    const run = await command("host", { ...plan, cases: [{ name: "after-closed", before: [row(before)], after: [row(invalid), row(unreachable)] }] });
+    assert.equal(run.code, 0, run.stderr);
+    const [out] = JSON.parse(run.stdout);
+    assert.equal(out.trace.length, 2);
+    assert.deepEqual(out.trace.map(entry => entry.subscription), [before, invalid]);
+    assert.equal(out.result.applied, false);
+    assert.equal(out.result.failures.length, 1);
+    assert.equal(inlineText(out.result.summary), "summary:base");
+    assert.deepEqual(out.downstream, []);
+    const receipts = (await readFile(join(store, "receipts.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+    assert.deepEqual(receipts.map(receipt => receipt.subscription), [before, invalid]);
+  });
+});

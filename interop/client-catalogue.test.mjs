@@ -160,7 +160,10 @@ const observe = (includeNative) => ({
 const options = {
   source: "urn:test:catalogue",
   capabilities: Object.fromEntries(
-    Object.keys(occurrences).map((event) => [event, { modes: ["observe"] }]),
+    Object.keys(occurrences).map((event) => [
+      methodFor(event),
+      { observe: true },
+    ]),
   ),
 };
 async function until(predicate) {
@@ -172,6 +175,10 @@ async function until(predicate) {
 }
 async function receiver() {
   const messages = [];
+  const recordObservation = ({ notification }) => {
+    // Compare wire data without the parser's null-prototype objects.
+    messages.push(structuredClone(notification));
+  };
   const server = createServer(async (req, res) => {
     let text = "";
     for await (const chunk of req) text += chunk;
@@ -181,9 +188,41 @@ async function receiver() {
         headers: req.headers,
         body: text,
       }),
-      (message) => {
-        // Compare wire data without the parser's null-prototype objects.
-        messages.push(structuredClone(message));
+      {
+        observe: {
+          toolBefore: recordObservation,
+          toolAfter: recordObservation,
+          sessionStart: recordObservation,
+          configChangeBefore: recordObservation,
+          turnStart: recordObservation,
+          turnFinishBefore: recordObservation,
+          modelRequestBefore: recordObservation,
+          modelResponseAfter: recordObservation,
+          modelSwitchBefore: recordObservation,
+          toolPermissionRequest: recordObservation,
+          toolBatchAfter: recordObservation,
+          contextCompactBefore: recordObservation,
+          contextCompactAfter: recordObservation,
+          taskChangeBefore: recordObservation,
+          userElicitationRequest: recordObservation,
+          userElicitationResult: recordObservation,
+          userMessageInbound: recordObservation,
+          userMessageOutbound: recordObservation,
+          workspaceChangeBefore: recordObservation,
+          sessionEnd: recordObservation,
+          configChangeAfter: recordObservation,
+          turnEnd: recordObservation,
+          turnProgress: recordObservation,
+          modelError: recordObservation,
+          modelSwitchAfter: recordObservation,
+          toolPermissionResolved: recordObservation,
+          toolProgress: recordObservation,
+          taskChangeAfter: recordObservation,
+          userAttention: recordObservation,
+          workspaceChangeAfter: recordObservation,
+          fileChanged: recordObservation,
+          hookFailure: recordObservation,
+        },
       },
     );
     res.writeHead(response.status, Object.fromEntries(response.headers));
@@ -239,8 +278,11 @@ test(
         assert.equal(result.event.source, options.source);
         assert.ok(result.event.id);
         assert.ok(Number.isFinite(Date.parse(result.event.time)));
-        assert.deepEqual(result.response.result.effects, []);
-        assert.deepEqual(result.errors, []);
+        assert.deepEqual(result.effects, []);
+        assert.deepEqual(
+          result.diagnostics.filter((d) => d.phase !== "observation"),
+          [],
+        );
         assert.equal(result.interrupted, false);
         assert.deepEqual(
           input,
@@ -285,7 +327,7 @@ test(
       );
       const advertised = new Hooks(
         registration({ type: "http", url: server.url }, [observe(false)]),
-        { ...options, capabilities: manifest },
+        options,
       );
       try {
         const started = await advertised.dispatch(
@@ -295,7 +337,7 @@ test(
         assert.deepEqual(
           started.event.manifest,
           manifest,
-          "explicit static manifests are injected unchanged",
+          "typed host support produces the same static manifest",
         );
         await until(() => server.messages.length === 65);
       } finally {
@@ -321,7 +363,7 @@ for (const lifecycle of ["persistent", "per_event"]) {
       readline.createInterface({input:process.stdin}).on('line',async line=>{
         const m=JSON.parse(line);fs.appendFileSync(process.argv[1],JSON.stringify({pid:process.pid,message:m})+'\\n');
         const {hooks}=await server;
-        const response=await hooks.handle(new Request('http://receiver.test/hooks',{method:'POST',headers:{'content-type':'application/json'},body:line}),()=>({effects:[{type:'message',text:'accepted'}]}));
+        const response=await hooks.handle(new Request('http://receiver.test/hooks',{method:'POST',headers:{'content-type':'application/json'},body:line}),{intercept:{toolBefore:()=>({effects:[{type:'message',text:'accepted'}]})},observe:{toolBefore:()=>{}}});
         const body=await response.text();if(body) console.log(body);
       });`;
       const config = registration(
@@ -345,9 +387,11 @@ for (const lifecycle of ["persistent", "per_event"]) {
       const hooks = new Hooks(config, {
         ...options,
         capabilities: {
-          "tool.before": {
-            modes: ["intercept", "observe"],
-            capabilities: { effects: ["message"] },
+          toolBefore: {
+            intercept: {
+              message: true,
+            },
+            observe: true,
           },
         },
       });
@@ -359,8 +403,11 @@ for (const lifecycle of ["persistent", "per_event"]) {
         const one = await hooks.dispatch("tool.before", structuredClone(tool));
         const two = await hooks.dispatch("tool.before", structuredClone(tool));
         for (const result of [one, two]) {
-          assert.deepEqual(result.errors, []);
-          assert.deepEqual(result.response.result.effects, [
+          assert.deepEqual(
+            result.diagnostics.filter((d) => d.phase !== "observation"),
+            [],
+          );
+          assert.deepEqual(result.effects, [
             { type: "message", text: "accepted" },
           ]);
         }

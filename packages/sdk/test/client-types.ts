@@ -6,19 +6,16 @@ import {
   type EventType,
   type HarnessEvent,
   type HooksOptions,
-  type StaticCapabilityManifest,
+  type HostCapabilities,
 } from "agenthooksprotocol/client";
 
 const options: HooksOptions = {
   source: "urn:test:harness",
   capabilities: {
-    "tool.before": {
-      modes: ["intercept", "observe"],
-      capabilities: { effects: ["deny", "modify"] },
-    },
-    "user.message.inbound": { modes: ["observe"] },
-    "model.request.before": { modes: ["observe"] },
-    "session.start": { modes: ["observe"] },
+    toolBefore: {intercept: {deny: true}, observe: true},
+    userMessageInbound: {observe: true},
+    modelRequestBefore: {observe: true},
+    sessionStart: {observe: true},
   },
 };
 const hooks = new Hooks(
@@ -100,7 +97,7 @@ void hooks.dispatch("tool.before", minimalTool, {
   state: { permission: "none", candidate: null },
 });
 
-declare const manifest: StaticCapabilityManifest;
+declare const manifest: HostCapabilities;
 const staticOptions: HooksOptions = {
   source: "urn:test:harness",
   capabilities: manifest,
@@ -179,7 +176,7 @@ const lazyFacts: EventInput<"tool.before"> = {
       id: "body",
       kind: "attachment",
       mediaType: "application/octet-stream", selection: "body",
-      body: Attachment.fromStream(new ReadableStream<Uint8Array>()),
+      body: Attachment.stream(new ReadableStream<Uint8Array>()),
     },
   ],
 };
@@ -212,12 +209,20 @@ const credentialProvider: DeliveryAuthProvider = {
 };
 void credentialProvider;
 function inspectErgonomicResult(result: BoundaryResult<"tool.before">) {
-  const accepted: unknown = result.input;
-  const permission: "none" | "allow" | "ask" | "deny" = result.permission;
+  const accepted: unknown = result.event.tool.input;
+  const permission: string = result.state.permission;
   const cause: DeliveryDiagnosticCode = result.diagnostics[0]!.code;
   void [accepted, permission, cause];
+  // @ts-expect-error Permission is available only on canonical state.
+  result.permission;
+  // @ts-expect-error Tool arguments are available only on the typed event.
+  result.input;
+  // @ts-expect-error Effective effects are not a synthetic wire response.
+  result.response;
+  // @ts-expect-error Delivery evidence is available only as diagnostics.
+  result.errors;
   // @ts-expect-error Hook-modified JSON is not application-validated input.
-  const validated: { path: string } = result.input;
+  const validated: { path: string } = result.event.tool.input;
   void validated;
 }
 void inspectErgonomicResult;

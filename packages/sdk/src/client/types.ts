@@ -1,12 +1,13 @@
 import type {
   HostEventInputs,
+  HostCapabilities,
   OwnedAttachment,
   EventType,
   Permission,
   ContentSourceBinding,
   DeliveryDiagnosticCode,
 } from "../draft/raw.js";
-import type { Attachment, AttachmentContent, ContentSource } from "./content.js";
+import type { Attachment, AttachmentContent } from "./content.js";
 import type { BoundaryContracts } from "./contracts.js";
 import type {
   Capabilities,
@@ -19,7 +20,7 @@ import type {
   StaticCapabilityManifest,
   ToolState, TextState, MessagesState, ElicitResultState,
 } from "../draft/raw.js";
-import type { AuthProvider, DeliveryAuthProvider } from "./auth.js";
+import type { DeliveryAuthProvider } from "./auth.js";
 
 export type { Event } from "../draft/raw.js";
 export type { EventType } from "../draft/raw.js";
@@ -31,26 +32,21 @@ type Fields<T> = {
       ? never
       : K]: T[K];
 };
-/** Harness content bodies may be owned streams instead of uploaded references. */
+/** Harness content bodies may be owned Attachments instead of uploaded references. */
 export type HarnessValue<T> = T extends string | number | boolean | null | undefined
   ? T
   : T extends ContentReference
-    ? ContentReference | ContentSource | ReadableStream<Uint8Array>
+    ? ContentReference | Attachment
     : T extends readonly (infer V)[]
       ? HarnessValue<V>[]
-      : T extends { selection: string }
-        ? Omit<
-            { [K in keyof Fields<T>]: HarnessValue<Fields<T>[K]> },
-            "selection"
-          > & { selection?: T["selection"] }
-        : T extends object
-          ? keyof Fields<T> extends never
-            ? T
-            : { [K in keyof Fields<T>]: HarnessValue<Fields<T>[K]> }
-          : T;
+      : T extends object
+        ? keyof Fields<T> extends never
+          ? T
+          : { [K in keyof Fields<T>]: HarnessValue<Fields<T>[K]> }
+        : T;
 export type HarnessEvent<K extends EventType = EventType> =
   HarnessValue<Extract<Event, { type: K }>>;
-/** Passing a body stream transfers its read/cancel ownership to the SDK.
+/** Passing an Attachment transfers its invocation ownership to the SDK.
  * Keep host execution data separately; canonical effects carry accepted rewrites. */
 export type BoundaryInput<K extends EventType> = K extends EventType
   ? Omit<HarnessEvent<K>, "type" | "source" | "id" | "time" | "manifest"> & {
@@ -65,21 +61,14 @@ type DirectHostValue<T> = T extends OwnedAttachment<unknown>
   : T extends object ? { [P in keyof T]: DirectHostValue<T[P]> } : T;
 export type EventInput<K extends EventType> = DirectHostValue<HostEventInputs<Attachment>[K]>;
 /** Explicit delivery authority for one event. Effects remain separately granted. */
-export interface EventGrant {
-  modes: ("intercept" | "observe")[];
-  capabilities?: Capabilities;
-}
-/** A plain capability value grants interception only. Omitted events grant nothing. */
-export type EventCapabilities = Partial<
-  Record<EventType, Capabilities | EventGrant>
->;
 export interface HooksOptions {
   source: string;
-  /** A static manifest, or explicit event declarations. Plain Capabilities
-   * entries grant intercept only; use EventGrant to opt into observe. Omitted
-   * events, delivery modes, effects and elicitation form/url grants stay absent. */
-  capabilities: StaticCapabilityManifest | EventCapabilities;
-  auth?: AuthProvider | DeliveryAuthProvider;
+  /** Typed event declarations. Omitted events and facilities grant nothing. */
+  capabilities: HostCapabilities;
+  /** Static non-event advertisements. Event grants always come from capabilities.
+   * Opaque extension data is not content and is never traversed for attachments. */
+  manifestMetadata?: Omit<StaticCapabilityManifest, "events"> & { events?: never };
+  auth?: DeliveryAuthProvider;
   /** Trusted HTTP network adapter (for example, host-managed TLS). The SDK still
    * owns protocol/authentication and cancellation. Scope transport credentials
    * to their exact destination; upload requests must not inherit event TLS identity.
@@ -98,7 +87,7 @@ export interface BoundaryOptions<Arguments = unknown, Result = unknown, P = unkn
   contracts?: BoundaryContracts<Arguments, Result, P>;
   /** Generated named slots bind owned sources to producer descriptors, without refs. */
   contentSources?: readonly ContentSourceBinding<
-    ContentSource | ReadableStream<Uint8Array>
+    Attachment
   >[];
   /** Canonical pending state before any interceptor runs. */
   initialState?: InterceptRequest["params"]["state"];
@@ -108,18 +97,11 @@ export interface BoundaryOptions<Arguments = unknown, Result = unknown, P = unkn
   capabilities?: Capabilities;
 }
 /** Structured SDK delivery evidence; messages and credential material are excluded. */
-export interface DeliveryDiagnostic extends Omit<DeliveryError, "code"> {
-  code: DeliveryDiagnosticCode;
-}
-export interface DeliveryError {
+export interface DeliveryDiagnostic {
   backendId: string;
   subscriptionIndex: number;
   phase: "preparation" | "interception" | "observation";
-  code:
-    | "PREPARATION_FAILED"
-    | "DELIVERY_FAILED"
-    | "DEADLINE_EXCEEDED"
-    | "INTERRUPTED";
+  code: DeliveryDiagnosticCode;
   failurePolicy?: "fail-open" | "fail-closed";
   syntheticDenial: boolean;
 }
@@ -148,21 +130,20 @@ export type BoundaryState<K extends EventType = EventType> = ReadonlyState<
 >;
 export type AcceptedResponse<K extends EventType = EventType> = K extends keyof EventResponses
   ? ResponseFor<K> : InterceptResponse;
-type BoundaryResponse<K extends EventType> = K extends keyof EventResponses
-  ? ResponseFor<K> & { result: { effects: NonNullable<ResponseFor<K>["result"]["effects"]> } }
-  : InterceptResponse & { result: { effects: NonNullable<InterceptResponse["result"]["effects"]> } };
+type ResidualEffect<E> = E extends { type: "modify" | "return" } ? never : E;
+type BoundaryEffects<K extends EventType> = ResidualEffect<K extends keyof EventResponses
+  ? NonNullable<ResponseFor<K>["result"]["effects"]>[number]
+  : NonNullable<InterceptResponse["result"]["effects"]>[number]>[];
 export interface BoundaryResult<K extends EventType = EventType> {
   /** Present for owned Attachments. Effective local bodies by content item id,
    * including unread lazy sources. Close explicitly, independently of Hooks. */
   readonly content?: AttachmentContent;
-  /** Accepted effective input, with occurrence identity and static envelope supplied.
-   * Body streams are owned delivery resources, not reusable output streams. */
-  event: HarnessEvent<K>;
-  /** Generated, decoded effective Event. Local bodies select metadata here;
-   * use event/content for their owned resources. Unknown JSON extras survive. */
-  readonly settledEvent: Extract<Event, { type: K }>;
-  /** Effective canonical effects. The harness enacts them; the SDK executes no operation. */
-  response: BoundaryResponse<K>;
+  /** Authoritative decoded effective event. Local attachment bodies select
+   * metadata; owned bytes remain available through content. Unknown extras survive. */
+  readonly event: Extract<Event, { type: K }>;
+  /** Residual effects to enact. Edits live in event and returns in state.candidate;
+   * complete receiver effects remain in acceptedResponses. */
+  readonly effects: Readonly<BoundaryEffects<K>>;
   /** Complete decoded receiver responses, in acceptance order, including opaque
    * envelope extras. Failed atomic responses are not accepted. */
   readonly acceptedResponses: readonly AcceptedResponse<K>[];
@@ -171,15 +152,8 @@ export interface BoundaryResult<K extends EventType = EventType> {
    * contains a candidate or permission. With no acceptance, initialState is
    * preserved (or the neutral candidate/permission state is returned). */
   readonly state: BoundaryState<K>;
-  /** Canonical settled permission. None is not approval; interruption forbids execution. */
-  readonly permission: `${Permission}`;
-  /** Accepted tool arguments, not the original proposal. Validate in host code before use. */
-  readonly input: unknown;
   /** All interception and observation delivery diagnostics. */
   diagnostics: DeliveryDiagnostic[];
-  errors: DeliveryError[];
-  /** Compatibility view of observation diagnostics; already settled when the call returns. */
-  observations: Promise<DeliveryError[]>;
   interrupted: boolean;
 }
 export interface ConfigurationIssue {

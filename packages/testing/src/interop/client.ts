@@ -297,7 +297,7 @@ export async function runInterop(): Promise<{
               {
                 source: event.source,
                 capabilities: {
-                  "tool.before": parsed.value.params.capabilities,
+                  toolBefore: { intercept: { deny: true } },
                 },
                 auth: clientAuth(s.auth, origin),
                 ...(s.auth === "mtls" ? { fetch: tlsFetch } : {}),
@@ -313,12 +313,12 @@ export async function runInterop(): Promise<{
           path: event.path,
           tool: event.tool,
         };
-        const result = await hooks.dispatch("tool.before", boundary);
-        const observations = await result.observations;
-        if (result.errors.length || observations.length || result.interrupted)
+        const result = await hooks.dispatch("tool.before", boundary, { capabilities: parsed.value.params.capabilities });
+        const observations = result.diagnostics.filter(d => d.phase === "observation");
+        if (result.diagnostics.filter(d => d.phase !== "observation").length || observations.length || result.interrupted)
           return "sdk-delivery-error";
         if (result.event.id !== event.id) return "unexpected-event";
-        return result.response.result.effects.length === 0
+        return result.effects.length === 0
           ? "no-effect"
           : "unexpected-effect";
       } finally {

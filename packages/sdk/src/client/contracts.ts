@@ -91,8 +91,7 @@ export interface BoundaryContracts<Arguments = unknown, Result = unknown, P = un
 }
 
 export type ToolBeforeInput<Arguments = unknown> = Omit<EventInput<'tool.before'>, 'input'> & { input: Arguments };
-export type ToolBeforeResult<Arguments = unknown, Result = unknown, P = unknown> = Omit<BoundaryResult<'tool.before'>, 'input' | 'event' | 'state'> & {
-  readonly input: Arguments;
+export type ToolBeforeResult<Arguments = unknown, Result = unknown, P = unknown> = Omit<BoundaryResult<'tool.before'>, 'event' | 'state'> & {
   event: Omit<BoundaryResult<'tool.before'>['event'], 'tool'> & {
     tool: Omit<BoundaryResult<'tool.before'>['event']['tool'], 'input'> & { input: Arguments };
   };

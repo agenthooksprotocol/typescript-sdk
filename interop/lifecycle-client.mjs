@@ -227,8 +227,6 @@ async function sdkCall(
       mode,
       bodySelected,
       ...(content ? { content } : {}),
-      capabilities:
-        mode === "intercept" ? message.params.capabilities : undefined,
       transport,
       ...(upload ? { upload } : {}),
       auth: fixtureAuth(auth),
@@ -248,8 +246,9 @@ async function sdkCall(
       event,
       message.params.state,
       signal,
+      mode === "intercept" ? message.params.capabilities : undefined,
     );
-    const observations = await result.observations;
+    const observations = result.diagnostics.filter(d => d.phase === "observation");
     const confirmations = adapter.contentUploads.map((confirmation) => ({
       ...confirmation,
       method: message.method,
@@ -259,7 +258,7 @@ async function sdkCall(
     sdkDeliveries.push({
       eventId: event.id,
       mode,
-      errors: result.errors,
+      errors: result.diagnostics.filter(d => d.phase !== "observation"),
       observationErrors: observations,
       maliciousObservation,
       interrupted: result.interrupted,
@@ -270,9 +269,8 @@ async function sdkCall(
     });
     if (
       mode === "observe" &&
-      (result.response.result.effects.length !== 0 ||
-        !isDeepStrictEqual(result.event.tool, event.tool) ||
-        !isDeepStrictEqual(result.event.input, event.input))
+      (result.effects.length !== 0 ||
+        !isDeepStrictEqual(result.event.tool, event.tool))
     )
       throw Error("Observer changed the settled event or decision");
     const expectedObservationError = [
@@ -280,7 +278,7 @@ async function sdkCall(
         backendId: "interop.lifecycle",
         subscriptionIndex: 0,
         phase: "observation",
-        code: "DELIVERY_FAILED",
+        code: "transport",
         syntheticDenial: false,
       },
     ];
@@ -291,7 +289,7 @@ async function sdkCall(
       throw Error("Malicious observer response was not rejected by the SDK");
     if (!signal?.aborted && observations.length && !maliciousObservation)
       throw Error(
-        `SDK lifecycle delivery failed (${event.id}): ${JSON.stringify([...result.errors, ...observations])}`,
+        `SDK lifecycle delivery failed (${event.id}): ${JSON.stringify([...result.diagnostics.filter(d => d.phase !== "observation"), ...observations])}`,
       );
     return result;
   });
@@ -558,9 +556,9 @@ try {
               auth,
               token,
             );
-            // Raw probes may be valid notifications too. Preserve legacy 200
-            // and expected rejection statuses while accepting canonical success.
-            if (![200, 202, 204, 400, 409].includes(response.status))
+            // Explicit raw negative probes may reject; valid notifications use
+            // only the canonical no-content success statuses.
+            if (![202, 204, 400, 409].includes(response.status))
               throw Error(
                 `Catalogue event transport failed: ${response.status}`,
               );
@@ -817,7 +815,7 @@ try {
             const input = structuredClone(
               Object.hasOwn(actual.states, id)
                 ? actual.states[id].input
-                : (event.tool?.input ?? event.input ?? {}),
+                : (event.type === "tool.before" ? event.tool.input : {}),
             );
             if (event.tool) event.tool.input = input;
             if (Object.hasOwn(step, "items"))
@@ -846,8 +844,8 @@ try {
                   token,
                 );
             } else {
-              // Explicit lifecycle observe steps exercise the malicious legacy
-              // observer contract. Catalogue notify and other paths do not.
+              // Explicit lifecycle observer steps can inspect a foreign malformed
+              // response as negative evidence, never as a settled decision.
               await sdkCall(
                 notification,
                 step.subscription,

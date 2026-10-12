@@ -1,4 +1,5 @@
 // @ts-check
+import { fixtureHostCapabilities } from "./common.mjs";
 import { createRequire } from "node:module";
 import { setTimeout as delay } from "node:timers/promises";
 const require = createRequire(
@@ -46,10 +47,7 @@ export async function runChain(row, options) {
     {
       source,
       capabilities: {
-        [type]: {
-          modes: ["intercept", "observe"],
-          capabilities: original.params.capabilities,
-        },
+        toolBefore: { ...fixtureHostCapabilities.toolBefore, observe: true },
       },
       auth: options.auth ?? auth(),
       ...(options.fetch ? { fetch: options.fetch } : {}),
@@ -62,6 +60,7 @@ export async function runChain(row, options) {
   try {
     const boundary = hooks.dispatch(type, input, {
       signal: controller.signal,
+      capabilities: original.params.capabilities,
       ...(original.params.state !== undefined
         ? { initialState: original.params.state }
         : {}),
@@ -168,12 +167,12 @@ export async function runChain(row, options) {
         eventId: id,
         count: remaining.length,
       });
-    await result.observations;
     return {
       called,
-      failures: result.errors
+      failures: result.diagnostics
+        .filter((d) => d.phase !== "observation")
         .filter(
-          (/** @type {{code: string}} */ error) => error.code !== "INTERRUPTED",
+          (/** @type {{code: string}} */ error) => error.code !== "cancelled",
         )
         .map(
           (/** @type {{subscriptionIndex: number}} */ error) =>

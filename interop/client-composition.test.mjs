@@ -8,6 +8,8 @@ const { composeResponse } = await import(
   "../packages/sdk/dist/src/client/composition.js"
 );
 
+const { Attachment } = await import(require.resolve("agenthooksprotocol/client"));
+
 const envelope = { id: "e", source: "urn:test", time: "2026-01-01T00:00:00Z" };
 const tool = () => ({
   ...envelope,
@@ -184,8 +186,9 @@ test("continuation instructions accumulate once and stop discards candidate work
   );
 });
 
-test("raw stream references survive unrelated modifications and injection staging", () => {
-  const body = new ReadableStream();
+test("owned attachment references survive unrelated modifications and injection staging", () => {
+  const stream = new ReadableStream();
+  const body = Attachment.stream(stream);
   const event = {
     ...tool(),
     items: [
@@ -219,7 +222,7 @@ test("raw stream references survive unrelated modifications and injection stagin
   );
   assert.equal(result.event.items[0].body, body);
   assert.equal(result.state.injections[0].deliverAt, "next_turn");
-  assert.equal(body.locked, false);
+  assert.equal(stream.locked, false);
 });
 
 test("model request modifications use canonical message lists", () => {

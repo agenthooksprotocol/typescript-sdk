@@ -1,16 +1,40 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { sdkClient, sdkDraft, canonicalFixtureInjections } from "./common.mjs";
+import { sdkClient, sdkDraft } from "./common.mjs";
 import { summarizeAccepted, matches } from "./evaluator.mjs";
-const { Hooks } = sdkClient;
+const { Hooks, capabilityCount } = sdkClient;
+
+// Explicit host controls for the canonical summary matrix's two boundaries.
+// Each dispatch retains the fixture's narrower wire grant verbatim.
+function summaryCapabilities(eventType) {
+  if (eventType === "tool.before") return {
+    toolBefore: { intercept: {
+      deny: true, allow: true, ask: true, message: true, returnResult: true,
+      modifyInput: "replace-and-merge",
+      flow: { operations: ["stop"] },
+      inject: { context: { append: true, deliverAt: ["now", "next_turn"] } },
+    } },
+  };
+  if (eventType === "turn.finish.before") return {
+    turnFinishBefore: { intercept: {
+      message: true,
+      flow: {
+        operations: ["stop", "continue"],
+        remainingContinuations: capabilityCount(2),
+        continuationCount: capabilityCount(0),
+        maxContinuations: capabilityCount(2),
+      },
+    } },
+  };
+  throw Error(`Unexpected summary fixture boundary: ${eventType}`);
+}
 
 test("canonical summaries distinguish SDK protocol rejection from userland tool-schema rejection", async () => {
   const { scenarios } = JSON.parse(
     await readFile("../agent-hooks-protocol/interop/scenarios.json", "utf8"),
   );
   for (const row of scenarios) {
-    canonicalFixtureInjections(row);
     row.request = sdkDraft.validateInterceptRequest(row.request).value;
     const event = row.request.params.event;
     const client = new Hooks(
@@ -37,7 +61,7 @@ test("canonical summaries distinguish SDK protocol rejection from userland tool-
       },
       {
         source: event.source,
-        capabilities: { [event.type]: row.request.params.capabilities },
+        capabilities: summaryCapabilities(event.type),
         fetch: async (_url, init) => {
           const request = JSON.parse(init.body);
           return Response.json({
@@ -51,6 +75,7 @@ test("canonical summaries distinguish SDK protocol rejection from userland tool-
     try {
       const result = await client.dispatch(event.type, event, {
         initialState: row.request.params.state,
+        capabilities: row.request.params.capabilities,
       });
       const hostRejected =
         result.event.type === "tool.before" &&
@@ -62,9 +87,9 @@ test("canonical summaries distinguish SDK protocol rejection from userland tool-
       if (hostRejected) {
         // task > 0 is a synthetic host rule, not protocol validation.
         assert.equal(row.expectError, true, row.id);
-        assert.deepEqual(result.errors, [], row.id);
+        assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), [], row.id);
         assert.deepEqual(
-          result.response.result.effects,
+          result.acceptedResponses[0].result.effects,
           row.response.result.effects,
           row.id,
         );
@@ -74,11 +99,11 @@ test("canonical summaries distinguish SDK protocol rejection from userland tool-
         assert.equal(executions, 0, row.id);
       } else if (row.expectError) {
         assert.ok(
-          result.errors.some((error) => error.code === "DELIVERY_FAILED"),
+          result.diagnostics.filter(d => d.phase !== "observation").some((error) => error.code === "protocol_rejection"),
           row.id,
         );
       } else {
-        assert.deepEqual(result.errors, [], row.id);
+        assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), [], row.id);
         const actual = summarizeAccepted(row.request, result);
         assert.equal(
           matches(actual, row.expected),
@@ -97,19 +122,16 @@ test("summary does not replay effects or revalidate an accepted SDK response", (
   const request = { params: { event, capabilities: { effects: [] } } };
   const result = {
     event,
-    response: {
-      result: {
-        effects: [
-          {
-            type: "modify",
-            target: "input",
-            operation: "replace",
-            value: { fabricated: true },
-          },
-          { type: "message", text: "accepted" },
-        ],
+    effects: [
+      {
+        type: "modify",
+        target: "input",
+        operation: "replace",
+        value: { fabricated: true },
       },
-    },
+      { type: "message", text: "accepted" },
+    ],
+    state: { permission: "none", candidate: null },
     interrupted: false,
   };
   assert.deepEqual(summarizeAccepted(request, result).input, { actual: true });

@@ -94,7 +94,7 @@ const input: ToolBeforeInput<{ count: number }> = {
 declare const hooks: Hooks;
 void hooks.toolBefore(input, { contracts: { arguments: codec, result: resultContract } }).then(result => {
   const typed: ToolBeforeResult<{ count: number }, { answer: string }, unknown> = result;
-  const count: number = typed.input.count;
+  const count: number = typed.event.tool.input.count;
   if (typed.state.candidate !== null) {
     const answer: string = typed.state.candidate.value.answer;
     // @ts-expect-error The result contract does not declare count.
@@ -119,3 +119,115 @@ void Attachment.bytes(new Uint8Array([1]));
 declare const event: ToolBeforeEvent;
 declare const response: InterceptResponse;
 void [event, response];
+
+// @ts-expect-error Attachment is the sole owner; no native-source compatibility adapter.
+import type { ContentSource } from 'agenthooksprotocol/client';
+// @ts-expect-error The credential model has one name.
+import type { AuthCredential } from 'agenthooksprotocol/client';
+// @ts-expect-error AuthOptions is the sole factory configuration type.
+import type { AuthOverrides } from 'agenthooksprotocol/client';
+void hooks.modelRequestBefore({ model: { provider: 'provider', id: 'model' }, attempt: { id: 'attempt', number: 1 }, params: {}, items: [] }).then(result => {
+  const canonicalType: 'model.request.before' = result.event.type;
+  // @ts-expect-error There is one authoritative typed event, not a second settlement view.
+  void result.settledEvent;
+  // @ts-expect-error Observations settle before return and use structured diagnostics.
+  void result.observations;
+  void canonicalType;
+});
+
+// @ts-expect-error Hooks accepts only the canonical delivery provider, not authenticate-only helpers.
+const legacyAuth: import('agenthooksprotocol/client').HooksOptions['auth'] = { authenticate: async () => ({ token: 'secret' }) };
+void legacyAuth;
+
+// @ts-expect-error Generic dispatch requires canonical content selection, not implicit body decoding.
+const missingSelection: import('agenthooksprotocol/client').BoundaryInput<'turn.start'>['items'][number]['parts'][number] = { id: 'text', kind: 'text', mediaType: 'text/plain', text: 'body' };
+void missingSelection;
+
+// @ts-expect-error Canonical AttachmentBodyPart is not duplicated by a stream-item interface.
+import type { StreamContentItem } from 'agenthooksprotocol/client';
+// @ts-expect-error Attachment has one native-source factory, stream.
+Attachment.fromStream(new ReadableStream<Uint8Array>());
+
+// @ts-expect-error Interception diagnostics use the sole public DeliveryDiagnostic model.
+import type { DeliveryError } from 'agenthooksprotocol/client';
+void hooks.toolBefore(input).then(result => {
+  // @ts-expect-error Receiver envelopes belong only to acceptedResponses.
+  void result.response;
+  // @ts-expect-error Structured diagnostics are the sole delivery evidence.
+  void result.errors;
+  // @ts-expect-error Accepted arguments belong to the typed event.
+  void result.input;
+  // @ts-expect-error Canonical permission belongs to state.
+  void result.permission;
+  for (const effect of result.effects) { const family: string = effect.type; void family; }
+});
+
+const staticInterest: boolean = hooks.subscribes('tool.before');
+// @ts-expect-error Interest requires a generated canonical event name.
+const unknownInterest: boolean = hooks.subscribes('future.event');
+declare const arbitraryEventName: string;
+// @ts-expect-error Arbitrary strings are not canonical event identifiers.
+hooks.subscribes(arbitraryEventName);
+for (const name of Object.values(events)) hooks.subscribes(name);
+void [staticInterest, unknownInterest];
+
+import type { HostCapabilities } from 'agenthooksprotocol/client';
+const metadata: NonNullable<import('agenthooksprotocol/client').HooksOptions['manifestMetadata']> = {
+  authentication: ['bearer'], transports: ['http'], contentCategories: ['text'],
+  correlationIdentityFields: ['call.id'], gaps: [], limits: { maxUploadBytes: 4096 },
+  managedPolicy: { disableable: false, scopes: ['project'] }, toolPaths: ['native'],
+  extension: { settings: true },
+};
+// @ts-expect-error Metadata cannot advertise event grants or observation interest.
+metadata.events = [{ event: 'tool.before', modes: ['intercept'], capabilities: { effects: ['deny'] } }];
+new Hooks({}, { source: 'urn:test:metadata', capabilities: {}, manifestMetadata: metadata });
+
+// @ts-expect-error Generic capability builders are not a client API.
+import { CapabilityBuilder, capabilities } from 'agenthooksprotocol/client';
+// @ts-expect-error Canonical wire grants are not high-level host declarations.
+import type { EventGrant, EventCapabilities } from 'agenthooksprotocol/client';
+const host = { sessionStart: { observe: true }, toolBefore: { intercept: { allow: true, deny: true, returnResult: true, modifyInput: 'replace-and-merge' }, observe: true } } satisfies HostCapabilities;
+const elicitationFacility = { userElicitationRequest: { intercept: { elicitation: { form: true } } } } satisfies HostCapabilities;
+// @ts-expect-error Empty interception grants no facility.
+const emptyIntercept = { toolBefore: { intercept: {} } } satisfies HostCapabilities;
+// @ts-expect-error Entries need interception or explicit observation.
+const missingMode = { toolBefore: {} } satisfies HostCapabilities;
+// @ts-expect-error Observation-only events cannot intercept.
+const wrongMode = { sessionEnd: { intercept: { deny: true } } } satisfies HostCapabilities;
+const widerWrongTarget = { toolBefore: { intercept: { deny: true as const, modifySummary: 'replace' as const } } };
+// @ts-expect-error Unsupported known capabilities remain forbidden through a wider variable.
+const wrongTarget = widerWrongTarget satisfies HostCapabilities;
+void [host, elicitationFacility, emptyIntercept, missingMode, wrongMode, wrongTarget];
+
+import { events } from "agenthooksprotocol/client";
+import { reference, responseForRequest } from 'agenthooksprotocol/draft';
+// @ts-expect-error Contextual response admission requires a canonical event name.
+responseForRequest(arbitraryEventName, {});
+// @ts-expect-error Unknown wire names must stay at explicit raw admission boundaries.
+responseForRequest('future.event', {});
+import type { EventType } from 'agenthooksprotocol/client';
+const canonicalNames = [
+  'tool.before', 'tool.after', 'session.start', 'session.end',
+  'config.change.before', 'config.change.after', 'turn.start', 'turn.finish.before',
+  'turn.end', 'turn.progress', 'model.request.before', 'model.response.after', 'model.error',
+  'model.switch.before', 'model.switch.after', 'tool.permission.request', 'tool.permission.resolved',
+  'tool.progress', 'tool.batch.after', 'context.compact.before', 'context.compact.after',
+  'task.change.before', 'task.change.after', 'user.attention', 'user.elicitation.request',
+  'user.elicitation.result', 'user.message.inbound', 'user.message.outbound',
+  'workspace.change.before', 'workspace.change.after', 'file.changed', 'hook.failure',
+] as const satisfies readonly EventType[];
+for (const type of canonicalNames) {
+  hooks.subscribes(type);
+  responseForRequest(type, {});
+  const observation = { id: 'occurrence', source: 'urn:test:source', type } satisfies reference.ObservationEvent;
+  void observation;
+}
+// @ts-expect-error Dispatch requires a canonical event identifier, not an arbitrary string.
+hooks.dispatch(arbitraryEventName, {} as never);
+// @ts-expect-error Reference observation names use the same generated catalogue.
+const unknownObservation: reference.ObservationEvent = { id: 'occurrence', source: 'urn:test:source', type: 'future.event' };
+// @ts-expect-error Dynamic strings are not canonical observation names.
+const dynamicObservation: reference.ObservationEvent = { id: 'occurrence', source: 'urn:test:source', type: arbitraryEventName };
+const taskChange = reference.actualTaskChange({ count: 1 }, { count: 2 }, 'occurrence');
+const taskChangeName: Extract<EventType, 'task.change.after'> | undefined = taskChange?.type;
+void [unknownObservation, dynamicObservation, taskChangeName];

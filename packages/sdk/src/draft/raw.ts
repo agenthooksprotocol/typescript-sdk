@@ -5545,14 +5545,14 @@ export function responseForRequest<K extends keyof EventResponses>(
   validate?: (response: ResponseFor<K>) => readonly ParseDiagnostic[],
 ): ParseResult<ResponseFor<K>>;
 export function responseForRequest(
-  eventType: string,
+  eventType: EventType,
   input: string | unknown,
   validate?: (
     response: EventResponses[keyof EventResponses],
   ) => readonly ParseDiagnostic[],
 ): ParseResult<EventResponses[keyof EventResponses]>;
 export function responseForRequest(
-  eventType: string,
+  eventType: EventType,
   input: string | unknown,
   validate?: (response: never) => readonly ParseDiagnostic[],
 ): ParseResult<any> {
@@ -5623,204 +5623,11 @@ export const events = {
   workspaceChangeBefore: "workspace.change.before",
 } as const;
 
-/** Named out-of-band content bindings. Streams are never inserted into wire models. */
+/** Out-of-band source binding produced by canonical host-input projection. */
 export interface ContentSourceBinding<S> {
   readonly path: readonly (string | number)[];
   readonly source: S;
 }
-export const contentSlots = {
-  "config.change.after": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "config.change.before": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "context.compact.after": {},
-  "context.compact.before": {},
-  "file.changed": {
-    changesAfter<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["changes", index, "after"], source };
-    },
-    changesBefore<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["changes", index, "before"], source };
-    },
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "hook.failure": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "model.error": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "model.request.before": {},
-  "model.response.after": {},
-  "model.switch.after": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "model.switch.before": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "session.end": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "session.start": {},
-  "task.change.after": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "task.change.before": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "tool.after": {
-    fileChangesAfter<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["fileChanges", index, "after"], source };
-    },
-    fileChangesBefore<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["fileChanges", index, "before"], source };
-    },
-  },
-  "tool.batch.after": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "tool.before": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "tool.permission.request": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "tool.permission.resolved": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "tool.progress": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "turn.end": {},
-  "turn.finish.before": {},
-  "turn.progress": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "turn.start": {},
-  "user.attention": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "user.elicitation.request": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "user.elicitation.result": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "user.message.inbound": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "user.message.outbound": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "workspace.change.after": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-  "workspace.change.before": {
-    items<S>(index: number, source: S): ContentSourceBinding<S> {
-      if (!Number.isSafeInteger(index) || index < 0)
-        throw new RangeError("content index must be a nonnegative integer");
-      return { path: ["items", index], source };
-    },
-  },
-} as const;
 
 /** Opaque host-only ownership handle. Wrapping never evaluates or inspects S. */
 declare const ownedAttachmentBrand: unique symbol;
@@ -6524,7 +6331,7 @@ function hostRecord(value: unknown): Record<string, unknown> {
 }
 /** No I/O. The runtime must resolve bindings and replace metadata at pending paths
  * with body references before delivering a body-selected event. Paths are event-relative,
- * exactly like contentSlots. Opaque native/tool payloads are not traversed or serialized. */
+ * including schema-owned message/part placements. Opaque native/tool payloads are not traversed or serialized. */
 /** @internal Runtime conversion hook; applications pass HostEventInputs to runtime methods. */
 export function _projectHostInput<K extends EventType, S = unknown>(
   type: K,
@@ -6954,309 +6761,2099 @@ export const effects = {
   },
 } as const;
 
-/** Declaration convenience only. Event admission and per-call narrowing are runtime-owned. */
-export type CapabilityDeclaration = {
-  modes: ("intercept" | "observe")[];
-  capabilities: Capabilities;
+type CapabilityNonempty<T> = readonly [T, ...T[]];
+type CapabilityAtLeastOne<T> = {
+  [K in keyof T]-?: Required<Pick<T, K>> & T;
+}[keyof T];
+declare const capabilityCountBrand: unique symbol;
+export type CapabilityCount = number & {
+  readonly [capabilityCountBrand]: true;
 };
-export type CapabilityObservation = { modes: ["observe"] };
-function capabilityNonempty(
-  values: readonly string[],
+export function capabilityCount(value: number): CapabilityCount {
+  if (!Number.isSafeInteger(value) || value < 0)
+    throw new TypeError("capability count must be a nonnegative safe integer");
+  return value as CapabilityCount;
+}
+function capabilityModifyToWire(mode: string): {
+  replace: boolean;
+  merge: boolean;
+} {
+  return {
+    replace: mode === "replace" || mode === "replace-and-merge",
+    merge: mode === "merge" || mode === "replace-and-merge",
+  };
+}
+
+interface CapabilityRule {
+  readonly intercept: boolean;
+  readonly observe: boolean;
+  readonly controls: readonly string[];
+  readonly modify: Readonly<Record<string, readonly string[]>>;
+  readonly flow: readonly string[];
+  readonly delivery: readonly string[];
+  readonly elicitation: readonly string[];
+}
+function capabilityInvalid(): never {
+  throw new TypeError("invalid or mutated host capability declaration");
+}
+// Snapshot once, then validate and render only owned data. Readonly types do not protect mutable aliases.
+function capabilitySnapshot(
+  value: unknown,
+  active = new Set<object>(),
+): unknown {
+  if (value === null || typeof value !== "object") {
+    if (
+      value === undefined ||
+      typeof value === "boolean" ||
+      typeof value === "string" ||
+      typeof value === "number"
+    )
+      return value;
+    return capabilityInvalid();
+  }
+  if (active.has(value)) return capabilityInvalid();
+  active.add(value);
+  let result: unknown;
+  if (Array.isArray(value)) {
+    result = Array.from(value, (item) => capabilitySnapshot(item, active));
+  } else {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null)
+      return capabilityInvalid();
+    const owned: Record<string, unknown> = Object.create(null);
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string") return capabilityInvalid();
+      owned[key] = capabilitySnapshot(
+        (value as Record<string, unknown>)[key],
+        active,
+      );
+    }
+    result = owned;
+  }
+  active.delete(value);
+  return result;
+}
+function capabilityObject(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return capabilityInvalid();
+  return value as Record<string, unknown>;
+}
+function capabilityKeys(
+  value: Record<string, unknown>,
   allowed: readonly string[],
 ): void {
-  if (
-    !Array.isArray(values) ||
-    !values.length ||
-    values.some((v) => !allowed.includes(v))
-  )
-    throw new TypeError("nonempty valid operations required");
+  for (const key of Object.keys(value))
+    if (!allowed.includes(key)) capabilityInvalid();
 }
-function capabilityMerge(a: any, b: any): any {
-  const result = { ...a };
-  for (const [k, v] of Object.entries(b)) {
-    if (Array.isArray(v)) result[k] = [...new Set([...(a[k] ?? []), ...v])];
-    else if (typeof v === "object" && v !== null)
-      result[k] = capabilityMerge(a[k] ?? {}, v);
-    else result[k] = typeof v === "boolean" ? a[k] === true || v : v;
+function capabilityList(
+  value: unknown,
+  allowed: readonly string[],
+): readonly string[] {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((item) => typeof item !== "string" || !allowed.includes(item))
+  )
+    return capabilityInvalid();
+  return value as string[];
+}
+function capabilityOwnedHost(value: unknown): HostCapabilities {
+  const host = capabilityObject(capabilitySnapshot(value));
+  capabilityKeys(host, Object.keys(capabilityRules));
+  for (const [event, selected] of Object.entries(host)) {
+    if (selected === undefined) continue;
+    const rule = capabilityRules[event]!;
+    const declaration = capabilityObject(selected);
+    capabilityKeys(declaration, ["observe", "intercept"]);
+    if (
+      declaration.observe !== undefined &&
+      (!rule.observe || declaration.observe !== true)
+    )
+      capabilityInvalid();
+    if (declaration.intercept === undefined) {
+      if (declaration.observe !== true) capabilityInvalid();
+      continue;
+    }
+    if (!rule.intercept) capabilityInvalid();
+    const grants = capabilityObject(declaration.intercept);
+    const allowed = [...rule.controls, ...Object.keys(rule.modify)];
+    if (rule.flow.length) allowed.push("flow");
+    if (rule.delivery.length) allowed.push("inject");
+    if (rule.elicitation.length) allowed.push("elicitation");
+    capabilityKeys(grants, allowed);
+    let supported = false;
+    for (const control of rule.controls) {
+      if (grants[control] === undefined) continue;
+      if (grants[control] !== true) capabilityInvalid();
+      supported = true;
+    }
+    for (const [target, modes] of Object.entries(rule.modify)) {
+      const mode = grants[target];
+      if (mode === undefined) continue;
+      if (typeof mode !== "string" || !modes.includes(mode))
+        capabilityInvalid();
+      supported = true;
+    }
+    if (grants.flow !== undefined) {
+      const flow = capabilityObject(grants.flow);
+      capabilityKeys(flow, [
+        "operations",
+        "remainingContinuations",
+        "continuationCount",
+        "maxContinuations",
+      ]);
+      const operations = capabilityList(flow.operations, rule.flow);
+      for (const field of [
+        "remainingContinuations",
+        "continuationCount",
+        "maxContinuations",
+      ]) {
+        const count = flow[field];
+        if (
+          count !== undefined &&
+          (typeof count !== "number" ||
+            !Number.isSafeInteger(count) ||
+            count < 0)
+        )
+          capabilityInvalid();
+      }
+      if (
+        operations.includes("continue") &&
+        (flow.remainingContinuations === undefined ||
+          flow.continuationCount === undefined)
+      )
+        capabilityInvalid();
+      supported = true;
+    }
+    if (grants.inject !== undefined) {
+      const injection = capabilityObject(grants.inject);
+      capabilityKeys(injection, ["context"]);
+      const context = capabilityObject(injection.context);
+      capabilityKeys(context, ["append", "deliverAt"]);
+      if (context.append !== true) capabilityInvalid();
+      capabilityList(context.deliverAt, rule.delivery);
+      supported = true;
+    }
+    if (grants.elicitation !== undefined) {
+      const elicitation = capabilityObject(grants.elicitation);
+      capabilityKeys(elicitation, rule.elicitation);
+      let facility = false;
+      for (const selection of Object.values(elicitation)) {
+        if (selection === undefined) continue;
+        if (selection !== true) capabilityInvalid();
+        facility = true;
+      }
+      if (!facility) capabilityInvalid();
+      supported = true;
+    }
+    if (!supported) capabilityInvalid();
+  }
+  return host as HostCapabilities;
+}
+
+export type CapabilityObservation = {
+  readonly observe: true;
+  readonly intercept?: never;
+};
+export type CapabilityFlowOperation = "continue" | "stop";
+export type CapabilityDelivery = "next_turn" | "now";
+export type CapabilityFlow =
+  | {
+      readonly operations: CapabilityNonempty<"stop">;
+      readonly remainingContinuations?: CapabilityCount;
+      readonly continuationCount?: CapabilityCount;
+      readonly maxContinuations?: CapabilityCount;
+    }
+  | {
+      readonly operations: CapabilityNonempty<CapabilityFlowOperation>;
+      readonly remainingContinuations: CapabilityCount;
+      readonly continuationCount: CapabilityCount;
+      readonly maxContinuations?: CapabilityCount;
+    };
+export type CapabilityInjection = {
+  readonly context: {
+    readonly append: true;
+    readonly deliverAt: CapabilityNonempty<CapabilityDelivery>;
+  };
+};
+export type CapabilityElicitation = CapabilityAtLeastOne<{
+  readonly form?: true;
+  readonly url?: true;
+}>;
+export interface WireCapabilities {
+  readonly effects: readonly string[];
+  readonly modify?: {
+    readonly content?: { readonly replace: boolean; readonly merge: boolean };
+    readonly input?: { readonly replace: boolean; readonly merge: boolean };
+    readonly instructions?: {
+      readonly replace: boolean;
+      readonly merge: boolean;
+    };
+    readonly output?: { readonly replace: boolean; readonly merge: boolean };
+    readonly prompt?: { readonly replace: boolean; readonly merge: boolean };
+    readonly request?: { readonly replace: boolean; readonly merge: boolean };
+    readonly response?: { readonly replace: boolean; readonly merge: boolean };
+    readonly summary?: { readonly replace: boolean; readonly merge: boolean };
+    readonly workspace?: { readonly replace: boolean; readonly merge: boolean };
+  };
+  readonly flow?: CapabilityFlow;
+  readonly inject?: CapabilityInjection;
+  readonly elicitation?: {
+    readonly form?: Readonly<Record<string, never>>;
+    readonly url?: Readonly<Record<string, never>>;
+  };
+}
+export interface WireDeclaration {
+  readonly modes:
+    | readonly ["intercept"]
+    | readonly ["observe"]
+    | readonly ["intercept", "observe"];
+  readonly capabilities?: WireCapabilities;
+}
+export type ConfigChangeBeforeIntercept = CapabilityAtLeastOne<{
+  readonly deny?: true;
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly message?: true;
+}> & {
+  readonly allow?: never;
+  readonly ask?: never;
+  readonly flow?: never;
+  readonly inject?: never;
+  readonly modifyContent?: never;
+  readonly modifyInput?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyOutput?: never;
+  readonly modifyPrompt?: never;
+  readonly modifyRequest?: never;
+  readonly modifyResponse?: never;
+  readonly modifySummary?: never;
+  readonly modifyWorkspace?: never;
+  readonly returnResult?: never;
+};
+export type ConfigChangeBeforeHostCapabilities =
+  | { readonly intercept: ConfigChangeBeforeIntercept; readonly observe?: true }
+  | CapabilityObservation;
+export type ContextCompactAfterIntercept = CapabilityAtLeastOne<{
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly inject?: CapabilityInjection & {
+    readonly context: {
+      readonly append: true;
+      readonly deliverAt: CapabilityNonempty<"next_turn" | "now">;
+    };
+  };
+  readonly message?: true;
+  readonly modifySummary?: "merge" | "replace" | "replace-and-merge";
+}> & {
+  readonly allow?: never;
+  readonly ask?: never;
+  readonly deny?: never;
+  readonly flow?: never;
+  readonly modifyContent?: never;
+  readonly modifyInput?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyOutput?: never;
+  readonly modifyPrompt?: never;
+  readonly modifyRequest?: never;
+  readonly modifyResponse?: never;
+  readonly modifyWorkspace?: never;
+  readonly returnResult?: never;
+};
+export type ContextCompactAfterHostCapabilities =
+  | {
+      readonly intercept: ContextCompactAfterIntercept;
+      readonly observe?: true;
+    }
+  | CapabilityObservation;
+export type ContextCompactBeforeIntercept = CapabilityAtLeastOne<{
+  readonly deny?: true;
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly inject?: CapabilityInjection & {
+    readonly context: {
+      readonly append: true;
+      readonly deliverAt: CapabilityNonempty<"next_turn" | "now">;
+    };
+  };
+  readonly message?: true;
+  readonly modifyInstructions?: "merge" | "replace" | "replace-and-merge";
+  readonly returnResult?: true;
+}> & {
+  readonly allow?: never;
+  readonly ask?: never;
+  readonly flow?: never;
+  readonly modifyContent?: never;
+  readonly modifyInput?: never;
+  readonly modifyOutput?: never;
+  readonly modifyPrompt?: never;
+  readonly modifyRequest?: never;
+  readonly modifyResponse?: never;
+  readonly modifySummary?: never;
+  readonly modifyWorkspace?: never;
+};
+export type ContextCompactBeforeHostCapabilities =
+  | {
+      readonly intercept: ContextCompactBeforeIntercept;
+      readonly observe?: true;
+    }
+  | CapabilityObservation;
+export type ModelRequestBeforeIntercept = CapabilityAtLeastOne<{
+  readonly deny?: true;
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly flow?: CapabilityFlow & {
+    readonly operations: CapabilityNonempty<"stop">;
+  };
+  readonly inject?: CapabilityInjection & {
+    readonly context: {
+      readonly append: true;
+      readonly deliverAt: CapabilityNonempty<"next_turn" | "now">;
+    };
+  };
+  readonly message?: true;
+  readonly modifyRequest?: "merge" | "replace" | "replace-and-merge";
+  readonly returnResult?: true;
+}> & {
+  readonly allow?: never;
+  readonly ask?: never;
+  readonly modifyContent?: never;
+  readonly modifyInput?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyOutput?: never;
+  readonly modifyPrompt?: never;
+  readonly modifyResponse?: never;
+  readonly modifySummary?: never;
+  readonly modifyWorkspace?: never;
+};
+export type ModelRequestBeforeHostCapabilities =
+  | { readonly intercept: ModelRequestBeforeIntercept; readonly observe?: true }
+  | CapabilityObservation;
+export type ModelResponseAfterIntercept = CapabilityAtLeastOne<{
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly flow?: CapabilityFlow & {
+    readonly operations: CapabilityNonempty<"stop">;
+  };
+  readonly message?: true;
+  readonly modifyResponse?: "merge" | "replace" | "replace-and-merge";
+}> & {
+  readonly allow?: never;
+  readonly ask?: never;
+  readonly deny?: never;
+  readonly inject?: never;
+  readonly modifyContent?: never;
+  readonly modifyInput?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyOutput?: never;
+  readonly modifyPrompt?: never;
+  readonly modifyRequest?: never;
+  readonly modifySummary?: never;
+  readonly modifyWorkspace?: never;
+  readonly returnResult?: never;
+};
+export type ModelResponseAfterHostCapabilities =
+  | { readonly intercept: ModelResponseAfterIntercept; readonly observe?: true }
+  | CapabilityObservation;
+export type ModelSwitchBeforeIntercept = CapabilityAtLeastOne<{
+  readonly deny?: true;
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly flow?: CapabilityFlow & {
+    readonly operations: CapabilityNonempty<"stop">;
+  };
+  readonly message?: true;
+}> & {
+  readonly allow?: never;
+  readonly ask?: never;
+  readonly inject?: never;
+  readonly modifyContent?: never;
+  readonly modifyInput?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyOutput?: never;
+  readonly modifyPrompt?: never;
+  readonly modifyRequest?: never;
+  readonly modifyResponse?: never;
+  readonly modifySummary?: never;
+  readonly modifyWorkspace?: never;
+  readonly returnResult?: never;
+};
+export type ModelSwitchBeforeHostCapabilities =
+  | { readonly intercept: ModelSwitchBeforeIntercept; readonly observe?: true }
+  | CapabilityObservation;
+export type SessionStartIntercept = CapabilityAtLeastOne<{
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly inject?: CapabilityInjection & {
+    readonly context: {
+      readonly append: true;
+      readonly deliverAt: CapabilityNonempty<"next_turn" | "now">;
+    };
+  };
+  readonly message?: true;
+}> & {
+  readonly allow?: never;
+  readonly ask?: never;
+  readonly deny?: never;
+  readonly flow?: never;
+  readonly modifyContent?: never;
+  readonly modifyInput?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyOutput?: never;
+  readonly modifyPrompt?: never;
+  readonly modifyRequest?: never;
+  readonly modifyResponse?: never;
+  readonly modifySummary?: never;
+  readonly modifyWorkspace?: never;
+  readonly returnResult?: never;
+};
+export type SessionStartHostCapabilities =
+  | { readonly intercept: SessionStartIntercept; readonly observe?: true }
+  | CapabilityObservation;
+export type TaskChangeBeforeIntercept = CapabilityAtLeastOne<{
+  readonly deny?: true;
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly message?: true;
+}> & {
+  readonly allow?: never;
+  readonly ask?: never;
+  readonly flow?: never;
+  readonly inject?: never;
+  readonly modifyContent?: never;
+  readonly modifyInput?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyOutput?: never;
+  readonly modifyPrompt?: never;
+  readonly modifyRequest?: never;
+  readonly modifyResponse?: never;
+  readonly modifySummary?: never;
+  readonly modifyWorkspace?: never;
+  readonly returnResult?: never;
+};
+export type TaskChangeBeforeHostCapabilities =
+  | { readonly intercept: TaskChangeBeforeIntercept; readonly observe?: true }
+  | CapabilityObservation;
+export type ToolAfterIntercept = CapabilityAtLeastOne<{
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly flow?: CapabilityFlow & {
+    readonly operations: CapabilityNonempty<"continue" | "stop">;
+  };
+  readonly inject?: CapabilityInjection & {
+    readonly context: {
+      readonly append: true;
+      readonly deliverAt: CapabilityNonempty<"next_turn" | "now">;
+    };
+  };
+  readonly message?: true;
+  readonly modifyOutput?: "merge" | "replace" | "replace-and-merge";
+}> & {
+  readonly allow?: never;
+  readonly ask?: never;
+  readonly deny?: never;
+  readonly modifyContent?: never;
+  readonly modifyInput?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyPrompt?: never;
+  readonly modifyRequest?: never;
+  readonly modifyResponse?: never;
+  readonly modifySummary?: never;
+  readonly modifyWorkspace?: never;
+  readonly returnResult?: never;
+};
+export type ToolAfterHostCapabilities =
+  | { readonly intercept: ToolAfterIntercept; readonly observe?: true }
+  | CapabilityObservation;
+export type ToolBatchAfterIntercept = CapabilityAtLeastOne<{
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly flow?: CapabilityFlow & {
+    readonly operations: CapabilityNonempty<"stop">;
+  };
+  readonly inject?: CapabilityInjection & {
+    readonly context: {
+      readonly append: true;
+      readonly deliverAt: CapabilityNonempty<"next_turn" | "now">;
+    };
+  };
+  readonly message?: true;
+}> & {
+  readonly allow?: never;
+  readonly ask?: never;
+  readonly deny?: never;
+  readonly modifyContent?: never;
+  readonly modifyInput?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyOutput?: never;
+  readonly modifyPrompt?: never;
+  readonly modifyRequest?: never;
+  readonly modifyResponse?: never;
+  readonly modifySummary?: never;
+  readonly modifyWorkspace?: never;
+  readonly returnResult?: never;
+};
+export type ToolBatchAfterHostCapabilities =
+  | { readonly intercept: ToolBatchAfterIntercept; readonly observe?: true }
+  | CapabilityObservation;
+export type ToolBeforeIntercept = CapabilityAtLeastOne<{
+  readonly allow?: true;
+  readonly ask?: true;
+  readonly deny?: true;
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly flow?: CapabilityFlow & {
+    readonly operations: CapabilityNonempty<"stop">;
+  };
+  readonly inject?: CapabilityInjection & {
+    readonly context: {
+      readonly append: true;
+      readonly deliverAt: CapabilityNonempty<"next_turn" | "now">;
+    };
+  };
+  readonly message?: true;
+  readonly modifyInput?: "merge" | "replace" | "replace-and-merge";
+  readonly returnResult?: true;
+}> & {
+  readonly modifyContent?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyOutput?: never;
+  readonly modifyPrompt?: never;
+  readonly modifyRequest?: never;
+  readonly modifyResponse?: never;
+  readonly modifySummary?: never;
+  readonly modifyWorkspace?: never;
+};
+export type ToolBeforeHostCapabilities =
+  | { readonly intercept: ToolBeforeIntercept; readonly observe?: true }
+  | CapabilityObservation;
+export type ToolPermissionRequestIntercept = CapabilityAtLeastOne<{
+  readonly allow?: true;
+  readonly deny?: true;
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly flow?: CapabilityFlow & {
+    readonly operations: CapabilityNonempty<"stop">;
+  };
+  readonly message?: true;
+  readonly modifyInput?: "merge" | "replace" | "replace-and-merge";
+}> & {
+  readonly ask?: never;
+  readonly inject?: never;
+  readonly modifyContent?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyOutput?: never;
+  readonly modifyPrompt?: never;
+  readonly modifyRequest?: never;
+  readonly modifyResponse?: never;
+  readonly modifySummary?: never;
+  readonly modifyWorkspace?: never;
+  readonly returnResult?: never;
+};
+export type ToolPermissionRequestHostCapabilities =
+  | {
+      readonly intercept: ToolPermissionRequestIntercept;
+      readonly observe?: true;
+    }
+  | CapabilityObservation;
+export type TurnFinishBeforeIntercept = CapabilityAtLeastOne<{
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly flow?: CapabilityFlow & {
+    readonly operations: CapabilityNonempty<"continue" | "stop">;
+  };
+  readonly message?: true;
+  readonly modifyResponse?: "merge" | "replace" | "replace-and-merge";
+}> & {
+  readonly allow?: never;
+  readonly ask?: never;
+  readonly deny?: never;
+  readonly inject?: never;
+  readonly modifyContent?: never;
+  readonly modifyInput?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyOutput?: never;
+  readonly modifyPrompt?: never;
+  readonly modifyRequest?: never;
+  readonly modifySummary?: never;
+  readonly modifyWorkspace?: never;
+  readonly returnResult?: never;
+};
+export type TurnFinishBeforeHostCapabilities =
+  | { readonly intercept: TurnFinishBeforeIntercept; readonly observe?: true }
+  | CapabilityObservation;
+export type TurnStartIntercept = CapabilityAtLeastOne<{
+  readonly deny?: true;
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly flow?: CapabilityFlow & {
+    readonly operations: CapabilityNonempty<"stop">;
+  };
+  readonly inject?: CapabilityInjection & {
+    readonly context: {
+      readonly append: true;
+      readonly deliverAt: CapabilityNonempty<"next_turn" | "now">;
+    };
+  };
+  readonly message?: true;
+  readonly modifyPrompt?: "merge" | "replace" | "replace-and-merge";
+}> & {
+  readonly allow?: never;
+  readonly ask?: never;
+  readonly modifyContent?: never;
+  readonly modifyInput?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyOutput?: never;
+  readonly modifyRequest?: never;
+  readonly modifyResponse?: never;
+  readonly modifySummary?: never;
+  readonly modifyWorkspace?: never;
+  readonly returnResult?: never;
+};
+export type TurnStartHostCapabilities =
+  | { readonly intercept: TurnStartIntercept; readonly observe?: true }
+  | CapabilityObservation;
+export type UserElicitationRequestIntercept = CapabilityAtLeastOne<{
+  readonly deny?: true;
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly message?: true;
+  readonly returnResult?: true;
+}> & {
+  readonly allow?: never;
+  readonly ask?: never;
+  readonly flow?: never;
+  readonly inject?: never;
+  readonly modifyContent?: never;
+  readonly modifyInput?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyOutput?: never;
+  readonly modifyPrompt?: never;
+  readonly modifyRequest?: never;
+  readonly modifyResponse?: never;
+  readonly modifySummary?: never;
+  readonly modifyWorkspace?: never;
+};
+export type UserElicitationRequestHostCapabilities =
+  | {
+      readonly intercept: UserElicitationRequestIntercept;
+      readonly observe?: true;
+    }
+  | CapabilityObservation;
+export type UserElicitationResultIntercept = CapabilityAtLeastOne<{
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly message?: true;
+  readonly modifyContent?: "merge" | "replace" | "replace-and-merge";
+}> & {
+  readonly allow?: never;
+  readonly ask?: never;
+  readonly deny?: never;
+  readonly flow?: never;
+  readonly inject?: never;
+  readonly modifyInput?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyOutput?: never;
+  readonly modifyPrompt?: never;
+  readonly modifyRequest?: never;
+  readonly modifyResponse?: never;
+  readonly modifySummary?: never;
+  readonly modifyWorkspace?: never;
+  readonly returnResult?: never;
+};
+export type UserElicitationResultHostCapabilities =
+  | {
+      readonly intercept: UserElicitationResultIntercept;
+      readonly observe?: true;
+    }
+  | CapabilityObservation;
+export type UserMessageInboundIntercept = CapabilityAtLeastOne<{
+  readonly deny?: true;
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly message?: true;
+  readonly modifyPrompt?: "merge" | "replace" | "replace-and-merge";
+}> & {
+  readonly allow?: never;
+  readonly ask?: never;
+  readonly flow?: never;
+  readonly inject?: never;
+  readonly modifyContent?: never;
+  readonly modifyInput?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyOutput?: never;
+  readonly modifyRequest?: never;
+  readonly modifyResponse?: never;
+  readonly modifySummary?: never;
+  readonly modifyWorkspace?: never;
+  readonly returnResult?: never;
+};
+export type UserMessageInboundHostCapabilities =
+  | { readonly intercept: UserMessageInboundIntercept; readonly observe?: true }
+  | CapabilityObservation;
+export type UserMessageOutboundIntercept = CapabilityAtLeastOne<{
+  readonly deny?: true;
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly message?: true;
+  readonly modifyContent?: "merge" | "replace" | "replace-and-merge";
+}> & {
+  readonly allow?: never;
+  readonly ask?: never;
+  readonly flow?: never;
+  readonly inject?: never;
+  readonly modifyInput?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyOutput?: never;
+  readonly modifyPrompt?: never;
+  readonly modifyRequest?: never;
+  readonly modifyResponse?: never;
+  readonly modifySummary?: never;
+  readonly modifyWorkspace?: never;
+  readonly returnResult?: never;
+};
+export type UserMessageOutboundHostCapabilities =
+  | {
+      readonly intercept: UserMessageOutboundIntercept;
+      readonly observe?: true;
+    }
+  | CapabilityObservation;
+export type WorkspaceChangeBeforeIntercept = CapabilityAtLeastOne<{
+  readonly deny?: true;
+  readonly elicitation?: CapabilityAtLeastOne<{
+    readonly form?: true;
+    readonly url?: true;
+  }> & {};
+  readonly message?: true;
+  readonly modifyWorkspace?: "merge" | "replace" | "replace-and-merge";
+}> & {
+  readonly allow?: never;
+  readonly ask?: never;
+  readonly flow?: never;
+  readonly inject?: never;
+  readonly modifyContent?: never;
+  readonly modifyInput?: never;
+  readonly modifyInstructions?: never;
+  readonly modifyOutput?: never;
+  readonly modifyPrompt?: never;
+  readonly modifyRequest?: never;
+  readonly modifyResponse?: never;
+  readonly modifySummary?: never;
+  readonly returnResult?: never;
+};
+export type WorkspaceChangeBeforeHostCapabilities =
+  | {
+      readonly intercept: WorkspaceChangeBeforeIntercept;
+      readonly observe?: true;
+    }
+  | CapabilityObservation;
+export interface HostCapabilities {
+  readonly configChangeAfter?: CapabilityObservation;
+  readonly configChangeBefore?: ConfigChangeBeforeHostCapabilities;
+  readonly contextCompactAfter?: ContextCompactAfterHostCapabilities;
+  readonly contextCompactBefore?: ContextCompactBeforeHostCapabilities;
+  readonly fileChanged?: CapabilityObservation;
+  readonly hookFailure?: CapabilityObservation;
+  readonly modelError?: CapabilityObservation;
+  readonly modelRequestBefore?: ModelRequestBeforeHostCapabilities;
+  readonly modelResponseAfter?: ModelResponseAfterHostCapabilities;
+  readonly modelSwitchAfter?: CapabilityObservation;
+  readonly modelSwitchBefore?: ModelSwitchBeforeHostCapabilities;
+  readonly sessionEnd?: CapabilityObservation;
+  readonly sessionStart?: SessionStartHostCapabilities;
+  readonly taskChangeAfter?: CapabilityObservation;
+  readonly taskChangeBefore?: TaskChangeBeforeHostCapabilities;
+  readonly toolAfter?: ToolAfterHostCapabilities;
+  readonly toolBatchAfter?: ToolBatchAfterHostCapabilities;
+  readonly toolBefore?: ToolBeforeHostCapabilities;
+  readonly toolPermissionRequest?: ToolPermissionRequestHostCapabilities;
+  readonly toolPermissionResolved?: CapabilityObservation;
+  readonly toolProgress?: CapabilityObservation;
+  readonly turnEnd?: CapabilityObservation;
+  readonly turnFinishBefore?: TurnFinishBeforeHostCapabilities;
+  readonly turnProgress?: CapabilityObservation;
+  readonly turnStart?: TurnStartHostCapabilities;
+  readonly userAttention?: CapabilityObservation;
+  readonly userElicitationRequest?: UserElicitationRequestHostCapabilities;
+  readonly userElicitationResult?: UserElicitationResultHostCapabilities;
+  readonly userMessageInbound?: UserMessageInboundHostCapabilities;
+  readonly userMessageOutbound?: UserMessageOutboundHostCapabilities;
+  readonly workspaceChangeAfter?: CapabilityObservation;
+  readonly workspaceChangeBefore?: WorkspaceChangeBeforeHostCapabilities;
+}
+const capabilityRules: Readonly<Record<string, CapabilityRule>> = {
+  configChangeAfter: {
+    controls: [],
+    delivery: [],
+    elicitation: [],
+    flow: [],
+    intercept: false,
+    modify: {},
+    observe: true,
+  },
+  configChangeBefore: {
+    controls: ["deny", "message"],
+    delivery: [],
+    elicitation: ["form", "url"],
+    flow: [],
+    intercept: true,
+    modify: {},
+    observe: true,
+  },
+  contextCompactAfter: {
+    controls: ["message"],
+    delivery: ["next_turn", "now"],
+    elicitation: ["form", "url"],
+    flow: [],
+    intercept: true,
+    modify: { modifySummary: ["merge", "replace", "replace-and-merge"] },
+    observe: true,
+  },
+  contextCompactBefore: {
+    controls: ["deny", "message", "returnResult"],
+    delivery: ["next_turn", "now"],
+    elicitation: ["form", "url"],
+    flow: [],
+    intercept: true,
+    modify: { modifyInstructions: ["merge", "replace", "replace-and-merge"] },
+    observe: true,
+  },
+  fileChanged: {
+    controls: [],
+    delivery: [],
+    elicitation: [],
+    flow: [],
+    intercept: false,
+    modify: {},
+    observe: true,
+  },
+  hookFailure: {
+    controls: [],
+    delivery: [],
+    elicitation: [],
+    flow: [],
+    intercept: false,
+    modify: {},
+    observe: true,
+  },
+  modelError: {
+    controls: [],
+    delivery: [],
+    elicitation: [],
+    flow: [],
+    intercept: false,
+    modify: {},
+    observe: true,
+  },
+  modelRequestBefore: {
+    controls: ["deny", "message", "returnResult"],
+    delivery: ["next_turn", "now"],
+    elicitation: ["form", "url"],
+    flow: ["stop"],
+    intercept: true,
+    modify: { modifyRequest: ["merge", "replace", "replace-and-merge"] },
+    observe: true,
+  },
+  modelResponseAfter: {
+    controls: ["message"],
+    delivery: [],
+    elicitation: ["form", "url"],
+    flow: ["stop"],
+    intercept: true,
+    modify: { modifyResponse: ["merge", "replace", "replace-and-merge"] },
+    observe: true,
+  },
+  modelSwitchAfter: {
+    controls: [],
+    delivery: [],
+    elicitation: [],
+    flow: [],
+    intercept: false,
+    modify: {},
+    observe: true,
+  },
+  modelSwitchBefore: {
+    controls: ["deny", "message"],
+    delivery: [],
+    elicitation: ["form", "url"],
+    flow: ["stop"],
+    intercept: true,
+    modify: {},
+    observe: true,
+  },
+  sessionEnd: {
+    controls: [],
+    delivery: [],
+    elicitation: [],
+    flow: [],
+    intercept: false,
+    modify: {},
+    observe: true,
+  },
+  sessionStart: {
+    controls: ["message"],
+    delivery: ["next_turn", "now"],
+    elicitation: ["form", "url"],
+    flow: [],
+    intercept: true,
+    modify: {},
+    observe: true,
+  },
+  taskChangeAfter: {
+    controls: [],
+    delivery: [],
+    elicitation: [],
+    flow: [],
+    intercept: false,
+    modify: {},
+    observe: true,
+  },
+  taskChangeBefore: {
+    controls: ["deny", "message"],
+    delivery: [],
+    elicitation: ["form", "url"],
+    flow: [],
+    intercept: true,
+    modify: {},
+    observe: true,
+  },
+  toolAfter: {
+    controls: ["message"],
+    delivery: ["next_turn", "now"],
+    elicitation: ["form", "url"],
+    flow: ["continue", "stop"],
+    intercept: true,
+    modify: { modifyOutput: ["merge", "replace", "replace-and-merge"] },
+    observe: true,
+  },
+  toolBatchAfter: {
+    controls: ["message"],
+    delivery: ["next_turn", "now"],
+    elicitation: ["form", "url"],
+    flow: ["stop"],
+    intercept: true,
+    modify: {},
+    observe: true,
+  },
+  toolBefore: {
+    controls: ["allow", "ask", "deny", "message", "returnResult"],
+    delivery: ["next_turn", "now"],
+    elicitation: ["form", "url"],
+    flow: ["stop"],
+    intercept: true,
+    modify: { modifyInput: ["merge", "replace", "replace-and-merge"] },
+    observe: true,
+  },
+  toolPermissionRequest: {
+    controls: ["allow", "deny", "message"],
+    delivery: [],
+    elicitation: ["form", "url"],
+    flow: ["stop"],
+    intercept: true,
+    modify: { modifyInput: ["merge", "replace", "replace-and-merge"] },
+    observe: true,
+  },
+  toolPermissionResolved: {
+    controls: [],
+    delivery: [],
+    elicitation: [],
+    flow: [],
+    intercept: false,
+    modify: {},
+    observe: true,
+  },
+  toolProgress: {
+    controls: [],
+    delivery: [],
+    elicitation: [],
+    flow: [],
+    intercept: false,
+    modify: {},
+    observe: true,
+  },
+  turnEnd: {
+    controls: [],
+    delivery: [],
+    elicitation: [],
+    flow: [],
+    intercept: false,
+    modify: {},
+    observe: true,
+  },
+  turnFinishBefore: {
+    controls: ["message"],
+    delivery: [],
+    elicitation: ["form", "url"],
+    flow: ["continue", "stop"],
+    intercept: true,
+    modify: { modifyResponse: ["merge", "replace", "replace-and-merge"] },
+    observe: true,
+  },
+  turnProgress: {
+    controls: [],
+    delivery: [],
+    elicitation: [],
+    flow: [],
+    intercept: false,
+    modify: {},
+    observe: true,
+  },
+  turnStart: {
+    controls: ["deny", "message"],
+    delivery: ["next_turn", "now"],
+    elicitation: ["form", "url"],
+    flow: ["stop"],
+    intercept: true,
+    modify: { modifyPrompt: ["merge", "replace", "replace-and-merge"] },
+    observe: true,
+  },
+  userAttention: {
+    controls: [],
+    delivery: [],
+    elicitation: [],
+    flow: [],
+    intercept: false,
+    modify: {},
+    observe: true,
+  },
+  userElicitationRequest: {
+    controls: ["deny", "message", "returnResult"],
+    delivery: [],
+    elicitation: ["form", "url"],
+    flow: [],
+    intercept: true,
+    modify: {},
+    observe: true,
+  },
+  userElicitationResult: {
+    controls: ["message"],
+    delivery: [],
+    elicitation: ["form", "url"],
+    flow: [],
+    intercept: true,
+    modify: { modifyContent: ["merge", "replace", "replace-and-merge"] },
+    observe: true,
+  },
+  userMessageInbound: {
+    controls: ["deny", "message"],
+    delivery: [],
+    elicitation: ["form", "url"],
+    flow: [],
+    intercept: true,
+    modify: { modifyPrompt: ["merge", "replace", "replace-and-merge"] },
+    observe: true,
+  },
+  userMessageOutbound: {
+    controls: ["deny", "message"],
+    delivery: [],
+    elicitation: ["form", "url"],
+    flow: [],
+    intercept: true,
+    modify: { modifyContent: ["merge", "replace", "replace-and-merge"] },
+    observe: true,
+  },
+  workspaceChangeAfter: {
+    controls: [],
+    delivery: [],
+    elicitation: [],
+    flow: [],
+    intercept: false,
+    modify: {},
+    observe: true,
+  },
+  workspaceChangeBefore: {
+    controls: ["deny", "message"],
+    delivery: [],
+    elicitation: ["form", "url"],
+    flow: [],
+    intercept: true,
+    modify: { modifyWorkspace: ["merge", "replace", "replace-and-merge"] },
+    observe: true,
+  },
+};
+export function hostCapabilitiesToWire(
+  host: HostCapabilities,
+): Readonly<Partial<Record<EventType, WireDeclaration>>> {
+  host = capabilityOwnedHost(host);
+  const result: Partial<Record<EventType, WireDeclaration>> = {};
+  {
+    const declaration = host.configChangeAfter;
+    if (declaration !== undefined) {
+      result["config.change.after"] = { modes: ["observe"] };
+    }
+  }
+  {
+    const declaration = host.configChangeBefore;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.deny === true) effects.push("deny");
+        if (grants.message === true) effects.push("message");
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["config.change.before"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["config.change.before"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.contextCompactAfter;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.message === true) effects.push("message");
+        const modify: {
+          -readonly [K in keyof NonNullable<
+            WireCapabilities["modify"]
+          >]: NonNullable<WireCapabilities["modify"]>[K];
+        } = {};
+        if (grants.modifySummary !== undefined)
+          modify.summary = capabilityModifyToWire(grants.modifySummary);
+        if (Object.keys(modify).length !== 0) {
+          effects.push("modify");
+          capabilities.modify = modify;
+        }
+        if (grants.inject !== undefined) {
+          effects.push("inject");
+          capabilities.inject = {
+            context: {
+              append: true,
+              deliverAt: [
+                ...new Set(grants.inject.context.deliverAt),
+              ] as unknown as CapabilityNonempty<CapabilityDelivery>,
+            },
+          };
+        }
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["context.compact.after"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["context.compact.after"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.contextCompactBefore;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.deny === true) effects.push("deny");
+        if (grants.message === true) effects.push("message");
+        if (grants.returnResult === true) effects.push("return");
+        const modify: {
+          -readonly [K in keyof NonNullable<
+            WireCapabilities["modify"]
+          >]: NonNullable<WireCapabilities["modify"]>[K];
+        } = {};
+        if (grants.modifyInstructions !== undefined)
+          modify.instructions = capabilityModifyToWire(
+            grants.modifyInstructions,
+          );
+        if (Object.keys(modify).length !== 0) {
+          effects.push("modify");
+          capabilities.modify = modify;
+        }
+        if (grants.inject !== undefined) {
+          effects.push("inject");
+          capabilities.inject = {
+            context: {
+              append: true,
+              deliverAt: [
+                ...new Set(grants.inject.context.deliverAt),
+              ] as unknown as CapabilityNonempty<CapabilityDelivery>,
+            },
+          };
+        }
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["context.compact.before"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["context.compact.before"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.fileChanged;
+    if (declaration !== undefined) {
+      result["file.changed"] = { modes: ["observe"] };
+    }
+  }
+  {
+    const declaration = host.hookFailure;
+    if (declaration !== undefined) {
+      result["hook.failure"] = { modes: ["observe"] };
+    }
+  }
+  {
+    const declaration = host.modelError;
+    if (declaration !== undefined) {
+      result["model.error"] = { modes: ["observe"] };
+    }
+  }
+  {
+    const declaration = host.modelRequestBefore;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.deny === true) effects.push("deny");
+        if (grants.message === true) effects.push("message");
+        if (grants.returnResult === true) effects.push("return");
+        const modify: {
+          -readonly [K in keyof NonNullable<
+            WireCapabilities["modify"]
+          >]: NonNullable<WireCapabilities["modify"]>[K];
+        } = {};
+        if (grants.modifyRequest !== undefined)
+          modify.request = capabilityModifyToWire(grants.modifyRequest);
+        if (Object.keys(modify).length !== 0) {
+          effects.push("modify");
+          capabilities.modify = modify;
+        }
+        if (grants.flow !== undefined) {
+          effects.push("flow");
+          capabilities.flow = {
+            ...grants.flow,
+            operations: [
+              ...new Set(grants.flow.operations),
+            ] as unknown as CapabilityFlow["operations"],
+          } as CapabilityFlow;
+        }
+        if (grants.inject !== undefined) {
+          effects.push("inject");
+          capabilities.inject = {
+            context: {
+              append: true,
+              deliverAt: [
+                ...new Set(grants.inject.context.deliverAt),
+              ] as unknown as CapabilityNonempty<CapabilityDelivery>,
+            },
+          };
+        }
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["model.request.before"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["model.request.before"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.modelResponseAfter;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.message === true) effects.push("message");
+        const modify: {
+          -readonly [K in keyof NonNullable<
+            WireCapabilities["modify"]
+          >]: NonNullable<WireCapabilities["modify"]>[K];
+        } = {};
+        if (grants.modifyResponse !== undefined)
+          modify.response = capabilityModifyToWire(grants.modifyResponse);
+        if (Object.keys(modify).length !== 0) {
+          effects.push("modify");
+          capabilities.modify = modify;
+        }
+        if (grants.flow !== undefined) {
+          effects.push("flow");
+          capabilities.flow = {
+            ...grants.flow,
+            operations: [
+              ...new Set(grants.flow.operations),
+            ] as unknown as CapabilityFlow["operations"],
+          } as CapabilityFlow;
+        }
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["model.response.after"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["model.response.after"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.modelSwitchAfter;
+    if (declaration !== undefined) {
+      result["model.switch.after"] = { modes: ["observe"] };
+    }
+  }
+  {
+    const declaration = host.modelSwitchBefore;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.deny === true) effects.push("deny");
+        if (grants.message === true) effects.push("message");
+        if (grants.flow !== undefined) {
+          effects.push("flow");
+          capabilities.flow = {
+            ...grants.flow,
+            operations: [
+              ...new Set(grants.flow.operations),
+            ] as unknown as CapabilityFlow["operations"],
+          } as CapabilityFlow;
+        }
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["model.switch.before"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["model.switch.before"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.sessionEnd;
+    if (declaration !== undefined) {
+      result["session.end"] = { modes: ["observe"] };
+    }
+  }
+  {
+    const declaration = host.sessionStart;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.message === true) effects.push("message");
+        if (grants.inject !== undefined) {
+          effects.push("inject");
+          capabilities.inject = {
+            context: {
+              append: true,
+              deliverAt: [
+                ...new Set(grants.inject.context.deliverAt),
+              ] as unknown as CapabilityNonempty<CapabilityDelivery>,
+            },
+          };
+        }
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["session.start"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["session.start"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.taskChangeAfter;
+    if (declaration !== undefined) {
+      result["task.change.after"] = { modes: ["observe"] };
+    }
+  }
+  {
+    const declaration = host.taskChangeBefore;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.deny === true) effects.push("deny");
+        if (grants.message === true) effects.push("message");
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["task.change.before"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["task.change.before"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.toolAfter;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.message === true) effects.push("message");
+        const modify: {
+          -readonly [K in keyof NonNullable<
+            WireCapabilities["modify"]
+          >]: NonNullable<WireCapabilities["modify"]>[K];
+        } = {};
+        if (grants.modifyOutput !== undefined)
+          modify.output = capabilityModifyToWire(grants.modifyOutput);
+        if (Object.keys(modify).length !== 0) {
+          effects.push("modify");
+          capabilities.modify = modify;
+        }
+        if (grants.flow !== undefined) {
+          effects.push("flow");
+          capabilities.flow = {
+            ...grants.flow,
+            operations: [
+              ...new Set(grants.flow.operations),
+            ] as unknown as CapabilityFlow["operations"],
+          } as CapabilityFlow;
+        }
+        if (grants.inject !== undefined) {
+          effects.push("inject");
+          capabilities.inject = {
+            context: {
+              append: true,
+              deliverAt: [
+                ...new Set(grants.inject.context.deliverAt),
+              ] as unknown as CapabilityNonempty<CapabilityDelivery>,
+            },
+          };
+        }
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["tool.after"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["tool.after"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.toolBatchAfter;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.message === true) effects.push("message");
+        if (grants.flow !== undefined) {
+          effects.push("flow");
+          capabilities.flow = {
+            ...grants.flow,
+            operations: [
+              ...new Set(grants.flow.operations),
+            ] as unknown as CapabilityFlow["operations"],
+          } as CapabilityFlow;
+        }
+        if (grants.inject !== undefined) {
+          effects.push("inject");
+          capabilities.inject = {
+            context: {
+              append: true,
+              deliverAt: [
+                ...new Set(grants.inject.context.deliverAt),
+              ] as unknown as CapabilityNonempty<CapabilityDelivery>,
+            },
+          };
+        }
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["tool.batch.after"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["tool.batch.after"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.toolBefore;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.allow === true) effects.push("allow");
+        if (grants.ask === true) effects.push("ask");
+        if (grants.deny === true) effects.push("deny");
+        if (grants.message === true) effects.push("message");
+        if (grants.returnResult === true) effects.push("return");
+        const modify: {
+          -readonly [K in keyof NonNullable<
+            WireCapabilities["modify"]
+          >]: NonNullable<WireCapabilities["modify"]>[K];
+        } = {};
+        if (grants.modifyInput !== undefined)
+          modify.input = capabilityModifyToWire(grants.modifyInput);
+        if (Object.keys(modify).length !== 0) {
+          effects.push("modify");
+          capabilities.modify = modify;
+        }
+        if (grants.flow !== undefined) {
+          effects.push("flow");
+          capabilities.flow = {
+            ...grants.flow,
+            operations: [
+              ...new Set(grants.flow.operations),
+            ] as unknown as CapabilityFlow["operations"],
+          } as CapabilityFlow;
+        }
+        if (grants.inject !== undefined) {
+          effects.push("inject");
+          capabilities.inject = {
+            context: {
+              append: true,
+              deliverAt: [
+                ...new Set(grants.inject.context.deliverAt),
+              ] as unknown as CapabilityNonempty<CapabilityDelivery>,
+            },
+          };
+        }
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["tool.before"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["tool.before"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.toolPermissionRequest;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.allow === true) effects.push("allow");
+        if (grants.deny === true) effects.push("deny");
+        if (grants.message === true) effects.push("message");
+        const modify: {
+          -readonly [K in keyof NonNullable<
+            WireCapabilities["modify"]
+          >]: NonNullable<WireCapabilities["modify"]>[K];
+        } = {};
+        if (grants.modifyInput !== undefined)
+          modify.input = capabilityModifyToWire(grants.modifyInput);
+        if (Object.keys(modify).length !== 0) {
+          effects.push("modify");
+          capabilities.modify = modify;
+        }
+        if (grants.flow !== undefined) {
+          effects.push("flow");
+          capabilities.flow = {
+            ...grants.flow,
+            operations: [
+              ...new Set(grants.flow.operations),
+            ] as unknown as CapabilityFlow["operations"],
+          } as CapabilityFlow;
+        }
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["tool.permission.request"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["tool.permission.request"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.toolPermissionResolved;
+    if (declaration !== undefined) {
+      result["tool.permission.resolved"] = { modes: ["observe"] };
+    }
+  }
+  {
+    const declaration = host.toolProgress;
+    if (declaration !== undefined) {
+      result["tool.progress"] = { modes: ["observe"] };
+    }
+  }
+  {
+    const declaration = host.turnEnd;
+    if (declaration !== undefined) {
+      result["turn.end"] = { modes: ["observe"] };
+    }
+  }
+  {
+    const declaration = host.turnFinishBefore;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.message === true) effects.push("message");
+        const modify: {
+          -readonly [K in keyof NonNullable<
+            WireCapabilities["modify"]
+          >]: NonNullable<WireCapabilities["modify"]>[K];
+        } = {};
+        if (grants.modifyResponse !== undefined)
+          modify.response = capabilityModifyToWire(grants.modifyResponse);
+        if (Object.keys(modify).length !== 0) {
+          effects.push("modify");
+          capabilities.modify = modify;
+        }
+        if (grants.flow !== undefined) {
+          effects.push("flow");
+          capabilities.flow = {
+            ...grants.flow,
+            operations: [
+              ...new Set(grants.flow.operations),
+            ] as unknown as CapabilityFlow["operations"],
+          } as CapabilityFlow;
+        }
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["turn.finish.before"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["turn.finish.before"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.turnProgress;
+    if (declaration !== undefined) {
+      result["turn.progress"] = { modes: ["observe"] };
+    }
+  }
+  {
+    const declaration = host.turnStart;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.deny === true) effects.push("deny");
+        if (grants.message === true) effects.push("message");
+        const modify: {
+          -readonly [K in keyof NonNullable<
+            WireCapabilities["modify"]
+          >]: NonNullable<WireCapabilities["modify"]>[K];
+        } = {};
+        if (grants.modifyPrompt !== undefined)
+          modify.prompt = capabilityModifyToWire(grants.modifyPrompt);
+        if (Object.keys(modify).length !== 0) {
+          effects.push("modify");
+          capabilities.modify = modify;
+        }
+        if (grants.flow !== undefined) {
+          effects.push("flow");
+          capabilities.flow = {
+            ...grants.flow,
+            operations: [
+              ...new Set(grants.flow.operations),
+            ] as unknown as CapabilityFlow["operations"],
+          } as CapabilityFlow;
+        }
+        if (grants.inject !== undefined) {
+          effects.push("inject");
+          capabilities.inject = {
+            context: {
+              append: true,
+              deliverAt: [
+                ...new Set(grants.inject.context.deliverAt),
+              ] as unknown as CapabilityNonempty<CapabilityDelivery>,
+            },
+          };
+        }
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["turn.start"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["turn.start"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.userAttention;
+    if (declaration !== undefined) {
+      result["user.attention"] = { modes: ["observe"] };
+    }
+  }
+  {
+    const declaration = host.userElicitationRequest;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.deny === true) effects.push("deny");
+        if (grants.message === true) effects.push("message");
+        if (grants.returnResult === true) effects.push("return");
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["user.elicitation.request"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["user.elicitation.request"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.userElicitationResult;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.message === true) effects.push("message");
+        const modify: {
+          -readonly [K in keyof NonNullable<
+            WireCapabilities["modify"]
+          >]: NonNullable<WireCapabilities["modify"]>[K];
+        } = {};
+        if (grants.modifyContent !== undefined)
+          modify.content = capabilityModifyToWire(grants.modifyContent);
+        if (Object.keys(modify).length !== 0) {
+          effects.push("modify");
+          capabilities.modify = modify;
+        }
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["user.elicitation.result"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["user.elicitation.result"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.userMessageInbound;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.deny === true) effects.push("deny");
+        if (grants.message === true) effects.push("message");
+        const modify: {
+          -readonly [K in keyof NonNullable<
+            WireCapabilities["modify"]
+          >]: NonNullable<WireCapabilities["modify"]>[K];
+        } = {};
+        if (grants.modifyPrompt !== undefined)
+          modify.prompt = capabilityModifyToWire(grants.modifyPrompt);
+        if (Object.keys(modify).length !== 0) {
+          effects.push("modify");
+          capabilities.modify = modify;
+        }
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["user.message.inbound"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["user.message.inbound"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.userMessageOutbound;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.deny === true) effects.push("deny");
+        if (grants.message === true) effects.push("message");
+        const modify: {
+          -readonly [K in keyof NonNullable<
+            WireCapabilities["modify"]
+          >]: NonNullable<WireCapabilities["modify"]>[K];
+        } = {};
+        if (grants.modifyContent !== undefined)
+          modify.content = capabilityModifyToWire(grants.modifyContent);
+        if (Object.keys(modify).length !== 0) {
+          effects.push("modify");
+          capabilities.modify = modify;
+        }
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["user.message.outbound"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["user.message.outbound"] = { modes: ["observe"] };
+      }
+    }
+  }
+  {
+    const declaration = host.workspaceChangeAfter;
+    if (declaration !== undefined) {
+      result["workspace.change.after"] = { modes: ["observe"] };
+    }
+  }
+  {
+    const declaration = host.workspaceChangeBefore;
+    if (declaration !== undefined) {
+      if (declaration.intercept !== undefined) {
+        const grants = declaration.intercept;
+        const effects: string[] = [];
+        const capabilities: {
+          -readonly [K in keyof WireCapabilities]: WireCapabilities[K];
+        } = { effects };
+        if (grants.deny === true) effects.push("deny");
+        if (grants.message === true) effects.push("message");
+        const modify: {
+          -readonly [K in keyof NonNullable<
+            WireCapabilities["modify"]
+          >]: NonNullable<WireCapabilities["modify"]>[K];
+        } = {};
+        if (grants.modifyWorkspace !== undefined)
+          modify.workspace = capabilityModifyToWire(grants.modifyWorkspace);
+        if (Object.keys(modify).length !== 0) {
+          effects.push("modify");
+          capabilities.modify = modify;
+        }
+        if (grants.elicitation !== undefined) {
+          capabilities.elicitation = {
+            ...(grants.elicitation.form === true ? { form: {} } : {}),
+            ...(grants.elicitation.url === true ? { url: {} } : {}),
+          };
+        }
+        result["workspace.change.before"] = {
+          modes:
+            declaration.observe === true
+              ? ["intercept", "observe"]
+              : ["intercept"],
+          capabilities,
+        };
+      } else {
+        result["workspace.change.before"] = { modes: ["observe"] };
+      }
+    }
   }
   return result;
 }
-export type CapabilityModifyOperations = { merge?: boolean; replace?: boolean };
-export type CapabilityFlowOperation = "continue" | "stop";
-export type CapabilityDelivery = "next_turn" | "now";
-
-export class CapabilityBuilder {
-  readonly #value: Capabilities;
-  private constructor(value: Capabilities) {
-    this.#value = value;
-    Object.freeze(this);
-  }
-  static intercept(): CapabilityBuilder {
-    return new CapabilityBuilder({ effects: [] });
-  }
-  private add(effect?: string, grant: object = {}): CapabilityBuilder {
-    return new CapabilityBuilder(
-      capabilityMerge(this.#value, {
-        ...grant,
-        effects: effect ? [effect] : [],
-      }),
-    );
-  }
-  build(): CapabilityDeclaration {
-    if (
-      this.#value.effects.length === 0 &&
-      !Object.keys((this.#value as any).elicitation ?? {}).length
-    )
-      throw new TypeError("empty interception declaration");
-    return {
-      modes: ["intercept", "observe"],
-      capabilities: JSON.parse(JSON.stringify(this.#value)),
-    };
-  }
-  get modes(): ("intercept" | "observe")[] {
-    return ["intercept", "observe"];
-  }
-  get capabilities(): Capabilities {
-    return this.build().capabilities;
-  }
-  toJSON(): CapabilityDeclaration {
-    return this.build();
-  }
-  allow(): CapabilityBuilder {
-    return this.add("allow");
-  }
-  ask(): CapabilityBuilder {
-    return this.add("ask");
-  }
-  deny(): CapabilityBuilder {
-    return this.add("deny");
-  }
-  message(): CapabilityBuilder {
-    return this.add("message");
-  }
-  return(): CapabilityBuilder {
-    return this.add("return");
-  }
-  modifyContent(operations: CapabilityModifyOperations): CapabilityBuilder {
-    const allowed = ["merge", "replace"] as readonly string[];
-    if (
-      operations === null ||
-      typeof operations !== "object" ||
-      Object.entries(operations).some(
-        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
-      ) ||
-      !Object.values(operations).some((v) => v === true)
-    )
-      throw new TypeError("nonempty modify operations required");
-    const grant = Object.fromEntries(
-      allowed.map((k) => [
-        k,
-        (operations as Record<string, boolean>)[k] === true,
-      ]),
-    );
-    return this.add("modify", { modify: { content: grant } });
-  }
-  modifyInput(operations: CapabilityModifyOperations): CapabilityBuilder {
-    const allowed = ["merge", "replace"] as readonly string[];
-    if (
-      operations === null ||
-      typeof operations !== "object" ||
-      Object.entries(operations).some(
-        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
-      ) ||
-      !Object.values(operations).some((v) => v === true)
-    )
-      throw new TypeError("nonempty modify operations required");
-    const grant = Object.fromEntries(
-      allowed.map((k) => [
-        k,
-        (operations as Record<string, boolean>)[k] === true,
-      ]),
-    );
-    return this.add("modify", { modify: { input: grant } });
-  }
-  modifyInstructions(
-    operations: CapabilityModifyOperations,
-  ): CapabilityBuilder {
-    const allowed = ["merge", "replace"] as readonly string[];
-    if (
-      operations === null ||
-      typeof operations !== "object" ||
-      Object.entries(operations).some(
-        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
-      ) ||
-      !Object.values(operations).some((v) => v === true)
-    )
-      throw new TypeError("nonempty modify operations required");
-    const grant = Object.fromEntries(
-      allowed.map((k) => [
-        k,
-        (operations as Record<string, boolean>)[k] === true,
-      ]),
-    );
-    return this.add("modify", { modify: { instructions: grant } });
-  }
-  modifyOutput(operations: CapabilityModifyOperations): CapabilityBuilder {
-    const allowed = ["merge", "replace"] as readonly string[];
-    if (
-      operations === null ||
-      typeof operations !== "object" ||
-      Object.entries(operations).some(
-        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
-      ) ||
-      !Object.values(operations).some((v) => v === true)
-    )
-      throw new TypeError("nonempty modify operations required");
-    const grant = Object.fromEntries(
-      allowed.map((k) => [
-        k,
-        (operations as Record<string, boolean>)[k] === true,
-      ]),
-    );
-    return this.add("modify", { modify: { output: grant } });
-  }
-  modifyPrompt(operations: CapabilityModifyOperations): CapabilityBuilder {
-    const allowed = ["merge", "replace"] as readonly string[];
-    if (
-      operations === null ||
-      typeof operations !== "object" ||
-      Object.entries(operations).some(
-        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
-      ) ||
-      !Object.values(operations).some((v) => v === true)
-    )
-      throw new TypeError("nonempty modify operations required");
-    const grant = Object.fromEntries(
-      allowed.map((k) => [
-        k,
-        (operations as Record<string, boolean>)[k] === true,
-      ]),
-    );
-    return this.add("modify", { modify: { prompt: grant } });
-  }
-  modifyRequest(operations: CapabilityModifyOperations): CapabilityBuilder {
-    const allowed = ["merge", "replace"] as readonly string[];
-    if (
-      operations === null ||
-      typeof operations !== "object" ||
-      Object.entries(operations).some(
-        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
-      ) ||
-      !Object.values(operations).some((v) => v === true)
-    )
-      throw new TypeError("nonempty modify operations required");
-    const grant = Object.fromEntries(
-      allowed.map((k) => [
-        k,
-        (operations as Record<string, boolean>)[k] === true,
-      ]),
-    );
-    return this.add("modify", { modify: { request: grant } });
-  }
-  modifyResponse(operations: CapabilityModifyOperations): CapabilityBuilder {
-    const allowed = ["merge", "replace"] as readonly string[];
-    if (
-      operations === null ||
-      typeof operations !== "object" ||
-      Object.entries(operations).some(
-        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
-      ) ||
-      !Object.values(operations).some((v) => v === true)
-    )
-      throw new TypeError("nonempty modify operations required");
-    const grant = Object.fromEntries(
-      allowed.map((k) => [
-        k,
-        (operations as Record<string, boolean>)[k] === true,
-      ]),
-    );
-    return this.add("modify", { modify: { response: grant } });
-  }
-  modifySummary(operations: CapabilityModifyOperations): CapabilityBuilder {
-    const allowed = ["merge", "replace"] as readonly string[];
-    if (
-      operations === null ||
-      typeof operations !== "object" ||
-      Object.entries(operations).some(
-        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
-      ) ||
-      !Object.values(operations).some((v) => v === true)
-    )
-      throw new TypeError("nonempty modify operations required");
-    const grant = Object.fromEntries(
-      allowed.map((k) => [
-        k,
-        (operations as Record<string, boolean>)[k] === true,
-      ]),
-    );
-    return this.add("modify", { modify: { summary: grant } });
-  }
-  modifyWorkspace(operations: CapabilityModifyOperations): CapabilityBuilder {
-    const allowed = ["merge", "replace"] as readonly string[];
-    if (
-      operations === null ||
-      typeof operations !== "object" ||
-      Object.entries(operations).some(
-        ([k, v]) => !allowed.includes(k) || typeof v !== "boolean",
-      ) ||
-      !Object.values(operations).some((v) => v === true)
-    )
-      throw new TypeError("nonempty modify operations required");
-    const grant = Object.fromEntries(
-      allowed.map((k) => [
-        k,
-        (operations as Record<string, boolean>)[k] === true,
-      ]),
-    );
-    return this.add("modify", { modify: { workspace: grant } });
-  }
-  elicitationForm(): CapabilityBuilder {
-    return this.add(undefined, { elicitation: { form: {} } });
-  }
-  elicitationUrl(): CapabilityBuilder {
-    return this.add(undefined, { elicitation: { url: {} } });
-  }
-  flow(
-    operations: readonly CapabilityFlowOperation[],
-    counts: {
-      remainingContinuations?: number;
-      continuationCount?: number;
-      maxContinuations?: number;
-    } = {},
-  ): CapabilityBuilder {
-    capabilityNonempty(operations, ["continue", "stop"]);
-    if (
-      Object.entries(counts).some(
-        ([k, v]) =>
-          ![
-            "remainingContinuations",
-            "continuationCount",
-            "maxContinuations",
-          ].includes(k) ||
-          !Number.isSafeInteger(v) ||
-          v! < 0,
-      )
-    )
-      throw new TypeError("invalid continuation count");
-    if (
-      operations.includes("continue") &&
-      (counts.remainingContinuations === undefined ||
-        counts.continuationCount === undefined)
-    )
-      throw new TypeError("continue requires counts");
-    return this.add("flow", {
-      flow: { operations: [...new Set(operations)], ...counts },
-    });
-  }
-  injectContext(deliverAt: readonly CapabilityDelivery[]): CapabilityBuilder {
-    capabilityNonempty(deliverAt, ["next_turn", "now"]);
-    return this.add("inject", {
-      inject: { context: { append: true, deliverAt: [...new Set(deliverAt)] } },
-    });
-  }
-}
-/** intercept includes observe; declarations do not prove host execution. */
-export const capabilities = Object.freeze({
-  intercept: () => CapabilityBuilder.intercept(),
-  observe: (): CapabilityObservation => ({ modes: ["observe"] }),
-});

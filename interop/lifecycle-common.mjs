@@ -1,8 +1,8 @@
 // @ts-check
+import { fixtureHostCapabilities } from "./common.mjs";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { isDeepStrictEqual } from "node:util";
-import { canonicalFixtureInjections } from "./common.mjs";
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
@@ -49,12 +49,16 @@ export async function control(endpoint, path, value) {
 /** Build the public consumer boundary with checked registration and options.
  * @param {{transport: import("agenthooksprotocol/client").Registration["hooks"][number]["transport"],
  * source: string, event: import("agenthooksprotocol/client").EventType,
- * mode: "intercept" | "observe", capabilities?: import("agenthooksprotocol/client").Capabilities,
+ * mode: "intercept" | "observe",
  * content?: import("agenthooksprotocol/client").ContentSelection,
  * bodySelected: boolean, upload?: import("agenthooksprotocol/client").ContentUpload,
  * auth: import("agenthooksprotocol/client").AuthProvider, fetch?: typeof globalThis.fetch}} options
  */
 export function lifecycleHooks(options) {
+  const eventName = Object.entries(draft.events).find(
+    ([, event]) => event === options.event,
+  )?.[0];
+  if (!eventName) throw Error(`Unsupported fixture event: ${options.event}`);
   return new Hooks(
     {
       protocolVersion: "draft",
@@ -69,7 +73,9 @@ export function lifecycleHooks(options) {
               ...(options.mode === "intercept"
                 ? { timeoutMs: 15000, failurePolicy: "fail-open" }
                 : {}),
-              content: options.content ?? { default: options.bodySelected ? "body" : "metadata" },
+              content: options.content ?? {
+                default: options.bodySelected ? "body" : "metadata",
+              },
               ...(options.upload ? { upload: options.upload } : {}),
             },
           ],
@@ -78,12 +84,10 @@ export function lifecycleHooks(options) {
     },
     {
       source: options.source,
-      capabilities: {
-        [options.event]: {
-          modes: [options.mode],
-          ...(options.capabilities ? { capabilities: options.capabilities } : {}),
-        },
-      },
+      capabilities:
+        options.mode === "intercept"
+          ? { toolBefore: fixtureHostCapabilities.toolBefore }
+          : { [eventName]: { observe: true } },
       auth: options.auth,
       ...(options.fetch ? { fetch: options.fetch } : {}),
     },
@@ -93,38 +97,15 @@ export function lifecycleHooks(options) {
  * @param {{type: import("agenthooksprotocol/client").EventType, source: string} & import("agenthooksprotocol/client").BoundaryInput<import("agenthooksprotocol/client").EventType>} event
  * @param {import("agenthooksprotocol/client").BoundaryOptions["initialState"]} [state]
  * @param {AbortSignal} [signal]
+ * @param {import("agenthooksprotocol/client").Capabilities} [capabilities]
  */
-export function dispatchLifecycle(client, event, state, signal) {
+export function dispatchLifecycle(client, event, state, signal, capabilities) {
   const { type, source, ...input } = event;
   return client.dispatch(type, input, {
     ...(state === undefined ? {} : { initialState: state }),
     ...(signal ? { signal } : {}),
+    ...(capabilities === undefined ? {} : { capabilities }),
   });
-}
-
-/** Adapt pinned lifecycle producer fixtures, leaving malformed wire probes intact. */
-export function canonicalLifecycleFixture(row) {
-  for (const [key, response] of Object.entries(row.responses ?? {})) {
-    canonicalFixtureInjections({ id: `${row.id}:${key}`, response });
-    for (const response of row.responseSequences?.[key] ?? [])
-      canonicalFixtureInjections({ id: `${row.id}:${key}`, response });
-  }
-  const migrateItems = (items) => {
-    for (const item of items ?? []) {
-      // These fixtures exercise immutable uploaded bytes, not inline text.
-      if (["text", "reasoning", "skill", "native"].includes(item.kind) &&
-          (typeof item.body?.ref === "string" || item.gap)) {
-        if (item.kind !== "text") item.category ??= item.kind;
-        item.kind = "attachment";
-        if (item.mediaType === "text/plain") item.mediaType = "application/octet-stream";
-      }
-    }
-  };
-  for (const request of Object.values(row.requests ?? {}))
-    migrateItems(request.params?.event?.items);
-  for (const step of row.steps ?? [])
-    if (step.bypassSDK !== true) migrateItems(step.items);
-  return row;
 }
 
 /** Lifecycle/catalogue rows contain request maps and controller steps, unlike core rows.
@@ -140,7 +121,7 @@ export async function lifecycleScenarios(path) {
     )
   )
     throw Error("Invalid lifecycle scenario file");
-  return value.scenarios.map(canonicalLifecycleFixture);
+  return value.scenarios;
 }
 
 /** Compatibility network binding: route SDK-produced messages without constructing

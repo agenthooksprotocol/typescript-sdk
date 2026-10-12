@@ -1,10 +1,10 @@
+import { responseForRequest } from "./draft/raw.js";
 import { parseJson } from "./json.js";
 /** MCP 2025-11-25 inline-text binding. Identity comes from authentication,
  * never event.source or elicitation.server. */
 export function validateElicitationExchange(
   request: any,
   result: any,
-  resolve: (reference: any) => Uint8Array,
   validate: (schema: string, value: unknown) => void,
   principal: string,
   effect?: { type: string; target?: string; operation?: string },
@@ -23,8 +23,8 @@ export function validateElicitationExchange(
   validateElicitationCorrelation(request, result);
   const req = request.params.event.elicitation,
     res = result.params.event.elicitation;
-  const payload = readSelectedElicitation(req, "request", resolve, validate);
-  const answer = readSelectedElicitation(res, "result", resolve, validate);
+  const payload = readSelectedElicitation(req, "request", validate);
+  const answer = readSelectedElicitation(res, "result", validate);
   if (req.mode !== res.mode || req.server !== res.server)
     throw Error("Normalized metadata mismatch");
   if (payload === null || answer === null) {
@@ -55,9 +55,14 @@ export function validateElicitationExchange(
     authenticatedSource: principal,
   };
   if (effect !== undefined) {
-    validate("effect", effect);
     const kind = effect.type,
       boundary = kind === "modify" ? result : request;
+    const admitted = responseForRequest(boundary.params.event.type, {
+      jsonrpc: "2.0", id: boundary.id,
+      result: { protocolVersion: "draft", effects: [effect] },
+    });
+    if (!admitted.ok) throw Error("Invalid contextual elicitation effect");
+    validate("effect", effect);
     if (
       !["return", "deny", "modify"].includes(kind) ||
       !boundary.params.capabilities.effects.includes(kind)
@@ -127,90 +132,10 @@ export function validateElicitationMode(
   return caps;
 }
 
-/** Stage the complete effect list on a snapshot; publish only after validation.
- * The caller uploads the resulting complete JSON before emitting a result event. */
-export function applyElicitationEffects(
-  request: any,
-  result: any | null,
-  resolve: (reference: any) => Uint8Array,
-  validate: (schema: string, value: any) => void,
-  principal: string,
-  effects: any[],
-): Record<string, any> {
-  if (!principal || !Array.isArray(effects) || !effects.length)
-    throw Error("Authenticated effects required");
-  validate("intercept-request", request);
-  if (
-    request.id !== request.params.event.id ||
-    request.params.event.type !== "user.elicitation.request"
-  )
-    throw Error("Invalid request boundary");
-  if (result !== null) validateElicitationCorrelation(request, result);
-  const meta = request.params.event.elicitation;
-  const payload = readSelectedElicitation(meta, "request", resolve, validate);
-  if (payload === null) throw Error("Effects require selected request body");
-  if (meta.mode !== (payload.mode ?? "form")) throw Error("Mode mismatch");
-  const boundary = result ?? request,
-    caps = boundary.params.capabilities,
-    kinds: string[] = [];
-  let staged: any =
-    result === null
-      ? null
-      : validateElicitationExchange(
-          request,
-          result,
-          resolve,
-          validate,
-          principal,
-        ).result;
-  if (result !== null && staged === undefined)
-    throw Error("Effects require selected bodies");
-  for (const effect of effects) {
-    validate("effect", effect);
-    const kind = effect.type;
-    if (
-      !caps.effects.includes(kind) ||
-      !(result === null ? ["return", "deny"] : ["modify"]).includes(kind)
-    )
-      throw Error("Effect not granted at this boundary");
-    if (kind === "return" || kind === "deny") {
-      if (kinds.length) throw Error("Conflicting terminal effects");
-      staged =
-        kind === "return"
-          ? structuredClone(effect.value)
-          : { action: "decline" };
-    } else {
-      if (
-        effect.target !== "content" ||
-        !["replace", "merge"].includes(effect.operation) ||
-        caps.modify?.content?.[effect.operation] !== true
-      )
-        throw Error("Modify target/operation not granted");
-      staged.content =
-        effect.operation === "replace"
-          ? structuredClone(effect.value)
-          : { ...staged.content, ...structuredClone(effect.value) };
-    }
-    kinds.push(kind);
-  }
-  validateElicitationAnswer(payload, staged, validate);
-  return {
-    request: payload,
-    result: staged,
-    provenance: {
-      kind: "hook",
-      authenticatedSource: principal,
-      effects: kinds,
-    },
-    externalCompletion: false,
-  };
-}
-
 /** Metadata and omit never resolve or parse content. Selected gaps fail closed. */
 export function readSelectedElicitation(
   meta: any,
   stage: "request" | "result",
-  resolve: (reference: any) => Uint8Array,
   validate: (schema: string, value: any) => void,
 ): any | null {
   const item = meta[stage];

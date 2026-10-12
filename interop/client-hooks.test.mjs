@@ -5,9 +5,8 @@ import { createRequire } from "node:module";
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
-const { Hooks, auth, ConfigurationError } = await import(
-  require.resolve("agenthooksprotocol/client")
-);
+const { capabilityCount, Hooks, Attachment, auth, ConfigurationError } =
+  await import(require.resolve("agenthooksprotocol/client"));
 
 const { hooks: serverHooks, attachments } = await import(
   require.resolve("agenthooksprotocol/server")
@@ -57,7 +56,26 @@ const config = (url, subscriptions = [sub()], extra = {}) => ({
 const options = (extra) => ({
   source: "urn:test:harness",
   capabilities: {
-    "tool.before": { modes: ["intercept", "observe"], capabilities: caps },
+    toolBefore: {
+      intercept: {
+        deny: true,
+        returnResult: true,
+        allow: true,
+        ask: true,
+        message: true,
+        modifyInput: "replace-and-merge",
+        flow: {
+          operations: ["stop"],
+        },
+        inject: {
+          context: {
+            append: true,
+            deliverAt: ["now", "next_turn"],
+          },
+        },
+      },
+      observe: true,
+    },
   },
   ...extra,
 });
@@ -114,7 +132,22 @@ const reply = async (res, message, effects = []) =>
         headers: { "content-type": "application/json" },
         body: JSON.stringify(message),
       }),
-      () => ({ effects }),
+      {
+        intercept: {
+          toolBefore: () => ({ effects }),
+          userElicitationRequest: () => ({ effects }),
+          userElicitationResult: () => ({ effects }),
+          contextCompactBefore: () => ({ effects }),
+          turnFinishBefore: () => ({ effects }),
+        },
+        observe: {
+          toolBefore: () => {},
+          userElicitationRequest: () => {},
+          userElicitationResult: () => {},
+          contextCompactBefore: () => {},
+          turnFinishBefore: () => {},
+        },
+      },
     ),
   );
 async function uploadReply(req, res, store) {
@@ -171,10 +204,10 @@ test("public Hooks initializes, fans out stable identities, and returns accepted
   try {
     const result = await hooks.dispatch("tool.before", tool());
     assert.deepEqual(result.event.tool.input, { x: 3 });
-    assert.equal(result.errors.length, 0);
+    assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 0);
     assert.deepEqual(
-      result.response.result.effects.map((e) => e.type),
-      ["modify", "modify", "message"],
+      result.effects.map((e) => e.type),
+      ["message"],
     );
     assert.equal(s.messages[0].message.id, s.messages[1].message.id);
     assert.equal(
@@ -218,10 +251,10 @@ test("compound response rejects atomically once, then fail-closed observes uncal
   );
   try {
     const r = await hooks.dispatch("tool.before", tool());
-    assert.equal(r.errors.length, 1);
-    assert.equal(r.errors[0].syntheticDenial, true);
+    assert.equal(r.diagnostics.filter(d => d.phase !== "observation").length, 1);
+    assert.equal(r.diagnostics.filter(d => d.phase !== "observation")[0].syntheticDenial, true);
     assert.deepEqual(r.event.tool.input, { x: 1 });
-    assert.equal(r.response.result.effects[0].type, "deny");
+    assert.equal(r.effects[0].type, "deny");
     await until(() => s.messages.length === 3);
     assert.deepEqual(
       s.messages.map((x) => x.message.method),
@@ -252,9 +285,9 @@ test("dispatch authentication failure honors fail-open without unauthenticated f
   try {
     const r = await hooks.dispatch("tool.before", tool());
     assert.equal(s.messages.length, 0);
-    assert.equal(r.errors.length, 2);
-    assert.equal(r.errors[0].syntheticDenial, false);
-    assert.equal(r.errors[1].syntheticDenial, true);
+    assert.equal(r.diagnostics.filter(d => d.phase !== "observation").length, 2);
+    assert.equal(r.diagnostics.filter(d => d.phase !== "observation")[0].syntheticDenial, false);
+    assert.equal(r.diagnostics.filter(d => d.phase !== "observation")[1].syntheticDenial, true);
     assert.ok(!JSON.stringify(r).includes("secret must"));
   } finally {
     await hooks.close();
@@ -279,7 +312,10 @@ test("top-level authentication override can ignore challenge; retry preserves bo
   );
   try {
     const r = await hooks.dispatch("tool.before", tool());
-    assert.equal(r.errors.length, 0);
+    assert.equal(
+      r.diagnostics.filter((d) => d.phase !== "observation").length,
+      0,
+    );
     assert.equal(calls, 2);
     assert.deepEqual(s.messages[0].message, s.messages[1].message);
     assert.equal(s.messages[1].headers.authorization, "Bearer local-2");
@@ -300,8 +336,8 @@ test("deadline bounds even an authentication override that ignores its signal", 
     const start = Date.now();
     const r = await hooks.dispatch("tool.before", tool());
     assert.ok(Date.now() - start < 1000);
-    assert.equal(r.errors[0].code, "DEADLINE_EXCEEDED");
-    assert.equal(r.response.result.effects[0].type, "deny");
+    assert.equal(r.diagnostics.filter(d => d.phase !== "observation")[0].code, "deadline_exceeded");
+    assert.equal(r.effects[0].type, "deny");
   } finally {
     await hooks.close();
   }
@@ -328,7 +364,7 @@ test("cancellation overrides fail-closed and close cancels pending work", async 
   await hooks.close();
   const result = await work;
   assert.equal(result.interrupted, true);
-  assert.equal(result.errors[0].syntheticDenial, false);
+  assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0].syntheticDenial, false);
   await assert.rejects(hooks.dispatch("tool.before", tool()));
 });
 
@@ -367,19 +403,31 @@ test("metadata observations do not consume bodies and native is opt-in", async (
     config(s.url, [
       { mode: "observe", events: ["tool.*"], content: { default: "metadata" } },
     ]),
-    options({ capabilities: { "tool.before": { modes: ["observe"] } } }),
+    options({
+      capabilities: {
+        toolBefore: {
+          observe: true,
+        },
+      },
+    }),
   );
   try {
     const input = tool();
     input.items = [
-      { id: "item", kind: "attachment", mediaType: "application/octet-stream", body },
+      {
+        id: "item",
+        kind: "attachment",
+        selection: "body",
+        mediaType: "application/octet-stream",
+        body: Attachment.stream(body),
+      },
     ];
     input.native = {
       provider: "test",
       eventName: "native",
       payload: { hidden: true },
     };
-    await hooks.dispatch("tool.before", input);
+    const result = await hooks.dispatch("tool.before", input);
     await until(() => s.messages.length === 1);
     assert.equal(reads, 0);
     assert.equal(s.messages[0].message.params.event.native, undefined);
@@ -387,6 +435,7 @@ test("metadata observations do not consume bodies and native is opt-in", async (
       s.messages[0].message.params.event.items[0].selection,
       "metadata",
     );
+    await result.content.close();
     await until(() => canceled);
   } finally {
     await hooks.close();
@@ -447,10 +496,19 @@ test("uploads consume one raw snapshot, authenticate separately, and finish befo
   try {
     const input = tool();
     input.items = [
-      { id: "same-item", kind: "attachment", mediaType: "application/octet-stream", body },
+      {
+        id: "same-item",
+        kind: "attachment",
+        selection: "body",
+        mediaType: "application/octet-stream",
+        body: Attachment.stream(body),
+      },
     ];
     const r = await hooks.dispatch("tool.before", input);
-    assert.equal(r.errors.length, 0);
+    assert.equal(
+      r.diagnostics.filter((d) => d.phase !== "observation").length,
+      0,
+    );
     assert.equal(reads, 1);
     assert.deepEqual(seen.slice(0, 2).sort(), ["/upload-a", "/upload-b"]);
     assert.deepEqual(seen.slice(2), ["/event", "/event"]);
@@ -480,12 +538,21 @@ test("observation failures are available when the boundary call settles", async 
     config(s.url, [
       { mode: "observe", events: ["tool.*"], content: { default: "metadata" } },
     ]),
-    options({ capabilities: { "tool.before": { modes: ["observe"] } } }),
+    options({
+      capabilities: {
+        toolBefore: {
+          observe: true,
+        },
+      },
+    }),
   );
   try {
     const r = await hooks.dispatch("tool.before", tool());
-    assert.equal(r.errors.length, 0);
-    const errors = await r.observations;
+    assert.equal(
+      r.diagnostics.filter((d) => d.phase !== "observation").length,
+      0,
+    );
+    const errors = r.diagnostics.filter((d) => d.phase === "observation");
     assert.equal(errors.length, 1);
     assert.equal(errors[0].phase, "observation");
     assert.equal(errors[0].syntheticDenial, false);
@@ -507,7 +574,7 @@ test("invalid and expired override credentials fail before a network request", a
     );
     try {
       const r = await hooks.dispatch("tool.before", tool());
-      assert.equal(r.errors.length, 1);
+      assert.equal(r.diagnostics.filter(d => d.phase !== "observation").length, 1);
       assert.equal(s.messages.length, 0);
     } finally {
       await hooks.close();
@@ -580,14 +647,22 @@ test("elicitation retains authorized request schema and rewrites inline result t
     config(s.url, subscriptions),
     options({
       capabilities: {
-        "user.elicitation.request": {
-          effects: ["return", "deny"],
-          elicitation: { form: {} },
+        userElicitationRequest: {
+          intercept: {
+            returnResult: true,
+            deny: true,
+            elicitation: {
+              form: true,
+            },
+          },
         },
-        "user.elicitation.result": {
-          effects: ["modify"],
-          modify: { content: { merge: true, replace: true } },
-          elicitation: { form: {} },
+        userElicitationResult: {
+          intercept: {
+            modifyContent: "replace-and-merge",
+            elicitation: {
+              form: true,
+            },
+          },
         },
       },
     }),
@@ -611,11 +686,11 @@ test("elicitation retains authorized request schema and rewrites inline result t
         }),
       },
     });
-    assert.equal(request.errors.length, 0);
     assert.equal(
-      request.response.result.effects[0].value.content.name,
-      "Alice",
+      request.diagnostics.filter((d) => d.phase !== "observation").length,
+      0,
     );
+    assert.equal(request.state.candidate.value.content.name, "Alice");
     const result = await hooks.dispatch("user.elicitation.result", {
       session: { id: "session" },
       parentEventId: request.event.id,
@@ -630,18 +705,26 @@ test("elicitation retains authorized request schema and rewrites inline result t
         }),
       },
     });
-    assert.equal(result.errors.length, 0);
+    assert.equal(
+      result.diagnostics.filter((d) => d.phase !== "observation").length,
+      0,
+    );
     assert.equal(result.event.elicitation.result.id, "answer");
     assert.deepEqual(uploaded, []);
-    assert.deepEqual(JSON.parse(
-      s.messages
-        .filter(x => x.message.params.event.type === "user.elicitation.result")
-        .at(-1).message.params.event.elicitation.result.text,
-    ), {
-      action: "accept",
-      content: { name: "Alice", age: 4 },
-      _meta: { keep: true },
-    });
+    assert.deepEqual(
+      JSON.parse(
+        s.messages
+          .filter(
+            (x) => x.message.params.event.type === "user.elicitation.result",
+          )
+          .at(-1).message.params.event.elicitation.result.text,
+      ),
+      {
+        action: "accept",
+        content: { name: "Alice", age: 4 },
+        _meta: { keep: true },
+      },
+    );
   } finally {
     await hooks.close();
     await s.close();
@@ -700,17 +783,20 @@ test("compaction rewrites inline text for later subscribers, and canonical conti
     config(s.url, subscriptions),
     options({
       capabilities: {
-        "context.compact.before": {
-          effects: ["modify", "return"],
-          modify: { instructions: { replace: true, merge: false } },
+        contextCompactBefore: {
+          intercept: {
+            returnResult: true,
+            modifyInstructions: "replace",
+          },
         },
-        "turn.finish.before": {
-          effects: ["flow"],
-          flow: {
-            operations: ["continue", "stop"],
-            remainingContinuations: 1,
-            maxContinuations: 1,
-            continuationCount: 0,
+        turnFinishBefore: {
+          intercept: {
+            flow: {
+              operations: ["continue", "stop"],
+              remainingContinuations: capabilityCount(1),
+              maxContinuations: capabilityCount(1),
+              continuationCount: capabilityCount(0),
+            },
           },
         },
       },
@@ -722,12 +808,15 @@ test("compaction rewrites inline text for later subscribers, and canonical conti
       items: [],
       instructions: [textPart("instructions", "original")],
     });
-    assert.equal(result.errors.length, 0);
+    assert.equal(
+      result.diagnostics.filter((d) => d.phase !== "observation").length,
+      0,
+    );
     assert.deepEqual(uploads, []);
     assert.deepEqual(
       s.messages
-        .filter(x => x.message.params.event.type === "context.compact.before")
-        .map(x => x.message.params.event.instructions[0].text),
+        .filter((x) => x.message.params.event.type === "context.compact.before")
+        .map((x) => x.message.params.event.instructions[0].text),
       ["original", "replacement"],
     );
     assert.equal(result.event.instructions[0].id, "instructions");
@@ -737,8 +826,11 @@ test("compaction rewrites inline text for later subscribers, and canonical conti
       continuationCount: 0,
       items: [],
     });
-    assert.equal(finish.errors.length, 0);
-    assert.equal(finish.response.result.effects.length, 2);
+    assert.equal(
+      finish.diagnostics.filter((d) => d.phase !== "observation").length,
+      0,
+    );
+    assert.equal(finish.effects.length, 2);
     const last = s.messages.at(-1).message;
     assert.equal(last.params.state.flow, "continue");
     assert.equal(last.params.state.instructions.length, 1);
@@ -765,8 +857,8 @@ test("no-auth override cannot bypass an explicit binding or retry a challenge an
     );
     try {
       const r = await hooks.dispatch("tool.before", tool());
-      assert.equal(r.errors.length, 1);
-      assert.equal(r.errors[0].syntheticDenial, true);
+      assert.equal(r.diagnostics.filter(d => d.phase !== "observation").length, 1);
+      assert.equal(r.diagnostics.filter(d => d.phase !== "observation")[0].syntheticDenial, true);
       assert.equal(s.messages.length, explicit ? 0 : 1);
     } finally {
       await hooks.close();
@@ -776,21 +868,30 @@ test("no-auth override cannot bypass an explicit binding or retry a challenge an
 });
 
 test("capability narrowing ignores opaque extensions but rejects known expansions", async () => {
-  const advertised = {
-    ...caps,
-    modify: { input: { replace: true, merge: false, futureHint: { old: 1 } } },
-    flow: {
-      operations: ["stop"],
-      maxContinuations: 2,
-      remainingContinuations: 1,
-      continuationCount: 1,
-    },
-    futureHint: { old: true },
-  };
   const s = await server((m, q, r) => reply(r, m));
   const hooks = new Hooks(
     config(s.url),
-    options({ capabilities: { "tool.before": advertised } }),
+    options({
+      capabilities: {
+        toolBefore: {
+          intercept: {
+            deny: true,
+            allow: true,
+            ask: true,
+            returnResult: true,
+            message: true,
+            modifyInput: "replace",
+            flow: {
+              operations: ["stop"],
+              maxContinuations: capabilityCount(2),
+              remainingContinuations: capabilityCount(1),
+              continuationCount: capabilityCount(1),
+            },
+            inject: caps.inject,
+          },
+        },
+      },
+    }),
   );
   try {
     const accepted = await hooks.dispatch("tool.before", tool(), {
@@ -807,7 +908,10 @@ test("capability narrowing ignores opaque extensions but rejects known expansion
         },
       },
     });
-    assert.deepEqual(accepted.errors, []);
+    assert.deepEqual(
+      accepted.diagnostics.filter((d) => d.phase !== "observation"),
+      [],
+    );
     for (const expansion of [
       { effects: [...caps.effects, "futureEffect"] },
       { modify: { input: { replace: true, merge: true } } },
@@ -847,7 +951,14 @@ for (const failure of ["timeout", "auth", "malformed"]) {
         sub({ timeoutMs: 500, failurePolicy: "fail-closed" }),
       ]),
       options({
-        capabilities: { "tool.before": { effects: ["allow", "return"] } },
+        capabilities: {
+          toolBefore: {
+            intercept: {
+              allow: true,
+              returnResult: true,
+            },
+          },
+        },
         ...(failure === "auth"
           ? {
               auth: auth({
@@ -862,12 +973,23 @@ for (const failure of ["timeout", "auth", "malformed"]) {
     );
     try {
       const result = await hooks.dispatch("tool.before", tool());
-      assert.deepEqual(result.response.result.effects, [
+      assert.deepEqual(result.effects, [
         { type: "deny", reason: "Required policy backend unavailable." },
       ]);
-      assert.equal(result.errors.length, 1);
-      assert.equal(result.errors[0].subscriptionIndex, 1);
-      assert.equal(result.errors[0].syntheticDenial, true);
+      assert.equal(
+        result.diagnostics.filter((d) => d.phase !== "observation").length,
+        1,
+      );
+      assert.equal(
+        result.diagnostics.filter((d) => d.phase !== "observation")[0]
+          .subscriptionIndex,
+        1,
+      );
+      assert.equal(
+        result.diagnostics.filter((d) => d.phase !== "observation")[0]
+          .syntheticDenial,
+        true,
+      );
       assert.equal(s.messages[0].message.method, "hooks/intercept");
       if (failure !== "auth") {
         assert.equal(s.messages[1].message.params.state.permission, "allow");
@@ -917,9 +1039,14 @@ for (const exit of [
     );
     try {
       const result = await hooks.dispatch("tool.before", tool());
-      assert.deepEqual(result.response.result.effects, []);
-      assert.deepEqual(result.errors, []);
-      const errors = await result.observations;
+      assert.deepEqual(result.effects, []);
+      assert.deepEqual(
+        result.diagnostics.filter((d) => d.phase !== "observation"),
+        [],
+      );
+      const errors = result.diagnostics.filter(
+        (d) => d.phase === "observation",
+      );
       if (exit === "process.exit(0)") assert.deepEqual(errors, []);
       else
         assert.deepEqual(errors, [
@@ -927,7 +1054,7 @@ for (const exit of [
             backendId: "test.backend",
             subscriptionIndex: 0,
             phase: "observation",
-            code: "DELIVERY_FAILED",
+            code: "transport",
             syntheticDenial: false,
           },
         ]);
@@ -983,13 +1110,13 @@ test("caller cancellation interrupts observations within the pending boundary ca
     assert.equal(settled, false);
     controller.abort();
     const result = await work;
-    assert.deepEqual(result.response.result.effects, []);
-    assert.deepEqual(await result.observations, [
+    assert.deepEqual(result.effects, []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), [
       {
         backendId: "test.backend",
         subscriptionIndex: 0,
         phase: "observation",
-        code: "INTERRUPTED",
+        code: "cancelled",
         syntheticDenial: false,
       },
     ]);

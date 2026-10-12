@@ -2,7 +2,7 @@ import { validateEffect } from "./draft/index.js";
 import { validateUploadReceipt, type ContentUploadReceipt } from "./content-upload.js";
 /** Synthetic semantic harness. Wire acceptance remains the canonical validator's job. */
 import { stageResponse, object, type PendingState } from "./draft-atomic.js";
-import type { Effect, Capabilities } from "./draft/index.js";
+import type { Effect, Capabilities, EventType } from "./draft/index.js";
 export interface BoundaryState extends PendingState {
   flow?: "stop" | "continue";
   instructions?: string[];
@@ -14,7 +14,7 @@ export interface BoundaryCapabilities {
   effects: string[];
   modify?: Record<
     string,
-    { replace?: boolean; merge?: boolean; operations?: string[] }
+    { replace?: boolean; merge?: boolean }
   >;
   flow?: {
     operations: string[];
@@ -90,12 +90,7 @@ export function stageBoundary(
       )
         throw Error("Unsupported modification");
       const targetCaps = caps.modify?.[target];
-      if (
-        !(
-          targetCaps?.[operation] === true ||
-          targetCaps?.operations?.includes(operation)
-        )
-      )
+      if (targetCaps?.[operation] !== true)
         throw Error("Unsupported target or operation");
       if (target === "input") ordinary.push(effect);
       else {
@@ -124,12 +119,8 @@ export function stageBoundary(
     effects: caps.effects,
     modify: {
       input: {
-        replace:
-          inputCaps?.replace === true ||
-          inputCaps?.operations?.includes("replace") === true,
-        merge:
-          inputCaps?.merge === true ||
-          inputCaps?.operations?.includes("merge") === true,
+        replace: inputCaps?.replace === true,
+        merge: inputCaps?.merge === true,
       },
     },
   };
@@ -329,7 +320,7 @@ export function actualTaskChange<T>(
   parentEventId?: string,
 ): {
   id: string;
-  type: string;
+  type: Extract<EventType, "task.change.after">;
   parentEventId?: string;
   before: T;
   after: T;

@@ -3,318 +3,175 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import {
-  ToolBeforeRunner,
-  type HookBackend,
-  type ToolBeforeInput,
-} from "agenthooksprotocol";
+import * as rootSdk from "agenthooksprotocol";
+import { Hooks, type ToolBeforeInput } from "agenthooksprotocol/client";
 import { fakeBackendEntrypoint } from "@agenthooksprotocol/testing";
 import { runConformance } from "../src/index.js";
 
-const temp = (): string => mkdtempSync(join(tmpdir(), "ahp-ts-"));
-const fake = (
-  mode: string,
-  extra: string[] = [],
-  overrides: Partial<HookBackend> = {},
-): HookBackend => ({
-  command: "node",
-  args: [fakeBackendEntrypoint, "--mode", mode, ...extra],
-  timeoutMs: 500,
-  failurePolicy: "fail-closed",
-  ...overrides,
-});
-const input: ToolBeforeInput = {
-  source: "urn:agenthooksprotocol:tests:runner",
-  eventId: "event-stable",
-  time: "2026-01-02T03:04:05.678Z",
-  session: {
-    id: "session-stable",
-    cwd: "/workspace",
-    workspaceRoots: ["/workspace", "/shared"],
-    model: "model-1",
-    agent: { id: "agent-1", type: "subagent" },
-  },
-  tool: {
-    callId: "call-stable",
-    name: "write_工具",
-    kind: "file_write",
-    input: { text: "Zażółć 🚀" },
-  },
-  native: {
-    provider: "fixture",
-    eventName: "PreToolUse",
-    payload: { original: true },
-  },
-  extensions: { "com.example.trace": "trace-1" },
+type Fixture = {
+  mode: string;
+  args?: string[];
+  timeoutMs?: number;
+  failurePolicy?: "fail-open" | "fail-closed";
 };
-
-async function failureCodeFor(
-  badInput: ToolBeforeInput,
-): Promise<string | undefined> {
-  const runner = new ToolBeforeRunner();
-  try {
-    await runner.intercept(badInput);
-    return undefined;
-  } catch (error) {
-    return error instanceof Error && "code" in error
-      ? String((error as { code: unknown }).code)
-      : "UNKNOWN";
-  } finally {
-    runner.close();
-  }
+const temp = (): string => mkdtempSync(join(tmpdir(), "ahp-ts-"));
+const input: ToolBeforeInput = {
+  id: "event-stable",
+  time: "2026-01-02T03:04:05.678Z",
+  callId: "call-stable",
+  path: "native",
+  name: "write_工具",
+  origin: "native",
+  input: { text: "Zażółć 🚀" },
+};
+const client = (...fixtures: Fixture[]) => new Hooks({
+  protocolVersion: "draft",
+  hooks: fixtures.map((fixture, index) => ({
+    id: `fixture.backend${index}`,
+    transport: {
+      type: "stdio",
+      command: "node",
+      args: [fakeBackendEntrypoint, "--mode", fixture.mode, ...(fixture.args ?? [])],
+      lifecycle: "persistent",
+    },
+    subscriptions: [{
+      mode: "intercept",
+      events: ["tool.before"],
+      timeoutMs: fixture.timeoutMs ?? 5000,
+      failurePolicy: fixture.failurePolicy ?? "fail-closed",
+      content: { default: "metadata" },
+    }],
+  })),
+}, {
+  source: "urn:agenthooksprotocol:tests:runner",
+  capabilities: { toolBefore: { intercept: { deny: true } } },
+});
+async function exchange(...fixtures: Fixture[]) {
+  const hooks = client(...fixtures);
+  try { return await hooks.toolBefore(input); }
+  finally { await hooks.close(); }
 }
 
-test("emits the exact canonical intercept request shape", async () => {
+test("emits the canonical tool.before shape without legacy tool identity or kind fields", async () => {
   const record = join(temp(), "request.ndjson");
-  const runner = new ToolBeforeRunner({
-    idGenerator: (kind) => `${kind}-generated`,
-  });
-  runner.register(fake("no-effect", ["--record-file", record]));
-  const result = await runner.intercept(input);
-  runner.close();
+  const result = await exchange({ mode: "no-effect", args: ["--record-file", record] });
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+  assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
   const line = readFileSync(record, "utf8").trim();
-  const request = JSON.parse(line.slice(line.indexOf("\t") + 1)) as unknown;
-  assert.deepEqual(request, {
-    jsonrpc: "2.0",
-    id: "event-stable",
-    method: "hooks/intercept",
-    params: {
-      protocolVersion: "draft",
-      event: {
-        id: "event-stable",
-        source: "urn:agenthooksprotocol:tests:runner",
-        type: "tool.before",
-        time: "2026-01-02T03:04:05.678Z",
-        session: {
-          id: "session-stable",
-          cwd: "/workspace",
-          workspaceRoots: ["/workspace", "/shared"],
-          model: "model-1",
-          agent: { id: "agent-1", type: "subagent" },
-        },
-        tool: {
-          callId: "call-stable",
-          name: "write_工具",
-          kind: "file_write",
-          input: { text: "Zażółć 🚀" },
-        },
-        native: {
-          provider: "fixture",
-          eventName: "PreToolUse",
-          payload: { original: true },
-        },
-        extensions: { "com.example.trace": "trace-1" },
-      },
-      capabilities: { effects: ["deny"] },
-    },
+  const request = JSON.parse(line.slice(line.indexOf("\t") + 1));
+  assert.equal(request.method, "hooks/intercept");
+  assert.equal(request.id, input.id);
+  assert.equal(request.params.protocolVersion, "draft");
+  assert.equal(request.params.event.source, "urn:agenthooksprotocol:tests:runner");
+  assert.deepEqual(request.params.event.call, { id: "call-stable" });
+  assert.deepEqual(request.params.event.tool, {
+    name: "write_工具", origin: "native", input: { text: "Zażółć 🚀" },
   });
-  assert.equal(result.decision, "continue");
+  assert.equal(request.params.event.tool.callId, undefined);
+  assert.equal(request.params.event.tool.kind, undefined);
+  assert.deepEqual(request.params.capabilities.effects, ["deny"]);
+  assert.equal(result.event.id, input.id);
 });
 
-test("requires tool.input to be a JSON object and rejects unknown tool kinds", async () => {
-  const scalar = {
-    ...input,
-    tool: { ...input.tool, input: "not-an-object" },
-  } as unknown as ToolBeforeInput;
-  const array = {
-    ...input,
-    tool: { ...input.tool, input: [] },
-  } as unknown as ToolBeforeInput;
-  const unknownKind = {
-    ...input,
-    tool: { ...input.tool, kind: "future-kind" },
-  } as unknown as ToolBeforeInput;
-  assert.equal(await failureCodeFor(scalar), "MALFORMED_JSON_RPC");
-  assert.equal(await failureCodeFor(array), "MALFORMED_JSON_RPC");
-  assert.equal(await failureCodeFor(unknownKind), "MALFORMED_JSON_RPC");
-});
-
-test("composes backends serially in registration order", async () => {
+test("composes canonical backends serially in registration order", async () => {
   const record = join(temp(), "order.ndjson");
-  const runner = new ToolBeforeRunner();
-  runner.register(
-    fake("no-effect", [
-      "--delay-ms",
-      "80",
-      "--record-file",
-      record,
-      "--record-label",
-      "first",
-    ]),
-  );
-  runner.register(
-    fake("no-effect", ["--record-file", record, "--record-label", "second"]),
-  );
-  const result = await runner.intercept(input);
-  runner.close();
-  assert.equal(result.decision, "continue");
-  assert.deepEqual(
-    readFileSync(record, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => line.split("\t")[0]),
-    ["first", "second"],
-  );
+  const result = await exchange(...["first", "second"].map(label => ({
+    mode: "no-effect", args: ["--record-file", record, "--record-label", label],
+  })));
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+  assert.deepEqual(readFileSync(record, "utf8").trim().split("\n").map(line => line.split("\t")[0]), ["first", "second"]);
 });
 
-test("deadline covers the full exchange and bounds all retries", async () => {
-  const runner = new ToolBeforeRunner();
-  runner.register(
-    fake("timeout", ["--delay-ms", "150"], {
-      timeoutMs: 35,
-      retries: 1,
-      failurePolicy: "fail-open",
-    }),
-  );
+test("deadline covers the full canonical exchange", async () => {
   const started = Date.now();
-  const result = await runner.intercept(input);
-  const elapsed = Date.now() - started;
-  runner.close();
-  assert.equal(result.decision, "continue");
-  assert.equal(result.failures[0]?.code, "TIMEOUT");
-  assert.ok(
-    elapsed >= 25 && elapsed < 250,
-    `unexpected elapsed time ${elapsed}ms`,
+  const result = await exchange({ mode: "timeout", args: ["--delay-ms", "150"], timeoutMs: 35, failurePolicy: "fail-open" });
+  assert.ok(Date.now() - started < 1000);
+  assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0]?.code, "deadline_exceeded");
+  assert.equal(result.interrupted, false);
+});
+
+test("malformed output fails open and subsequent denial is accepted", async () => {
+  const result = await exchange(
+    { mode: "malformed-json", failurePolicy: "fail-open" },
+    { mode: "deny", args: ["--reason", "second backend"] },
   );
+  assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
+  assert.equal(result.state.permission, "deny");
+  assert.deepEqual(result.effects, [{ type: "deny", reason: "second backend" }]);
 });
 
-test("classifies malformed output and explicitly fails open", async () => {
-  const runner = new ToolBeforeRunner();
-  runner.register(fake("malformed-json", [], { failurePolicy: "fail-open" }));
-  runner.register(fake("deny", ["--reason", "second backend"]));
-  const result = await runner.intercept(input);
-  runner.close();
-  assert.equal(result.failures[0]?.code, "MALFORMED_JSON");
-  assert.equal(result.decision, "deny");
-  assert.equal(result.denial?.reason, "second backend");
+test("unknown envelope fields survive canonical acceptance", async () => {
+  const result = await exchange({ mode: "unknown-fields" });
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+  assert.equal(result.state.permission, "deny");
+  assert.equal(result.acceptedResponses[0]?.ignoredRoot, true);
 });
 
-test("ignores unknown envelope fields in otherwise valid responses", async () => {
-  const runner = new ToolBeforeRunner();
-  runner.register(fake("unknown-fields"));
-  const result = await runner.intercept(input);
-  runner.close();
-  assert.equal(result.decision, "deny");
-  assert.equal(result.denial?.reason, "Unknown fields tolerated");
-  assert.equal(result.denial?.code, "com.example.denied");
-  // Wire extension data is independent of decoder object prototypes.
-  assert.deepEqual(structuredClone(result.denial?.extensions), { "com.example.detail": true });
-  assert.deepEqual(result.failures, []);
-});
+for (const mode of ["malformed-deny", "unsupported-effect", "multiple-effects", "incompatible-version", "id-mismatch"] as const) {
+  test(`canonical validation rejects fault injection: ${mode}`, async () => {
+    const result = await exchange({ mode, failurePolicy: "fail-open" });
+    assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
+    assert.deepEqual(result.acceptedResponses, []);
+    assert.deepEqual(result.effects, []);
+  });
+}
 
-test("rejects a deny effect with an empty reason", async () => {
-  const runner = new ToolBeforeRunner();
-  runner.register(fake("malformed-deny", [], { failurePolicy: "fail-open" }));
-  const result = await runner.intercept(input);
-  runner.close();
-  assert.equal(result.decision, "continue");
-  assert.equal(result.failures[0]?.code, "MALFORMED_JSON_RPC");
-});
-
-test("explicit fail-closed stops composition on operational failure", async () => {
+test("fail-closed operational failure stops later registrations", async () => {
   const record = join(temp(), "not-called.ndjson");
-  const runner = new ToolBeforeRunner();
-  runner.register(fake("json-rpc-error"));
-  runner.register(fake("no-effect", ["--record-file", record]));
-  const result = await runner.intercept(input);
-  runner.close();
-  assert.equal(result.decision, "deny");
-  assert.equal(result.denial?.operational, true);
-  assert.equal(result.failures[0]?.code, "JSON_RPC_ERROR");
+  const result = await exchange(
+    { mode: "json-rpc-error" },
+    { mode: "no-effect", args: ["--record-file", record] },
+  );
+  assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
+  assert.equal(result.state.permission, "deny");
   assert.equal(existsSync(record), false);
 });
 
-test("a protocol denial short-circuits later registrations", async () => {
+test("protocol denial short-circuits later registrations", async () => {
   const record = join(temp(), "not-called.ndjson");
-  const runner = new ToolBeforeRunner();
-  runner.register(fake("deny", ["--reason", "policy"]));
-  runner.register(fake("no-effect", ["--record-file", record]));
-  const result = await runner.intercept(input);
-  runner.close();
-  assert.equal(result.decision, "deny");
-  assert.equal(result.denial?.operational, false);
-  assert.equal(result.denial?.reason, "policy");
+  const result = await exchange(
+    { mode: "deny", args: ["--reason", "policy"] },
+    { mode: "no-effect", args: ["--record-file", record] },
+  );
+  assert.equal(result.state.permission, "deny");
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(existsSync(record), false);
 });
 
-test("bounded retries preserve byte-identical requests and all IDs", async () => {
-  const record = join(temp(), "retries.ndjson");
-  let serial = 0;
-  const runner = new ToolBeforeRunner({
-    idGenerator: (kind) => `${kind}-${++serial}`,
-  });
-  // This checks retry identity, not startup speed; allow three launches on loaded CI.
-  runner.register(
-    fake("malformed-json", ["--record-file", record], {
-      retries: 2,
-      timeoutMs: 2_000,
-      failurePolicy: "fail-open",
-    }),
-  );
-  const result = await runner.intercept({
-    source: "urn:agenthooksprotocol:tests:runner",
-    time: "2026-01-02T03:04:05Z",
-    session: {},
-    tool: { name: "stable", kind: "other", input: {} },
-  });
-  runner.close();
-  const requests = readFileSync(record, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => line.slice(line.indexOf("\t") + 1));
-  assert.equal(requests.length, 3);
-  assert.ok(requests.every((line) => line === requests[0]));
-  const request = JSON.parse(requests[0] as string) as {
-    id: string;
-    params: {
-      event: { id: string; session: { id: string }; tool: { callId: string } };
-    };
-  };
-  assert.equal(request.id, "event-3");
-  assert.equal(request.params.event.id, "event-3");
-  assert.equal(request.params.event.session.id, "session-1");
-  assert.equal(request.params.event.tool.callId, "call-2");
-  assert.equal(result.event.id, "event-3");
+test("strict NDJSON framing preserves Unicode across one-byte chunks", async () => {
+  const result = await exchange({ mode: "deny", args: ["--reason", "拒否 🚫", "--chunk-size", "1"] });
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+  assert.deepEqual(result.effects, [{ type: "deny", reason: "拒否 🚫" }]);
 });
 
-test("NDJSON framing preserves Unicode across one-byte chunks", async () => {
-  const record = join(temp(), "unicode.ndjson");
-  const runner = new ToolBeforeRunner();
-  runner.register(
-    fake(
-      "deny",
-      ["--reason", "拒否 🚫", "--chunk-size", "1", "--record-file", record],
-      { lifecycle: "persistent" },
-    ),
-  );
-  const result = await runner.intercept(input);
-  runner.close();
-  assert.equal(result.denial?.reason, "拒否 🚫");
-  assert.match(readFileSync(record, "utf8"), /Zażółć 🚀/);
-});
-
-test("unsupported, multiple, incompatible, and mismatched semantics are operational failures", async () => {
-  const cases = [
-    ["unsupported-effect", "UNSUPPORTED_EFFECT"],
-    ["multiple-effects", "MULTIPLE_EFFECTS"],
-    ["incompatible-version", "INCOMPATIBLE_VERSION"],
-    ["id-mismatch", "ID_MISMATCH"],
-  ] as const;
-  for (const [mode, code] of cases) {
-    const runner = new ToolBeforeRunner();
-    runner.register(fake(mode, [], { failurePolicy: "fail-open" }));
-    const result = await runner.intercept(input);
-    runner.close();
-    assert.equal(result.decision, "continue");
-    assert.equal(result.failures[0]?.code, code);
-  }
-});
-
-test("black-box conformance runner drives a persistent target command", async () => {
+test("black-box conformance runner drives a persistent canonical target", async () => {
   const report = await runConformance({
     command: "node",
-    args: [fakeBackendEntrypoint, "--mode", "no-effect"],
+    args: [fakeBackendEntrypoint, "--mode", "no-effect", "--chunk-size", "3"],
+    timeoutMs: 5000,
   });
-  assert.equal(report.ok, true);
-  assert.equal(report.checks.length, 2);
+  assert.deepEqual(report, { ok: true, checks: [
+    { name: "valid tool.before exchange", ok: true },
+    { name: "persistent sequential exchange", ok: true },
+  ] });
+});
+
+
+test("root entrypoint exposes independent JSON helpers, not an alternate protocol API", () => {
+  for (const name of ["ToolBeforeRunner", "parseInterceptRequest", "parseInterceptResponse", "PROTOCOL_VERSION", "INTERCEPT_METHOD", "TOOL_KINDS", "asOperationalError"]) {
+    assert.equal(name in rootSdk, false, `root.${name}`);
+  }
+  const json = rootSdk.parseJson('{"integer":9007199254740993}');
+  rootSdk.assertJsonObject(json);
+  assert.equal(json.integer, 9007199254740993n);
+  rootSdk.assertJsonValue({ nested: [null, true, 3.5, 9007199254740993n] });
+  const rejects = (value: unknown) => {
+    let rejected = false;
+    try { rootSdk.assertJsonValue(value); } catch { rejected = true; }
+    assert.equal(rejected, true);
+  };
+  rejects({ value: undefined });
+  const cycle: Record<string, unknown> = {};
+  cycle.self = cycle;
+  rejects(cycle);
 });

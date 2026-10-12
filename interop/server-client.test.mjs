@@ -9,7 +9,7 @@ const require = createRequire(
 const { hooks, attachments } = await import(
   require.resolve("agenthooksprotocol/server")
 );
-const { Hooks } = await import(
+const { Hooks, Attachment } = await import(
   require.resolve("agenthooksprotocol/client")
 );
 
@@ -78,9 +78,14 @@ test(
           // This controlled test explicitly permits anonymous calls. Production
           // authentication and authorization belong here, before the SDK helper.
           const user = { id: "explicitly-authorized-local-test" };
-          response = await hooks.handle(request, (message) =>
-            policyService.handle(message, user),
-          );
+          response = await hooks.handle(request, {
+            intercept: {
+              toolBefore: (ctx) => policyService.handle(ctx.request, user),
+            },
+            observe: {
+              toolBefore: (ctx) => { policyService.handle(ctx.notification, user); },
+            },
+          });
         }
         outgoing.writeHead(
           response.status,
@@ -125,12 +130,9 @@ test(
       {
         source: "urn:test:harness",
         capabilities: {
-          "tool.before": {
-            modes: ["intercept", "observe"],
-            capabilities: {
-              effects: ["modify"],
-              modify: { input: { merge: true, replace: true } },
-            },
+          toolBefore: {
+            intercept: { modifyInput: "replace-and-merge" },
+            observe: true,
           },
         },
       },
@@ -143,18 +145,23 @@ test(
         items: [
           {
             id: "item",
-            kind: "attachment",
+            kind: "attachment", selection: "body",
             mediaType: "application/octet-stream",
-            body: new ReadableStream({
+            body: Attachment.stream(new ReadableStream({
               start(controller) {
                 controller.enqueue(bytes);
                 controller.close();
               },
-            }),
+            })),
           },
         ],
+      }, {
+        capabilities: {
+          effects: ["modify"],
+          modify: { input: { merge: true, replace: true } },
+        },
       });
-      assert.deepEqual(result.errors, []);
+      assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
       assert.deepEqual(result.event.tool.input, { path: "a", checked: true });
       await observedPromise;
       assert.deepEqual(calls, ["upload", "hooks/intercept", "hooks/observe"]);

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import process from "node:process";
-import { Hooks } from "agenthooksprotocol/client";
+import { Hooks, Attachment } from "agenthooksprotocol/client";
 import { createAuth, clientAuth } from "../src/interop/auth.js";
 import { atomicScenarios } from "../src/interop/atomic-client.js";
 import {
@@ -158,7 +158,7 @@ test("HTTP authorization is independent of JSON-RPC correlation and event identi
       },
       {
         source: "urn:interop:upload",
-        capabilities: { "user.message.inbound": { effects: [] } },
+        capabilities: { userMessageInbound: { intercept: { deny: true } } },
         auth: clientAuth("bearer", origin),
       },
     );
@@ -172,22 +172,23 @@ test("HTTP authorization is independent of JSON-RPC correlation and event identi
               id: "upload-text",
               kind: "attachment",
               mediaType: "application/octet-stream",
-              body: new ReadableStream<Uint8Array>({
+              selection: "body",
+              body: Attachment.stream(new ReadableStream<Uint8Array>({
                 start(controller) {
                   controller.enqueue(
                     new TextEncoder().encode("verified Unicode 🚀"),
                   );
                   controller.close();
                 },
-              }),
+              })),
             },
           ] }],
         },
-      });
-      assert.deepEqual(result.errors, []);
-      assert.deepEqual(await result.observations, []);
+      }, { capabilities: { effects: [] } });
+      assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+      assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
       assert.equal(result.interrupted, false);
-      assert.deepEqual(result.response.result.effects, []);
+      assert.deepEqual(result.effects, []);
     } finally {
       await hooks.close();
     }

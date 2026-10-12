@@ -7,7 +7,7 @@ import { listen } from "./common.mjs";
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
-const { Hooks, auth } = await import(
+const { Hooks, auth, Attachment } = await import(
   require.resolve("agenthooksprotocol/client")
 );
 const { hooks, attachments } = await import(
@@ -57,10 +57,14 @@ test("public sender never inherits event Authorization when upload auth is omitt
     }
     await respond(
       outgoing,
-      await hooks.handle(request(incoming), (message) => {
-        events.push({ authorization: incoming.headers.authorization, message });
-        assert.ok(stored.has(message.params.event.items[0].body.ref));
-        return { effects: [] };
+      await hooks.handle(request(incoming), {
+        intercept: {
+          toolBefore: (ctx) => {
+            events.push({ authorization: incoming.headers.authorization, message: ctx.request });
+            assert.ok(stored.has(ctx.event.items[0].body.ref));
+            return { effects: [] };
+          },
+        },
       }),
     );
   });
@@ -96,7 +100,7 @@ test("public sender never inherits event Authorization when upload auth is omitt
       },
       {
         source: "urn:typescript:isolation",
-        capabilities: { "tool.before": { effects: [] } },
+        capabilities: { toolBefore: { intercept: { deny: true } } },
         auth: auth({
           resolveCredentialReference(reference) {
             assert.equal(reference, "event");
@@ -114,20 +118,20 @@ test("public sender never inherits event Authorization when upload auth is omitt
       items: [
         {
           id: "body-item",
-          kind: "attachment",
+          kind: "attachment", selection: "body",
           mediaType: "application/octet-stream",
-          body: new ReadableStream({
+          body: Attachment.stream(new ReadableStream({
             start(controller) {
               controller.enqueue(bytes);
               controller.close();
             },
-          }),
+          })),
         },
       ],
-    });
-    assert.deepEqual(result.errors, []);
-    assert.deepEqual(await result.observations, []);
-    assert.deepEqual(result.response.result.effects, []);
+    }, { capabilities: { effects: [] } });
+    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
+    assert.deepEqual(result.effects, []);
     assert.equal(captures.length, 1);
     assert.equal(captures[0].authorization, undefined);
     assert.equal(

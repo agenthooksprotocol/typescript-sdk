@@ -4,8 +4,10 @@ This private, non-normative API follows the canonical
 [working draft](../../../agent-hooks-protocol/spec/draft/index.md) and
 [schema catalogue](../../../agent-hooks-protocol/schema/draft/manifest.json).
 Generated models cover the full draft catalogue; runtime helpers are reference
-slices, not a complete host adapter. The root `agenthooksprotocol` entrypoint
-and `ToolBeforeRunner` remain a narrower deny/no-effect `tool.before` stdio runner.
+slices, not a complete host adapter. Use `agenthooksprotocol/client` for the
+canonical host API. The root `agenthooksprotocol` entrypoint retains general JSON
+admission, NDJSON framing, operational errors, and independent runtime helpers;
+it does not provide an alternate protocol event model or runner.
 
 ## Validation and wire identity
 
@@ -79,8 +81,8 @@ bypass content permissions. The helper is not a complete semantic validator.
 ## Runtime boundaries
 
 `stageResponse`, `decide`, and `PendingState` expose a synthetic `tool.before`
-pending-state evaluator. Other exported boundary helpers do not turn the root
-runner into a full-catalogue adapter. Local supplier IDs used by those helpers
+pending-state evaluator. These independent fixtures do not replace the canonical
+client boundary API. Local supplier IDs used by those helpers
 are bookkeeping, not protocol identity.
 
 The canonical composition rules require staging the whole response before
@@ -103,9 +105,61 @@ Use `contentReference(receipt)` from `agenthooksprotocol/draft` to publish only
 `{ ref: receipt.ref }` in a content item's `body` or a file-change `before`/`after`
 reference. A successful body-selected item has no outer `size` or `sha256` either.
 Metadata-only and gap items can still disclose those fields. A receipt is not an
-event reference and old inline reference metadata is rejected, not ignored.
+event reference. Inline reference metadata is rejected.
 
 Resolve references using receiver storage and authenticated scope, not event
 length/hash claims. `ContentReceiver.read(scope, reference.ref)` uses both scope
 and opaque reference and returns a defensive copy; the reference is not a URL or
 an authorization grant.
+
+## Consumer settlement
+
+`agenthooksprotocol/client` returns one authoritative, decoded `event`, canonical
+pending `state`, complete `acceptedResponses` in acceptance order, and structured
+`diagnostics`. The residual `effects` list contains actions to enact,
+distinct from receiver acceptance evidence. Receiver responses retain omitted
+fields, envelope extras, injection delivery timing, and ordering. Invalid responses publish no effects or state; earlier accepted
+responses remain available. Caller contracts retain separate arguments, result,
+and provenance types without replacing schema-owned containers. Edits are enacted
+from `event` and returns from `state.candidate`; they are not replayed from `effects`.
+Caller-owned types are inferred only from supplied codecs; unbound slots are `unknown`.
+
+Local attachment bytes belong to `Attachment`, created with `bytes`, `lazy`,
+`stream`, or `file`. Attachments are explicit input owners, not raw stream bodies.
+The returned canonical event selects metadata for local bodies; `content` holds
+the effective local owners and must be closed separately. Observations finish
+before a boundary returns. Their delivery evidence is identified by
+`diagnostics[].phase === "observation"`.
+
+Generic `Hooks.dispatch` intentionally accepts canonical occurrence-shaped input
+for catalogue-driven harnesses. Named methods accept generated host facts and
+perform schema-owned projection. Both return the same typed settlement and reject
+malformed events or origin-incompatible state, including pre-cancelled calls.
+Low-level generated structural codecs and canonical validators remain explicit
+wire tooling; preserving unknown JSON fields does not grant effect or enum
+semantics. JSON admission and NDJSON framing are independent transport utilities,
+not alternate SDK event models.
+
+`HooksOptions.auth` accepts the canonical `DeliveryAuthProvider` only. `auth()`
+implements that contract and also supplies independent OAuth discovery, token
+exchange, storage, and refresh helpers. The OAuth `Credential` includes lifecycle data;
+`DeliveryCredential` carries the bearer token and optional provider-owned attempt
+identity for one request. These are distinct responsibilities, not aliases.
+
+Generic dispatch content parts require canonical `selection`; omission is not
+silently decoded as a selected body. Named host inputs use the generated host
+projection to create their canonical envelope and content selections.
+
+## Typed declaration and server assembly
+
+`HooksOptions.capabilities` uses readonly camel-keyed `HostCapabilities`. Event
+entries declare interception facilities and explicit observation; the generated
+`hostCapabilitiesToWire` projection supplies canonical event grants without JSON
+parsing. Dependent flow counts use validated `CapabilityCount` values. External
+registration, authentication, and network policy still require runtime admission.
+
+Server `intercept` and `observe` maps use generated event families to correlate
+contexts and replies. `effect` helpers construct literal values, not authority.
+HTTP `hooks.handle` and `serveStdio` use one admission core that preserves trusted
+correlation and checks dynamic request grants. Empty intercept replies are valid
+no-ops; observation callbacks return void and cannot return controls.

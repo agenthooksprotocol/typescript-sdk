@@ -277,7 +277,7 @@ test("content sources require exact descriptors and integrity without repairing 
   const event = { items: [{ body: { ref: descriptor.ref } }] };
   adapter.hydrate(event);
   assert.deepEqual(
-    Buffer.from(await new Response(event.items[0].body).arrayBuffer()),
+    Buffer.from(await event.items[0].body.read()),
     bytes,
   );
   assert.deepEqual(adapter.contentUploads, []);
@@ -311,7 +311,7 @@ test("content upload reports come from actual response clones and leave response
     const event = { items: [{ body: { ref: descriptor.ref } }] };
     adapter.hydrate(event);
     const body = new Uint8Array(
-      await new Response(event.items[0].body).arrayBuffer(),
+      await event.items[0].body.read(),
     );
     const response = await adapter.fetch(endpoint, {
       method: "POST",

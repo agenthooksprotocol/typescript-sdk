@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
-const { Hooks, auth } = await import(
+const { Hooks, auth, Attachment } = await import(
   require.resolve("agenthooksprotocol/client")
 );
 const { hooks, attachments } = await import(
@@ -50,7 +50,13 @@ test("client network delegation preserves independent event and upload authentic
     },
     {
       source: "urn:network:fixture",
-      capabilities: { "tool.before": { effects: [] } },
+      capabilities: {
+        toolBefore: {
+          intercept: {
+            message: true,
+          },
+        },
+      },
       auth: provider,
       fetch: async (url, init) => {
         assert.equal(init.redirect, "error");
@@ -71,37 +77,59 @@ test("client network delegation preserves independent event and upload authentic
           });
         }
         assert.equal(url, "https://event.example.test/hooks");
-        return hooks.handle(request, (message) => {
-          assert.equal(message.method, "hooks/intercept");
-          assert.equal(message.params.event.items[0].body.ref, "stored-body");
-          assert.equal(message.id, message.params.event.id);
-          return { effects: [] };
+        return hooks.handle(request, {
+          intercept: {
+            toolBefore: ({ request: message }) => {
+              assert.equal(message.method, "hooks/intercept");
+              assert.equal(
+                message.params.event.items[0].body.ref,
+                "stored-body",
+              );
+              assert.equal(message.id, message.params.event.id);
+              return { effects: [] };
+            },
+          },
         });
       },
     },
   );
   try {
-    const result = await client.dispatch("tool.before", {
-      id: "network-occurrence",
-      path: "native",
-      call: { id: "network-call" },
-      tool: { name: "network", origin: "native", input: {} },
-      items: [
-        {
-          id: "payload",
-          kind: "attachment",
-          mediaType: "application/octet-stream",
-          body: new ReadableStream({
-            start(controller) {
-              controller.enqueue(new TextEncoder().encode("network payload"));
-              controller.close();
-            },
-          }),
-        },
-      ],
-    });
-    assert.deepEqual(result.errors, []);
-    assert.deepEqual(await result.observations, []);
+    const result = await client.dispatch(
+      "tool.before",
+      {
+        id: "network-occurrence",
+        path: "native",
+        call: { id: "network-call" },
+        tool: { name: "network", origin: "native", input: {} },
+        items: [
+          {
+            id: "payload",
+            kind: "attachment",
+            selection: "body",
+            mediaType: "application/octet-stream",
+            body: Attachment.stream(
+              new ReadableStream({
+                start(controller) {
+                  controller.enqueue(
+                    new TextEncoder().encode("network payload"),
+                  );
+                  controller.close();
+                },
+              }),
+            ),
+          },
+        ],
+      },
+      { capabilities: { effects: [] } },
+    );
+    assert.deepEqual(
+      result.diagnostics.filter((d) => d.phase !== "observation"),
+      [],
+    );
+    assert.deepEqual(
+      result.diagnostics.filter((d) => d.phase === "observation"),
+      [],
+    );
     assert.deepEqual(bindings, [
       { name: "UPLOAD_TOKEN", purpose: "upload" },
       { name: "EVENT_TOKEN", purpose: "event" },

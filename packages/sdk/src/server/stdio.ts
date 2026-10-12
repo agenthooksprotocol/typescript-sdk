@@ -1,3 +1,5 @@
+import { hooks } from "./hooks.js";
+import type { ServerHandlers } from "./types.js";
 import { stdin, stdout } from "node:process";
 import { Writable, type Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -8,7 +10,7 @@ export interface StdioOptions {
   signal?: AbortSignal;
 }
 
-/** Serve UTF-8 NDJSON using an ordinary Web Request/Response handler.
+/** Serve typed event handlers over UTF-8 NDJSON through the HTTP admission core.
  * Requests run sequentially. Nonempty bodies are written regardless of status;
  * physical CR/LF in response bodies becomes spaces to preserve line framing.
  * Resolves at EOF after flushing output, without ending stdout. The streams are
@@ -16,7 +18,7 @@ export interface StdioOptions {
  * doing long-running work should honor request.signal. No process is exited.
  */
 export async function serveStdio(
-  handler: (request: Request) => Response | Promise<Response>,
+  handlers: ServerHandlers,
   options: StdioOptions = {},
 ): Promise<void> {
   const output = options.stdout ?? stdout;
@@ -38,13 +40,14 @@ export async function serveStdio(
         const decoder = new TextDecoder();
         let pending = "";
         const respond = async (body: string) => {
-          const response = await handler(
+          const response = await hooks.handle(
             new Request("http://localhost/", {
               method: "POST",
               headers: { "content-type": "application/json" },
               body,
               signal,
             }),
+            handlers,
           );
           const text = await response.text();
           return text === "" ? "" : text.replace(/[\r\n]/g, " ") + "\n";

@@ -4,7 +4,7 @@ import {
   scenarios,
   atomic,
   fixtureRegistration,
-  fixtureCapabilities,
+  fixtureHostCapabilities,
   sdkClient,
   sdkDraft,
 } from "./common.mjs";
@@ -62,7 +62,7 @@ try {
     // function on Hooks while routing each operation to its own source recorder.
     /** @type {ReturnType<typeof createContentAdapter> | undefined} */
     let activeContent;
-    const capabilities = fixtureCapabilities(rows);
+    const capabilities = fixtureHostCapabilities;
     let serverFixture;
     if (cfg.transport === "http") {
       // The canonical HTTP fixture binding exposes GET /capabilities.
@@ -210,19 +210,20 @@ try {
                 ? {}
                 : { initialState: row.request.params.state }),
             });
-            const observationErrors = await result.observations;
+            const observationErrors = result.diagnostics.filter(d => d.phase === "observation");
             if (
-              result.errors.length ||
+              result.diagnostics.filter(d => d.phase !== "observation").length ||
               observationErrors.length ||
               result.interrupted
             ) {
               if (
                 row.expectError &&
-                result.errors.some(
+                result.diagnostics.filter(d => d.phase !== "observation").some(
                   (error) =>
                     error.phase === "interception" &&
-                    (error.code === "DELIVERY_FAILED" ||
-                      (error.code === "DEADLINE_EXCEEDED" &&
+                    (error.code === "protocol_rejection" ||
+                      error.code === "transport" ||
+                      (error.code === "deadline_exceeded" &&
                         row.response !== null &&
                         typeof row.response === "object" &&
                         "id" in row.response &&

@@ -58,17 +58,15 @@ export class DecisionPipeline {
       if (result && !this.interrupted) {
         // Read the SDK's effective event; never replay modify or compose replies.
         this.state.input = structuredClone(result.event.tool.input);
-        for (const effect of result.response.result.effects) {
+        this.state.candidate = result.state.candidate === null
+          ? null
+          : {
+              value: structuredClone(result.state.candidate.value),
+              supplier: id,
+              input: structuredClone(this.state.input),
+            };
+        for (const effect of result.effects) {
           switch (effect.type) {
-            case "modify":
-              break;
-            case "return":
-              this.state.candidate = {
-                value: structuredClone(effect.value),
-                supplier: id,
-                input: structuredClone(this.state.input),
-              };
-              break;
             case "allow":
               this.state.permission = "allow";
               break;
@@ -91,12 +89,12 @@ export class DecisionPipeline {
               );
           }
         }
-        this.failures = result.errors.length;
+        this.failures = result.diagnostics.filter(d => d.phase !== "observation").length;
         if (this.failures)
-          for (const error of result.errors)
+          for (const error of result.diagnostics.filter(d => d.phase !== "observation"))
             this.trace.push(
               `reject:${id}`,
-              error.code === "DEADLINE_EXCEEDED"
+              error.code === "deadline_exceeded"
                 ? "timeout"
                 : "backend-failure",
               `failure:${error.failurePolicy}`,

@@ -8,7 +8,6 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { sdkDraft } from "./common.mjs";
 import {
-  canonicalLifecycleFixture,
   lifecycleWireGate,
   maliciousLifecycleObservation,
 } from "./lifecycle-common.mjs";
@@ -41,16 +40,11 @@ const central = JSON.parse(
     cwd + "/../agent-hooks-protocol/interop/lifecycle-scenarios.json",
     "utf8",
   ),
-).scenarios.map(canonicalLifecycleFixture);
-// Local compatibility with the old pinned central schedule: §9 makes
-// observations operation-owned, so cancellation starts no new observer work.
-// Keep the adversarial intercept/cancellation schedule unchanged; only the
-// obsolete expected observations differ until the central fixture is updated.
+).scenarios;
 const interruptedChain = central.find(
   (row) => row.id === "observation-chain-interrupt",
 );
 assert.ok(interruptedChain?.chain.interrupt);
-interruptedChain.expected.observations = [];
 // Only these named duplicate-response probes use raw replay. Repeated IDs in
 // any other scenario must still exercise the public client, not bypass it.
 const replayProbes = new Set([
@@ -704,7 +698,7 @@ for (const transport of ["http", "stdio"])
     assert.equal(delivery.wireAcquired, true);
     assert.equal(delivery.wireRelease, "abort");
     assert.equal(delivery.interrupted, true);
-    assert.ok(delivery.errors.every((error) => error.code === "INTERRUPTED"));
+    assert.ok(delivery.errors.every((error) => error.code === "cancelled"));
     assert.deepEqual(report.results[0].actual.published, []);
     const entries = report.receipts.entries;
     const acquired = entries.findIndex((entry) => entry.kind === "acquired");
@@ -745,7 +739,7 @@ test("explicit foreign malicious observer response preserves actual SDK errors a
         backendId: "interop.lifecycle",
         subscriptionIndex: 0,
         phase: "observation",
-        code: "DELIVERY_FAILED",
+        code: "transport",
         syntheticDenial: false,
       },
     ]);

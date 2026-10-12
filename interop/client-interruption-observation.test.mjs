@@ -47,48 +47,61 @@ function scenario() {
       source: "urn:test:interruption",
       observationTimeoutMs: 3000,
       capabilities: {
-        "tool.before": {
-          modes: ["intercept", "observe"],
-          capabilities: {
-            effects: ["deny", "modify", "message", "allow", "return"],
-            modify: { input: { merge: true, replace: false } },
+        toolBefore: {
+          intercept: {
+            deny: true,
+            message: true,
+            allow: true,
+            returnResult: true,
+            modifyInput: "merge",
           },
+          observe: true,
         },
       },
       fetch: (url, init) =>
-        hooks.handle(new Request(url, init), async (message) => {
-          messages.push(structuredClone(message));
-          if (message.method === "hooks/observe") {
-            await releaseObservers.promise;
-            return;
-          }
-          intercepts++;
-          if (intercepts === 1)
-            return {
-              effects: [
-                {
-                  type: "modify",
-                  target: "input",
-                  operation: "merge",
-                  value: { x: 2 },
-                },
-                { type: "allow" },
-                { type: "return", value: "cached" },
-              ],
-            };
-          pending.resolve();
-          await releasePending.promise;
-          return {
-            effects: [
-              {
-                type: "modify",
-                target: "input",
-                operation: "merge",
-                value: { x: 999 },
-              },
-              { type: "message", text: "discarded pending response" },
-            ],
-          };
+        hooks.handle(new Request(url, init), {
+          intercept: {
+            toolBefore: async ({ request: message }) => {
+              messages.push(structuredClone(message));
+              if (message.method === "hooks/observe") {
+                await releaseObservers.promise;
+                return;
+              }
+              intercepts++;
+              if (intercepts === 1)
+                return {
+                  effects: [
+                    {
+                      type: "modify",
+                      target: "input",
+                      operation: "merge",
+                      value: { x: 2 },
+                    },
+                    { type: "allow" },
+                    { type: "return", value: "cached" },
+                  ],
+                };
+              pending.resolve();
+              await releasePending.promise;
+              return {
+                effects: [
+                  {
+                    type: "modify",
+                    target: "input",
+                    operation: "merge",
+                    value: { x: 999 },
+                  },
+                  { type: "message", text: "discarded pending response" },
+                ],
+              };
+            },
+          },
+          observe: {
+            toolBefore: async ({ notification: message }) => {
+              messages.push(structuredClone(message));
+              await releaseObservers.promise;
+            },
+          },
         }),
     },
   );
@@ -124,11 +137,11 @@ test(
       assert.equal(result.interrupted, true);
       assert.equal(result.event.tool.input.x, 2);
       assert.deepEqual(
-        result.response.result.effects.map((e) => e.type),
-        ["modify"],
+        result.effects.map((e) => e.type),
+        [],
       );
-      assert.equal(result.errors.length, 1);
-      assert.equal(result.errors[0].syntheticDenial, false);
+      assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
+      assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0].syntheticDenial, false);
       assert.equal(
         s.messages.filter((m) => m.method === "hooks/intercept").length,
         2,
@@ -140,7 +153,7 @@ test(
       s.releasePending.resolve();
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(s.messages.length, 2); // No late response can start fallback work.
-      assert.deepEqual(await result.observations, []);
+      assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
     } finally {
       s.releasePending.resolve();
       s.releaseObservers.resolve();
@@ -161,7 +174,7 @@ test(
       await s.client.close();
       const result = await work;
       assert.equal(result.interrupted, true);
-      assert.deepEqual(await result.observations, []);
+      assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
       assert.equal(
         s.messages.filter((m) => m.method === "hooks/observe").length,
         0,

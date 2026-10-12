@@ -109,7 +109,7 @@ test('public Hooks preserves exact session counters and opaque tool integers thr
   const counters = { turns: huge, modelRequests: huge + 1n, toolCalls: 2, inputTokens: huge + 2n, outputTokens: 0, future: huge + 3n };
   let requestText;
   const hooks = new Hooks({ protocolVersion: 'draft', hooks: [{ id: 'test.exact.public', transport: { type: 'http', url: 'https://backend.test/hooks' }, subscriptions: [{ mode: 'intercept', events: ['tool.before'], timeoutMs: 1000, failurePolicy: 'fail-open', content: { default: 'metadata' } }] }] }, {
-    source: 'urn:test:exact:public', capabilities: { 'tool.before': { effects: ['return'] } }, fetch: async (_, init) => {
+    source: 'urn:test:exact:public', capabilities: { toolBefore: {intercept: {returnResult: true}} }, fetch: async (_, init) => {
       requestText = init.body;
       const request = parseJson(requestText);
       assert.equal(request.params.event.session.counters.turns, huge);
@@ -120,9 +120,9 @@ test('public Hooks preserves exact session counters and opaque tool integers thr
   try {
     const bigintResult = { decode(value) { assert.equal(typeof value, 'bigint'); return value; }, encode(value) { return value; } };
     const settled = await hooks.toolBefore({ callId: 'call', name: 'read', input: { opaque: -huge }, origin: 'native', path: 'native', session: { id: 'session', counters } }, { contracts: { result: bigintResult } });
-    assert.deepEqual(settled.errors, []);
+    assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
     assert.deepEqual(settled.event.session.counters, counters);
-    assert.equal(settled.input.opaque, -huge);
+    assert.equal(settled.event.tool.input.opaque, -huge);
     assert.equal(settled.state.candidate.value, huge + 4n);
     assert.equal(requestText.includes(`"turns":${huge}`), true);
   } finally { await hooks.close(); }

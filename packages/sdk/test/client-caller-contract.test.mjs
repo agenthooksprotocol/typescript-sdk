@@ -9,9 +9,9 @@ const facts = input => ({ callId: 'call', name: 'read', input, path: 'native', o
 const initial = () => ({ count: 1, retained: true, nullable: 'old', nested: { next: 8, old: 2 } });
 const modify = value => ({ type: 'modify', target: 'input', operation: 'merge', value });
 const returned = value => ({ type: 'return', value });
-function client(replies, seen = [], type = 'tool.before', caps = { effects: ['modify', 'return'], modify: { input: { replace: true, merge: true } } }) {
+function client(replies, seen = [], type = 'tool.before', caps = { intercept: { modifyInput: 'replace-and-merge', returnResult: true } }) {
   return new Hooks({ protocolVersion: 'draft', hooks: replies.map((_, index) => ({ id: `test.contract.backend${index}`, transport: { type: 'http', url: `https://backend${index}.test/hooks` }, subscriptions: [{ mode: 'intercept', events: [type], timeoutMs: 1000, failurePolicy: 'fail-open', content: { default: 'metadata' }, includeNative: true }] })) }, {
-    source: 'urn:test:contracts', capabilities: { [type]: caps }, fetch: async (url, init) => {
+    source: 'urn:test:contracts', capabilities: { [type.replace(/\.([a-z])/g, (_, letter) => letter.toUpperCase())]: caps }, fetch: async (url, init) => {
       const request = JSON.parse(init.body); seen.push(request);
       const index = Number(String(url).match(/backend(\d+)/)[1]);
       return Response.json({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: 'draft', effects: replies[index] } });
@@ -29,8 +29,8 @@ test('caller contract implementation helpers are absent from the public client f
 test('a partial merge validates the whole T, preserves omitted fields/null and replaces nested values', async () => {
   const hooks = client([[modify({ count: 3, nullable: null, nested: { next: 9 } })]]);
   const settled = await hooks.toolBefore(facts(initial()), { contracts: { arguments: args, result } });
-  assert.deepEqual(settled.errors, []);
-  assert.deepEqual(settled.input, { count: 3, retained: true, nullable: null, nested: { next: 9 } });
+  assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
+  assert.deepEqual(settled.event.tool.input, { count: 3, retained: true, nullable: null, nested: { next: 9 } });
   await hooks.close();
 });
 
@@ -38,8 +38,8 @@ test('invalid full staged T applies none and later receivers only see prior acce
   const seen = [];
   const hooks = client([[modify({ count: 2 }), returned({ answer: 'accepted' })], [returned({ answer: 'unpublished' }), modify({ count: 100 })], []], seen);
   const settled = await hooks.toolBefore(facts(initial()), { contracts: { arguments: args, result } });
-  assert.equal(settled.errors.length, 1);
-  assert.equal(settled.input.count, 2);
+  assert.equal(settled.diagnostics.filter(d => d.phase !== "observation").length, 1);
+  assert.equal(settled.event.tool.input.count, 2);
   assert.deepEqual(settled.state.candidate.value, { answer: 'accepted' });
   assert.equal(seen[2].params.event.tool.input.count, 2);
   assert.deepEqual(seen[2].params.state.candidate.value, { answer: 'accepted' });
@@ -51,8 +51,8 @@ test('Result is independent of Arguments and invalid later return rolls back its
   const seen = [];
   const hooks = client([[returned({ answer: 'accepted' })], [modify({ count: 2 }), returned(initial())], []], seen);
   const settled = await hooks.toolBefore(facts(initial()), { contracts: { arguments: args, result } });
-  assert.equal(settled.errors.length, 1);
-  assert.equal(settled.input.count, 1);
+  assert.equal(settled.diagnostics.filter(d => d.phase !== "observation").length, 1);
+  assert.equal(settled.event.tool.input.count, 1);
   assert.deepEqual(settled.state.candidate.value, { answer: 'accepted' });
   assert.equal(seen[2].params.event.tool.input.count, 1);
   await hooks.close();
@@ -61,7 +61,7 @@ test('Result is independent of Arguments and invalid later return rolls back its
 test('every return in a response validates, even a candidate superseded by a later return', async () => {
   const hooks = client([[returned({ answer: 1 }), returned({ answer: 'valid-last' })]]);
   const settled = await hooks.toolBefore(facts(initial()), { contracts: { arguments: args, result } });
-  assert.equal(settled.errors.length, 1);
+  assert.equal(settled.diagnostics.filter(d => d.phase !== "observation").length, 1);
   assert.equal(settled.state.candidate, null);
   await hooks.close();
 });
@@ -69,7 +69,7 @@ test('every return in a response validates, even a candidate superseded by a lat
 test('candidate absence differs from a declared nullable candidate value', async () => {
   const hooks = client([[returned(null)]]);
   const settled = await hooks.toolBefore(facts(initial()), { contracts: { arguments: args, result: contract(Type.Union([Type.String(), Type.Null()])) } });
-  assert.deepEqual(settled.errors, []);
+  assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.deepEqual(settled.state.candidate, { value: null });
   await hooks.close();
 });
@@ -79,12 +79,12 @@ test('provenance associates with the initial candidate and clears on replacement
   const state = { permission: 'none', candidate: { value: { answer: 'cached' }, provenance: { supplier: 'cache' } } };
   const neutral = client([[]]);
   const first = await neutral.toolBefore(facts(initial()), { initialState: state, contracts: { arguments: args, result, provenance } });
-  assert.deepEqual(first.errors, []);
+  assert.deepEqual(first.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.deepEqual(first.state.candidate.provenance, { supplier: 'cache' });
   await neutral.close();
   const replacing = client([[returned({ answer: 'new' })]]);
   const second = await replacing.toolBefore(facts(initial()), { initialState: state, contracts: { arguments: args, result, provenance } });
-  assert.deepEqual(second.errors, []);
+  assert.deepEqual(second.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.deepEqual(second.state.candidate, { value: { answer: 'new' } });
   await replacing.close();
 });
@@ -102,8 +102,8 @@ test('unknown argument fields remain opaque; codecs that drop them are rejected 
   const input = { ...initial(), future: { parts: null, body: { ref: 'not-a-grant' } } };
   const hooks = client([[modify({ count: 2 })]]);
   const settled = await hooks.toolBefore(facts(input), { contracts: { arguments: args } });
-  assert.deepEqual(settled.errors, []);
-  assert.deepEqual(settled.input.future, input.future);
+  assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
+  assert.deepEqual(settled.event.tool.input.future, input.future);
   await hooks.close();
   const dropping = { decode: value => ({ count: value.count }), encode: value => value };
   const rejecting = client([[]]);
@@ -114,11 +114,11 @@ test('unknown argument fields remain opaque; codecs that drop them are rejected 
 test('explicit opaque host slot codecs validate provider/native facts; absent codecs do not interpret shapes', async () => {
   const native = { count: 1, parts: null };
   const seen = [];
-  const hooks = client([[]], seen, 'model.request.before', { effects: [] });
+  const hooks = client([[]], seen, 'model.request.before', { intercept: { deny: true } });
   const input = { model: { id: 'model', provider: 'test' }, attempt: { id: 'attempt', number: 1 }, params: { temperature: 0.5 }, items: [], native };
   const contracts = { payloads: [{ path: ['params'], codec: contract(Type.Object({ temperature: Type.Number({ maximum: 1 }) })) }, { path: ['native'], codec: contract(Type.Object({ count: Type.Integer() })) }] };
   const settled = await hooks.modelRequestBefore(input, { contracts });
-  assert.deepEqual(settled.errors, []);
+  assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.deepEqual(settled.event.native, native);
   await assert.rejects(hooks.modelRequestBefore({ ...input, params: { temperature: 2 } }, { contracts }));
   assert.equal(seen.length, 1);
@@ -136,9 +136,9 @@ test('type-invalid partial input never reaches a later interceptor', async () =>
   const seen = [];
   const hooks = client([[modify({ count: '2' })], []], seen);
   const settled = await hooks.toolBefore(facts(initial()), { contracts: { arguments: args } });
-  assert.equal(settled.errors.length, 1);
+  assert.equal(settled.diagnostics.filter(d => d.phase !== "observation").length, 1);
   assert.equal(seen[1].params.event.tool.input.count, 1);
-  assert.equal(settled.input.count, 1);
+  assert.equal(settled.event.tool.input.count, 1);
   await hooks.close();
 });
 
@@ -148,8 +148,8 @@ test('structural codecs encode host types and decode accepted values without los
   const date = new Date('2026-01-01T00:00:00Z');
   const hooks = client([[returned({ answer: 'typed-result' })]], seen);
   const settled = await hooks.toolBefore(facts(date), { contracts: { arguments: dates, result } });
-  assert.deepEqual(settled.errors, []);
-  assert.equal(settled.input.toISOString(), date.toISOString());
+  assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
+  assert.equal(settled.event.tool.input.toISOString(), date.toISOString());
   assert.deepEqual(seen[0].params.event.tool.input, { at: date.toISOString() });
   assert.deepEqual(settled.state.candidate.value, { answer: 'typed-result' });
   assert.equal(Object.isFrozen(settled.state.candidate.value), true);
@@ -173,8 +173,8 @@ test('an invalid intermediate argument cannot be repaired by a later modificatio
   const hooks = client([[modify({ count: -1 }), modify({ count: 2 })]]);
   try {
     const settled = await hooks.toolBefore(facts(initial()), { contracts: { arguments: args, result } });
-    assert.equal(settled.errors.length, 1);
-    assert.deepEqual(settled.input, initial());
+    assert.equal(settled.diagnostics.filter(d => d.phase !== "observation").length, 1);
+    assert.deepEqual(settled.event.tool.input, initial());
   } finally { await hooks.close(); }
 });
 
@@ -183,8 +183,8 @@ test('invalid then repaired arguments roll back the response and preserve earlie
   const hooks = client([[modify({ count: 2 }), returned({ answer: 'accepted' })], [returned({ answer: 'unpublished' }), modify({ count: -1 }), modify({ count: 3 })], []], seen);
   try {
     const settled = await hooks.toolBefore(facts(initial()), { contracts: { arguments: args, result } });
-    assert.equal(settled.errors.length, 1);
-    assert.equal(settled.input.count, 2);
+    assert.equal(settled.diagnostics.filter(d => d.phase !== "observation").length, 1);
+    assert.equal(settled.event.tool.input.count, 2);
     assert.deepEqual(settled.state.candidate, { value: { answer: 'accepted' } });
     assert.equal(seen[2].params.event.tool.input.count, 2);
     assert.deepEqual(seen[2].params.state.candidate, { value: { answer: 'accepted' } });
@@ -198,8 +198,8 @@ test('an invalid intermediate response preserves prior candidate provenance for 
   const hooks = client([[], [modify({ count: -1 }), modify({ count: 2 }), returned({ answer: 'unpublished' })], []], seen);
   try {
     const settled = await hooks.toolBefore(facts(initial()), { initialState: state, contracts: { arguments: args, result, provenance } });
-    assert.equal(settled.errors.length, 1);
-    assert.deepEqual(settled.input, initial());
+    assert.equal(settled.diagnostics.filter(d => d.phase !== "observation").length, 1);
+    assert.deepEqual(settled.event.tool.input, initial());
     assert.deepEqual(settled.state.candidate, state.candidate);
     assert.deepEqual(seen[2].params.event.tool.input, initial());
     assert.deepEqual(seen[2].params.state.candidate, state.candidate);
@@ -211,8 +211,8 @@ test('caller invariants reject an intermediate argument even when the next merge
   const hooks = client([[modify({ count: 9 }), modify({ count: 2 })]]);
   try {
     const settled = await hooks.toolBefore(facts(initial()), { contracts: { arguments: args } });
-    assert.equal(settled.errors.length, 1);
-    assert.deepEqual(settled.input, initial());
+    assert.equal(settled.diagnostics.filter(d => d.phase !== "observation").length, 1);
+    assert.deepEqual(settled.event.tool.input, initial());
   } finally { await hooks.close(); }
 });
 
@@ -221,8 +221,8 @@ test('explicit host payload codec paths validate each completed temporary modifi
   const hooks = client([[modify({ count: -1 }), modify({ count: 2 })], []], seen);
   try {
     const settled = await hooks.toolBefore(facts(initial()), { contracts: { payloads: [{ path: ['tool', 'input'], codec: args }] } });
-    assert.equal(settled.errors.length, 1);
-    assert.deepEqual(settled.input, initial());
+    assert.equal(settled.diagnostics.filter(d => d.phase !== "observation").length, 1);
+    assert.deepEqual(settled.event.tool.input, initial());
     assert.deepEqual(seen[1].params.event.tool.input, initial());
   } finally { await hooks.close(); }
 });
@@ -242,8 +242,53 @@ test('structural host argument codecs reject invalid temporary representations b
   const hooks = client([[modify({ at: 'invalid' }), modify({ at: '2026-02-01T00:00:00.000Z' })], []], seen);
   try {
     const settled = await hooks.toolBefore(facts(initialDate), { contracts: { arguments: dates } });
-    assert.equal(settled.errors.length, 1);
-    assert.equal(settled.input.toISOString(), initialDate.toISOString());
+    assert.equal(settled.diagnostics.filter(d => d.phase !== "observation").length, 1);
+    assert.equal(settled.event.tool.input.toISOString(), initialDate.toISOString());
     assert.deepEqual(seen[1].params.event.tool.input, { at: initialDate.toISOString() });
+  } finally { await hooks.close(); }
+});
+
+test('decoded candidate is the sole effective return execution representation', async () => {
+  const dates = { decode(value) { return new Date(value.at); }, encode(value) { return { at: value.toISOString() }; } };
+  const wire = { at: '2026-01-01T00:00:00.000Z' };
+  const hooks = client([[modify({ count: 2 }), returned(wire)]]);
+  try {
+    const settled = await hooks.toolBefore(facts(initial()), { contracts: { arguments: args, result: dates } });
+    assert.deepEqual(settled.effects, []);
+    assert.equal(settled.state.candidate.value instanceof Date, true);
+    assert.equal(settled.state.candidate.value.toISOString(), wire.at);
+    assert.equal(settled.event.tool.input.count, 2);
+    assert.deepEqual(settled.acceptedResponses[0].result.effects, [modify({ count: 2 }), returned(wire)]);
+  } finally { await hooks.close(); }
+});
+
+test('equal reordered nested JSON input preserves the accepted candidate', async () => {
+  const input = { count: 1, nested: { a: 1, b: 2 } };
+  const hooks = client([[returned('retained')], [{ type: 'modify', target: 'input', operation: 'replace', value: { nested: { b: 2, a: 1 }, count: 1 } }]]);
+  try {
+    const settled = await hooks.toolBefore(facts(input));
+    assert.deepEqual(settled.state.candidate.value, 'retained');
+    assert.deepEqual(settled.effects, []);
+    assert.equal(settled.acceptedResponses.length, 2);
+  } finally { await hooks.close(); }
+});
+
+test('fail-closed delivery clears a previously accepted candidate without discarding evidence', async () => {
+  const hooks = new Hooks({ protocolVersion: 'draft', hooks: [0, 1].map(index => ({
+    id: `test.failclosed.backend${index}`, transport: { type: 'http', url: `https://backend${index}.test/hooks` },
+    subscriptions: [{ mode: 'intercept', events: ['tool.before'], timeoutMs: 1000, failurePolicy: 'fail-closed', content: { default: 'metadata' } }],
+  })) }, { source: 'urn:test:failclosed', capabilities: { toolBefore: {intercept: {returnResult: true}} }, fetch: async (url, init) => {
+    if (String(url).includes('backend1')) throw Error('delivery unavailable');
+    const request = JSON.parse(init.body);
+    return Response.json({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: 'draft', effects: [returned('cached')] } });
+  } });
+  try {
+    const settled = await hooks.toolBefore(facts(initial()));
+    assert.equal(settled.state.candidate, null);
+    assert.equal(settled.state.permission, 'deny');
+    assert.equal(settled.acceptedResponses.length, 1);
+    assert.deepEqual(settled.acceptedResponses[0].result.effects, [returned('cached')]);
+    assert.equal(settled.diagnostics[0].syntheticDenial, true);
+    assert.equal(settled.effects[0].type, 'deny');
   } finally { await hooks.close(); }
 });

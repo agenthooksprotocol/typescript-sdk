@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
-const { Hooks } = await import(
+const { capabilityCount, Hooks } = await import(
   require.resolve("agenthooksprotocol/client")
 );
 const { hooks } = await import(
@@ -46,13 +46,34 @@ function setup(responses, failurePolicy = "fail-open") {
     },
     {
       source: "urn:test:final-state",
-      capabilities: { "tool.before": caps, "session.start": { effects: [] } },
+      capabilities: {
+        toolBefore: {
+          intercept: {
+            allow: true,
+            deny: true,
+            returnResult: true,
+            modifyInput: "replace-and-merge",
+          },
+        },
+        sessionStart: {
+          intercept: {
+            message: true,
+          },
+        },
+      },
       fetch: async (url, init) => {
         const response = responses[Number(new URL(url).pathname.slice(1))];
         if (typeof response === "function") return response();
-        return hooks.handle(new Request(url, init), () => ({
-          effects: response,
-        }));
+        return hooks.handle(new Request(url, init), {
+          intercept: {
+            toolBefore: () => ({
+              effects: response,
+            }),
+            sessionStart: () => ({
+              effects: response,
+            }),
+          },
+        });
       },
     },
   );
@@ -71,13 +92,14 @@ test("final state exposes accepted candidate and is detached from effects and in
   const result = await run([[{ type: "return", value: { answer: [42] } }]], {
     initialState,
   });
-  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.deepEqual(result.state, {
     ...seed(),
     candidate: { value: { answer: [42] } },
   });
   assert.deepEqual(initialState, seed());
-  result.response.result.effects[0].value.answer.push(43);
+  assert.deepEqual(result.effects, []);
+  assert.throws(() => result.acceptedResponses[0].result.effects[0].value.answer.push(43), TypeError);
   initialState.instructions.push("changed");
   assert.deepEqual(result.state.candidate.value.answer, [42]);
   assert.deepEqual(result.state.instructions, ["existing"]);
@@ -122,7 +144,7 @@ test("final state reflects candidate invalidation rather than replaying earlier 
     ],
   ]) {
     const result = await run(responses, { initialState: seed() });
-    assert.deepEqual(result.errors, []);
+    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
     assert.equal(result.state.candidate, null);
     assert.equal(result.state.permission, "none");
     assert.equal(result.event.tool.input.x, 2);
@@ -169,7 +191,7 @@ test("rejected responses and fail-open errors preserve the actual prior state", 
     ],
   ]) {
     const result = await run(responses, { initialState: seed() });
-    assert.equal(result.errors.length, 1);
+    assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
     assert.deepEqual(result.state, seed());
     assert.equal(result.event.tool.input.x, 1);
   }
@@ -215,7 +237,7 @@ test("interruption retains last accepted state but does not grant execution", as
   assert.equal(result.state.candidate.value, 42);
   assert.equal(result.state.permission, "allow");
   assert.ok(
-    !result.response.result.effects.some(
+    !result.effects.some(
       (e) => e.type === "return" || e.type === "allow",
     ),
   );
@@ -244,22 +266,31 @@ test("final-state projection does not append continuation instructions twice", a
     {
       source: "urn:test:final-state",
       capabilities: {
-        "turn.finish.before": {
-          effects: ["flow"],
-          flow: {
-            operations: ["continue"],
-            continuationCount: 0,
-            maxContinuations: 2,
-            remainingContinuations: 2,
+        turnFinishBefore: {
+          intercept: {
+            flow: {
+              operations: ["continue"],
+              continuationCount: capabilityCount(0),
+              maxContinuations: capabilityCount(2),
+              remainingContinuations: capabilityCount(2),
+            },
           },
         },
       },
       fetch: async (url, init) =>
-        hooks.handle(new Request(url, init), () => ({
-          effects: [
-            { type: "flow", operation: "continue", instruction: "Check once" },
-          ],
-        })),
+        hooks.handle(new Request(url, init), {
+          intercept: {
+            turnFinishBefore: () => ({
+              effects: [
+                {
+                  type: "flow",
+                  operation: "continue",
+                  instruction: "Check once",
+                },
+              ],
+            }),
+          },
+        }),
     },
   );
   try {
@@ -279,7 +310,10 @@ test("final-state projection does not append continuation instructions twice", a
         },
       },
     );
-    assert.deepEqual(result.errors, []);
+    assert.deepEqual(
+      result.diagnostics.filter((d) => d.phase !== "observation"),
+      [],
+    );
     assert.equal(result.state.flow, "continue");
     assert.deepEqual(result.state.instructions, ["Earlier", "Check once"]);
     assert.ok(Object.isFrozen(result.state.instructions));
