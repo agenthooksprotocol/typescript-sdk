@@ -287,7 +287,9 @@ await serveStdio(handlers);
 ```
 
 Intercept replies are correlated to their callback event; `{}` is a valid no-op.
-Observation callbacks return void and cannot return controls. The server owns
+Observation callbacks return void and cannot return controls. An optional
+`observe.any(ctx)` catch-all receives every validated observe notification whose
+event has no observer of its own; narrow it with `ctx.event.type`. The server owns
 JSON-RPC envelope IDs and protocol version. It validates complete replies against
 the event and the request's dynamic grants; types do not grant execution authority.
 Applications own HTTP authentication and routing.
@@ -313,8 +315,12 @@ Serving is sequential and respects output backpressure. The returned promise
 resolves after EOF and the final write, without closing stdout or exiting the
 process. Use dedicated streams for a serving session. Errors reject the promise
 without fabricated replies; failure or abort destroys both streams. Long-running
-handlers should honor `request.signal` for cooperative cancellation. The Node-only subpath keeps `node:` imports out of the
-Web server entrypoint.
+handlers should honor `request.signal` for cooperative cancellation.
+
+`serveStdio` is imported from `agenthooksprotocol/server/stdio`, not from
+`agenthooksprotocol/server`. The Node-only subpath keeps `node:` imports out of
+the Web server entrypoint, so edge and browser bundles can import
+`agenthooksprotocol/server` without Node built-ins.
 
 ## Typed caller contracts
 

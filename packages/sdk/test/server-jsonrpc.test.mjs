@@ -213,3 +213,43 @@ test("stdio requests carry the corrected error codes", async () => {
     ],
   );
 });
+
+test("catch-all observer runs only when the event has no observer of its own", async () => {
+  const seen = [];
+  const handlers = {
+    observe: {
+      toolAfter: () => assert.fail("other event"),
+      any(ctx) {
+        seen.push([ctx.event.type, ctx.notification.method]);
+      },
+    },
+  };
+  const response = await hooks.handle(request(observe()), handlers);
+  assert.equal(response.status, 204);
+  assert.deepEqual(seen, [["tool.before", "hooks/observe"]]);
+  handlers.observe.toolBefore = () => {
+    seen.push("own");
+  };
+  assert.equal((await hooks.handle(request(observe()), handlers)).status, 204);
+  assert.deepEqual(seen.at(-1), "own");
+  assert.equal(seen.length, 2);
+});
+
+test("catch-all observer failures and returned values match per-event observers", async () => {
+  for (const any of [
+    () => {
+      throw new Error("Bearer SECRET");
+    },
+    () => ({ effects: [] }),
+  ]) {
+    const response = await hooks.handle(request(observe()), {
+      observe: { any },
+    });
+    assert.equal(response.status, 500);
+    assert.equal(await response.text(), "");
+  }
+  const intercepted = await hooks.handle(request(intercept()), {
+    observe: { any: () => assert.fail("intercept") },
+  });
+  assert.equal((await intercepted.json()).error.code, -32002);
+});

@@ -111,7 +111,7 @@ function supported(
 
 /** Handle one HTTP POST. The application owns authentication and routing.
  * Observe callbacks return void. No notification receives a JSON-RPC reply; a
- * known observe event without an observer is accepted with 204.
+ * known observe event without its own or an `any` observer is accepted with 204.
  * HTTP framing errors use 4xx; evaluated RPC failures use 200. Missing
  * capabilities handlers are -32601, intercepts without a handler -32002,
  * callback exceptions and invalid callback results -32004, and SDK-internal
@@ -202,7 +202,8 @@ async function handle(request: Request, handlers: ServerHandlers): Promise<Respo
       if (!name) throw unsupportedEvent;
       if (message.method === "hooks/observe") {
         const observations = handlers.observe as Record<string, unknown> | undefined;
-        const callback = observations?.[name];
+        const own = observations?.[name];
+        const callback = typeof own === "function" ? own : observations?.any;
         // A known event without an observer is accepted silently, like any notification.
         if (typeof callback !== "function") return new Response(null, { status: 204 });
         result = await invoke(() =>
