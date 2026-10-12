@@ -357,6 +357,26 @@ caller-supplied fetch adapter. The adapter owns network policy and authenticatio
 close the transport to release its processes and pending requests. Transport
 handling validates envelopes, not application contracts or boundary admission.
 
+A persistent stdio backend has one reader that routes replies by JSON-RPC ID.
+Well-formed replies for no pending request are discarded. A malformed frame
+(non-JSON, invalid UTF-8, an empty line, or anything that is not one JSON-RPC
+response) is discarded too. It fails the request it names, or else the single
+in-flight request (stdio calls are serialized), with `HookOperationalError`;
+the process keeps running. Three consecutive malformed frames terminate the
+backend; the next request starts a new process. Per-event backends still fail on the first bad frame. Both cases are
+published, without frame content, as `StdioDiagnostic` messages on the
+`node:diagnostics_channel` named by `STDIO_DIAGNOSTICS_CHANNEL`:
+
+```ts
+import { subscribe } from "node:diagnostics_channel";
+import { STDIO_DIAGNOSTICS_CHANNEL, type StdioDiagnostic } from "agenthooksprotocol/client";
+
+subscribe(STDIO_DIAGNOSTICS_CHANNEL, (message) => {
+  const { backendId, kind, strikes } = message as StdioDiagnostic;
+  console.error(`stdio backend ${backendId}: ${kind} frame (${strikes} consecutive malformed)`);
+});
+```
+
 ## Packages
 
 - `agenthooksprotocol/client` — configuration-driven harness client, typed event boundaries, and HTTP/stdio delivery

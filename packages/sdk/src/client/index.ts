@@ -20,7 +20,8 @@ export type {
 } from "./auth.js";
 export { Attachment, AttachmentContent, ContentManager } from "./content.js";
 export type { ContentUploadRequest, ContentManagerOptions } from "./content.js";
-export { BackendTransport } from "./transport.js";
+export { BackendTransport, STDIO_DIAGNOSTICS_CHANNEL } from "./transport.js";
+export type { StdioDiagnostic } from "./transport.js";
 
 // Canonical schema models are intentional advanced APIs. Host projection and
 // upload/composition coordination remain implementation details.
