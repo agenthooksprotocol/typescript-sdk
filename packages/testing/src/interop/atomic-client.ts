@@ -120,7 +120,7 @@ export async function runAtomicInterop(): Promise<AtomicRow[]> {
               headers: { "content-type": "application/json" },
               body,
             }),
-            () => result,
+            { intercept: { toolBefore: () => result } },
           );
           response.writeHead(handled.status, {
             "content-type": "application/json",
@@ -164,7 +164,7 @@ export async function runAtomicInterop(): Promise<AtomicRow[]> {
         {
           source: "urn:ahp:interop",
           capabilities: {
-            "tool.before": scenario.subscribers[0]!.capabilities,
+            toolBefore: { intercept: { deny: true, allow: true, ask: true, message: true, returnResult: true, modifyInput: "replace-and-merge" } },
           },
           auth: auth(),
         },
@@ -199,6 +199,7 @@ export async function runAtomicInterop(): Promise<AtomicRow[]> {
             },
           },
           {
+            capabilities: scenario.subscribers[0]!.capabilities,
             initialState: {
               permission: scenario.initial.denied
                 ? "deny"

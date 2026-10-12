@@ -35,14 +35,8 @@ function client({
     {
       source: "urn:test:operation",
       capabilities: {
-        "session.end": { modes: ["observe"] },
-        "tool.before": {
-          modes: ["intercept", "observe"],
-          capabilities: {
-            effects: ["allow", "modify"],
-            modify: { input: { replace: true, merge: false } },
-          },
-        },
+        sessionEnd: {observe: true},
+        toolBefore: {intercept: {allow: true, modifyInput: "replace"}, observe: true},
       },
       fetch,
       auth,
@@ -411,7 +405,7 @@ test(
       },
       {
         source: "urn:test:reaping",
-        capabilities: { "tool.before": { effects: [] } },
+        capabilities: { toolBefore: {intercept: {deny: true}} },
       },
     );
     const active = new AbortController(),

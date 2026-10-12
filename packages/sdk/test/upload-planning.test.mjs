@@ -12,9 +12,7 @@ const backend = (i, subscriptions = [subscription()]) => ({ id: `test.planning.b
   transport: { type: 'http', url: `https://backend${i}.test/hooks` }, subscriptions });
 function client(t, backends, fetch, options = {}) {
   const hooks = new Hooks({ protocolVersion: 'draft', hooks: backends }, {
-    source: 'urn:test:upload-planning', capabilities: { 'turn.start': {
-      modes: ['intercept', 'observe'], capabilities: { effects: ['deny'] },
-    } }, fetch, ...options,
+    source: 'urn:test:upload-planning', capabilities: { turnStart: {intercept: {deny: true}, observe: true} }, fetch, ...options,
   });
   t.after(() => hooks.close());
   return hooks;
@@ -100,7 +98,7 @@ for (const selection of ['metadata', 'omit']) test(`${selection} and unmatched b
     backend(1, [subscription({ events: ['tool.before'] })])], async (url, init) => {
     if (String(url).includes('upload.test')) { uploads++; return receipt(init); }
     calls++; return reply(JSON.parse(init.body));
-  }, { capabilities: { 'turn.start': { modes: ['intercept'], capabilities: { effects: [] } }, 'tool.before': { effects: [] } } });
+  }, { capabilities: { turnStart: {intercept: {deny: true}}, toolBefore: {intercept: {deny: true}} } });
   assert.deepEqual((await settle(t, hooks, input(lazy(() => { opens++; throw Error('no demand'); })))).diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(opens, 0); assert.equal(uploads, 0); assert.equal(calls, 1);
 });
@@ -188,9 +186,7 @@ test('attachment removal can waste preupload without reintroducing removed conte
     const wire = JSON.parse(init.body); wires.push(wire);
     return reply(wire, wires.length === 1 ? [{ type: 'modify', target: 'prompt', operation: 'replace',
       value: [{ id: 'replacement', role: 'user', parts: [{ id: 'text', kind: 'text', mediaType: 'text/plain', selection: 'body', text: 'removed' }] }] }] : []);
-  }, { capabilities: { 'turn.start': { modes: ['intercept', 'observe'], capabilities: {
-    effects: ['modify'], modify: { prompt: { replace: true, merge: false } },
-  } } } });
+  }, { capabilities: { turnStart: {intercept: {modifyPrompt: "replace"}, observe: true} } });
   const result = await settle(t, hooks, input(lazy()));
   assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(uploads, 2);
@@ -225,7 +221,7 @@ test('explicit mode grants reject unauthorized observation before any source or 
   const hooks = client(t, [backend(0, [{ mode: 'observe', events: ['turn.start'],
     content: { default: 'body' }, upload: subscription().upload }])], async () => {
     calls++; throw Error('unauthorized delivery');
-  }, { capabilities: { 'turn.start': { modes: ['intercept'], capabilities: { effects: [] } } } });
+  }, { capabilities: { turnStart: {intercept: {deny: true}} } });
   await assert.rejects(hooks.turnStart(input(lazy(() => { opens++; throw Error('unauthorized read'); }))),
     error => error.issues?.some(issue => issue.code === 'NOT_OBSERVABLE'));
   assert.equal(opens, 0); assert.equal(calls, 0);
@@ -235,7 +231,7 @@ test('no selected destinations leave a lazy source unread until explicit result 
   let opens = 0, closes = 0;
   const hooks = client(t, [backend(0, [subscription({ events: ['tool.before'] })])],
     async () => { throw Error('no destination'); }, { capabilities: {
-      'turn.start': { effects: [] }, 'tool.before': { effects: [] },
+      turnStart: {intercept: {deny: true}}, toolBefore: {intercept: {deny: true}},
     } });
   const result = await settle(t, hooks, input(lazy(() => { opens++; throw Error('no demand'); }, () => { closes++; })));
   assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
@@ -281,9 +277,7 @@ for (const substitute of [false, true]) test(substitute ? 'effects cannot substi
     items[0].parts.reverse();
     if (substitute) items[0].parts[0].body.ref = 'https://foreign.test/created';
     return reply(wire, [{ type: 'modify', target: 'prompt', operation: 'replace', value: items }]);
-  }, { capabilities: { 'turn.start': { modes: ['intercept', 'observe'], capabilities: {
-    effects: ['modify'], modify: { prompt: { replace: true, merge: false } },
-  } } } });
+  }, { capabilities: { turnStart: {intercept: {modifyPrompt: "replace"}, observe: true} } });
   const result = await settle(t, hooks, input(lazy(() => new Uint8Array([1])), lazy(() => new Uint8Array([2]))));
   assert.equal(uploads, 4);
   if (substitute) {

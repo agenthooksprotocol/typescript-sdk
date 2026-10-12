@@ -1,6 +1,6 @@
 // @ts-check
 import { sdkClient } from "./common.mjs";
-const { Hooks, auth: sdkAuth, BackendTransport } = sdkClient;
+const { Hooks, auth: sdkAuth, BackendTransport, capabilityCount } = sdkClient;
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Readable } from "node:stream";
 import { readFileSync } from "node:fs";
@@ -232,6 +232,38 @@ export function sendStatus(endpoint, path, payload, auth, token) {
   });
 }
 
+/** Explicit controls for the security matrix's two interception boundaries.
+ * Runtime dispatch retains the original fixture grants, including ordering.
+ * @param {any} payload
+ * @returns {import("agenthooksprotocol/client").HostCapabilities}
+ */
+function securityHostCapabilities(payload) {
+  const flow = payload.params.capabilities?.flow;
+  /** @type {import("agenthooksprotocol/client").CapabilityInjection} */
+  const injection = { context: { append: true, deliverAt: /** @type {const} */ (["now", "next_turn"]) } };
+  if (payload.params.event.type === "tool.before") {
+    return { toolBefore: { observe: true, intercept: {
+      deny: true, allow: true, ask: true, message: true, returnResult: true,
+      modifyInput: "replace-and-merge", flow: { operations: ["stop"] },
+      inject: injection,
+    } } };
+  }
+  if (payload.params.event.type === "turn.finish.before") {
+    return { turnFinishBefore: { observe: true, intercept: {
+      message: true,
+      flow: {
+        operations: ["stop", "continue"],
+        remainingContinuations: capabilityCount(flow?.remainingContinuations ?? 2),
+        continuationCount: capabilityCount(flow?.continuationCount ?? 0),
+        ...(flow?.maxContinuations === undefined ? {} : {
+          maxContinuations: capabilityCount(flow.maxContinuations),
+        }),
+      },
+      inject: injection,
+    } } };
+  }
+  throw Error("Unsupported security fixture boundary");
+}
 /** Compatibility boundary bridge; the SDK owns event framing and response validation. */
 export async function send(endpoint, path, payload, config, token) {
   if (["hooks/intercept", "hooks/observe"].includes(payload?.method)) {
@@ -259,9 +291,7 @@ export async function send(endpoint, path, payload, config, token) {
       },
       {
         source: event.source,
-        capabilities: observe
-          ? { [event.type]: { modes: ["observe"] } }
-          : { [event.type]: payload.params.capabilities },
+        capabilities: securityHostCapabilities(payload),
         fetch: fixtureFetch(config, new URL(path, endpoint).href),
         auth: token
           ? sdkAuth({ authenticate: async () => ({ token }) })
@@ -270,7 +300,10 @@ export async function send(endpoint, path, payload, config, token) {
     );
     try {
       const { type, source, ...input } = event;
-      const result = await client.dispatch(type, input);
+      const result = await client.dispatch(type, input, {
+        ...(!observe ? { capabilities: payload.params.capabilities } : {}),
+        initialState: payload.params.state,
+      });
       const errors = result.diagnostics;
       if (errors.length)
         throw Object.assign(Error("SDK delivery failed"), { errors });

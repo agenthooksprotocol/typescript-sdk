@@ -47,48 +47,61 @@ function scenario() {
       source: "urn:test:interruption",
       observationTimeoutMs: 3000,
       capabilities: {
-        "tool.before": {
-          modes: ["intercept", "observe"],
-          capabilities: {
-            effects: ["deny", "modify", "message", "allow", "return"],
-            modify: { input: { merge: true, replace: false } },
+        toolBefore: {
+          intercept: {
+            deny: true,
+            message: true,
+            allow: true,
+            returnResult: true,
+            modifyInput: "merge",
           },
+          observe: true,
         },
       },
       fetch: (url, init) =>
-        hooks.handle(new Request(url, init), async (message) => {
-          messages.push(structuredClone(message));
-          if (message.method === "hooks/observe") {
-            await releaseObservers.promise;
-            return;
-          }
-          intercepts++;
-          if (intercepts === 1)
-            return {
-              effects: [
-                {
-                  type: "modify",
-                  target: "input",
-                  operation: "merge",
-                  value: { x: 2 },
-                },
-                { type: "allow" },
-                { type: "return", value: "cached" },
-              ],
-            };
-          pending.resolve();
-          await releasePending.promise;
-          return {
-            effects: [
-              {
-                type: "modify",
-                target: "input",
-                operation: "merge",
-                value: { x: 999 },
-              },
-              { type: "message", text: "discarded pending response" },
-            ],
-          };
+        hooks.handle(new Request(url, init), {
+          intercept: {
+            toolBefore: async ({ request: message }) => {
+              messages.push(structuredClone(message));
+              if (message.method === "hooks/observe") {
+                await releaseObservers.promise;
+                return;
+              }
+              intercepts++;
+              if (intercepts === 1)
+                return {
+                  effects: [
+                    {
+                      type: "modify",
+                      target: "input",
+                      operation: "merge",
+                      value: { x: 2 },
+                    },
+                    { type: "allow" },
+                    { type: "return", value: "cached" },
+                  ],
+                };
+              pending.resolve();
+              await releasePending.promise;
+              return {
+                effects: [
+                  {
+                    type: "modify",
+                    target: "input",
+                    operation: "merge",
+                    value: { x: 999 },
+                  },
+                  { type: "message", text: "discarded pending response" },
+                ],
+              };
+            },
+          },
+          observe: {
+            toolBefore: async ({ notification: message }) => {
+              messages.push(structuredClone(message));
+              await releaseObservers.promise;
+            },
+          },
         }),
     },
   );

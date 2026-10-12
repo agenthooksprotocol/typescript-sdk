@@ -3,7 +3,32 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { sdkClient, sdkDraft } from "./common.mjs";
 import { summarizeAccepted, matches } from "./evaluator.mjs";
-const { Hooks } = sdkClient;
+const { Hooks, capabilityCount } = sdkClient;
+
+// Explicit host controls for the canonical summary matrix's two boundaries.
+// Each dispatch retains the fixture's narrower wire grant verbatim.
+function summaryCapabilities(eventType) {
+  if (eventType === "tool.before") return {
+    toolBefore: { intercept: {
+      deny: true, allow: true, ask: true, message: true, returnResult: true,
+      modifyInput: "replace-and-merge",
+      flow: { operations: ["stop"] },
+      inject: { context: { append: true, deliverAt: ["now", "next_turn"] } },
+    } },
+  };
+  if (eventType === "turn.finish.before") return {
+    turnFinishBefore: { intercept: {
+      message: true,
+      flow: {
+        operations: ["stop", "continue"],
+        remainingContinuations: capabilityCount(2),
+        continuationCount: capabilityCount(0),
+        maxContinuations: capabilityCount(2),
+      },
+    } },
+  };
+  throw Error(`Unexpected summary fixture boundary: ${eventType}`);
+}
 
 test("canonical summaries distinguish SDK protocol rejection from userland tool-schema rejection", async () => {
   const { scenarios } = JSON.parse(
@@ -36,7 +61,7 @@ test("canonical summaries distinguish SDK protocol rejection from userland tool-
       },
       {
         source: event.source,
-        capabilities: { [event.type]: row.request.params.capabilities },
+        capabilities: summaryCapabilities(event.type),
         fetch: async (_url, init) => {
           const request = JSON.parse(init.body);
           return Response.json({
@@ -50,6 +75,7 @@ test("canonical summaries distinguish SDK protocol rejection from userland tool-
     try {
       const result = await client.dispatch(event.type, event, {
         initialState: row.request.params.state,
+        capabilities: row.request.params.capabilities,
       });
       const hostRejected =
         result.event.type === "tool.before" &&

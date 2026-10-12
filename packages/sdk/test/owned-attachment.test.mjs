@@ -13,8 +13,8 @@ function client(mode, extra = {}) {
       failurePolicy: 'fail-closed', content: { default: mode ?? "metadata" },
       upload: { endpoint: 'https://example.test/upload', maxBytes: 100, timeoutMs: 100 } }],
   })) }, { source: 'urn:example:attachments', capabilities: {
-    "tool.before": { modes: ["intercept"], capabilities: { effects: [] } },
-    [type]: { modes: ['intercept'], capabilities: { effects: [] } },
+    toolBefore: {intercept: {deny: true}},
+    turnStart: { intercept: { deny: true } },
   }, fetch: async (_, init) => Response.json({ jsonrpc: '2.0', id: JSON.parse(init.body).id,
     result: { protocolVersion: 'draft', effects: [] } }), ...extra });
 }
@@ -146,7 +146,7 @@ test('throwing disposer cannot retain invocation bookkeeping', async () => {
 test('result accessor reflects accepted text edits without mutating original input', async () => {
   const original = input(Attachment.bytes(new TextEncoder().encode('original')));
   const hooks = client('metadata', {
-    capabilities: { [type]: { effects: ['modify'], modify: { prompt: { replace: true, merge: false } } } },
+    capabilities: { turnStart: { intercept: { modifyPrompt: 'replace' } } },
     fetch: async (_, init) => Response.json({ jsonrpc: '2.0', id: JSON.parse(init.body).id,
       result: { protocolVersion: 'draft', effects: [{ type: 'modify', target: 'prompt', operation: 'replace', value: [{ id: 'replacement-message', role: 'user', parts: [{ id: 'instructions', kind: 'text', mediaType: 'text/plain', selection: 'body', text: 'replacement' }] }] }] } }),
   });
@@ -266,7 +266,7 @@ test('explicit native-stream attachments retain the same unopened owner', async 
 test('failed cleanup before result handoff also releases detached result owners', async () => {
   let replacement;
   const hooks = client('metadata', {
-    capabilities: { [type]: { effects: ['modify'], modify: { prompt: { replace: true, merge: false } } } },
+    capabilities: { turnStart: { intercept: { modifyPrompt: 'replace' } } },
     fetch: async (_, init) => {
       const manager = [...hooks.managers][0];
       manager.transfer = content => {

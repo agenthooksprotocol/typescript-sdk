@@ -4,7 +4,7 @@ export { SettlementDecodeError } from "./settlement.js";
 export { ConfigurationError } from "./types.js";
 export type {
   Event, EventType, HarnessValue, HarnessEvent, BoundaryInput, EventInput,
-  EventGrant, EventCapabilities, HooksOptions, BoundaryOptions, DeliveryDiagnostic,
+  HooksOptions, BoundaryOptions, DeliveryDiagnostic,
   BoundaryState, BoundaryResult, AcceptedResponse, ConfigurationIssue,
 } from "./types.js";
 export { Type } from "@sinclair/typebox";
@@ -312,13 +312,11 @@ export type {
   StateCandidate,
   Candidate,
   ElicitResult,
-  CapabilityDeclaration,
-  CapabilityObservation,
-  CapabilityModifyOperations,
+  HostCapabilities, CapabilityCount, CapabilityFlow, CapabilityInjection, CapabilityElicitation, CapabilityObservation,
   CapabilityFlowOperation,
   CapabilityDelivery,
 } from "../draft/types.js";
 export {
-  Permission, state, effects, capabilities, events, CapabilityBuilder,
+  Permission, state, effects, events, capabilityCount,
   effectNames, supports,
 } from "../draft/public.js";

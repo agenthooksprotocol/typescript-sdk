@@ -165,3 +165,31 @@ void hooks.toolBefore(input).then(result => {
 const staticInterest: boolean = hooks.subscribes('tool.before');
 const unknownInterest: boolean = hooks.subscribes('future.event');
 void [staticInterest, unknownInterest];
+
+import type { HostCapabilities } from 'agenthooksprotocol/client';
+const metadata: NonNullable<import('agenthooksprotocol/client').HooksOptions['manifestMetadata']> = {
+  authentication: ['bearer'], transports: ['http'], contentCategories: ['text'],
+  correlationIdentityFields: ['call.id'], gaps: [], limits: { maxUploadBytes: 4096 },
+  managedPolicy: { disableable: false, scopes: ['project'] }, toolPaths: ['native'],
+  extension: { settings: true },
+};
+// @ts-expect-error Metadata cannot advertise event grants or observation interest.
+metadata.events = [{ event: 'tool.before', modes: ['intercept'], capabilities: { effects: ['deny'] } }];
+new Hooks({}, { source: 'urn:test:metadata', capabilities: {}, manifestMetadata: metadata });
+
+// @ts-expect-error Generic capability builders are not a client API.
+import { CapabilityBuilder, capabilities } from 'agenthooksprotocol/client';
+// @ts-expect-error Canonical wire grants are not high-level host declarations.
+import type { EventGrant, EventCapabilities } from 'agenthooksprotocol/client';
+const host = { sessionStart: { observe: true }, toolBefore: { intercept: { allow: true, deny: true, returnResult: true, modifyInput: 'replace-and-merge' }, observe: true } } satisfies HostCapabilities;
+const elicitationFacility = { userElicitationRequest: { intercept: { elicitation: { form: true } } } } satisfies HostCapabilities;
+// @ts-expect-error Empty interception grants no facility.
+const emptyIntercept = { toolBefore: { intercept: {} } } satisfies HostCapabilities;
+// @ts-expect-error Entries need interception or explicit observation.
+const missingMode = { toolBefore: {} } satisfies HostCapabilities;
+// @ts-expect-error Observation-only events cannot intercept.
+const wrongMode = { sessionEnd: { intercept: { deny: true } } } satisfies HostCapabilities;
+const widerWrongTarget = { toolBefore: { intercept: { deny: true as const, modifySummary: 'replace' as const } } };
+// @ts-expect-error Unsupported known capabilities remain forbidden through a wider variable.
+const wrongTarget = widerWrongTarget satisfies HostCapabilities;
+void [host, elicitationFacility, emptyIntercept, missingMode, wrongMode, wrongTarget];

@@ -158,7 +158,7 @@ test("HTTP authorization is independent of JSON-RPC correlation and event identi
       },
       {
         source: "urn:interop:upload",
-        capabilities: { "user.message.inbound": { effects: [] } },
+        capabilities: { userMessageInbound: { intercept: { deny: true } } },
         auth: clientAuth("bearer", origin),
       },
     );
@@ -184,7 +184,7 @@ test("HTTP authorization is independent of JSON-RPC correlation and event identi
             },
           ] }],
         },
-      });
+      }, { capabilities: { effects: [] } });
       assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
       assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
       assert.equal(result.interrupted, false);

@@ -51,6 +51,53 @@ if (hooks.subscribes("tool.before")) {
 }
 ```
 
+## Typed host capabilities and server handlers
+
+Declare capabilities as plain objects checked by `HostCapabilities`:
+
+```ts
+import type { HostCapabilities } from "agenthooksprotocol/client";
+const capabilities = {
+  sessionStart: { observe: true },
+  toolBefore: {
+    intercept: { allow: true, deny: true, returnResult: true, modifyInput: "replace-and-merge" },
+    observe: true,
+  },
+} satisfies HostCapabilities;
+```
+
+Event-specific fields exclude unsupported controls and require at least one
+interception control or facility, or explicit observation. The SDK transfers
+these typed declarations directly into canonical grants without JSON reparsing.
+Use `capabilityCount` for dependent flow counts. Dynamic request grants and host
+execution permission remain runtime checks.
+
+`HooksOptions.manifestMetadata` supplies non-event advertisements such as
+authentication methods, transports, policy scopes, limits, and opaque extensions.
+Hooks owns a synchronous copy. Metadata cannot contain `events`; generated
+capability declarations exclusively determine event grants and subscription
+interest. Opaque metadata is not traversed as attachment content.
+
+Server callbacks use separate event-correlated phase maps:
+
+```ts
+import { effect, type ServerHandlers } from "agenthooksprotocol/server";
+const handlers = {
+  intercept: {
+    toolBefore(ctx) {
+      return { effects: [effect.replaceInput({ ...ctx.event.tool.input, limit: 10 }), effect.allow()] };
+    },
+  },
+  observe: { sessionEnd(ctx) { console.error(ctx.event.type); } },
+} satisfies ServerHandlers;
+```
+
+Pass this object to `hooks.handle(request, handlers)` for HTTP or
+`serveStdio(handlers, options)` for stdio. Both share canonical admission and
+server-owned envelope correlation. Empty intercept replies are valid no-ops;
+observations return void. Complete reply effects retain their order and opaque
+extensions. Applications own authentication and routing.
+
 ## Typed caller contracts
 
 Use `Type`, `contract`, and `form` from `agenthooksprotocol/client` to declare

@@ -41,14 +41,14 @@ async function dispatch(
     {
       source: "urn:test:terminals",
       capabilities: {
-        [type]: {
-          effects: ["return", "deny", "message"],
+        [type.replace(/\.([a-z])/g, (_, letter) => letter.toUpperCase())]: { intercept: {
+          returnResult: true, deny: true, message: true,
           ...(type === "user.elicitation.request"
-            ? modeGrants === null
+            ? modeGrants === null || Object.keys(modeGrants).length === 0
               ? {}
-              : { elicitation: modeGrants }
+              : { elicitation: Object.fromEntries(Object.keys(modeGrants).map(mode => [mode, true])) }
             : {}),
-        },
+        } },
       },
       fetch: async (url, init) => {
         if (String(url).endsWith("/upload")) {

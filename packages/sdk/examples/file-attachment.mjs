@@ -7,7 +7,7 @@ if (!configPath || !documentPath) throw Error('Expected hooks.json and binary do
 const hooks = new Hooks(JSON.parse(await readFile(configPath, 'utf8')), {
   source: 'urn:example:document-agent',
   maxContentBytes: 4 * 1024 * 1024,
-  capabilities: { 'turn.start': { modes: ['intercept'], effects: ['deny'] } },
+  capabilities: { turnStart: {intercept: {deny: true}} },
 });
 let result;
 try {

@@ -149,3 +149,17 @@ identity for one request. These are distinct responsibilities, not aliases.
 Generic dispatch content parts require canonical `selection`; omission is not
 silently decoded as a selected body. Named host inputs use the generated host
 projection to create their canonical envelope and content selections.
+
+## Typed declaration and server assembly
+
+`HooksOptions.capabilities` uses readonly camel-keyed `HostCapabilities`. Event
+entries declare interception facilities and explicit observation; the generated
+`hostCapabilitiesToWire` projection supplies canonical event grants without JSON
+parsing. Dependent flow counts use validated `CapabilityCount` values. External
+registration, authentication, and network policy still require runtime admission.
+
+Server `intercept` and `observe` maps use generated event families to correlate
+contexts and replies. `effect` helpers construct literal values, not authority.
+HTTP `hooks.handle` and `serveStdio` use one admission core that preserves trusted
+correlation and checks dynamic request grants. Empty intercept replies are valid
+no-ops; observation callbacks return void and cannot return controls.

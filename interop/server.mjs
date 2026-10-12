@@ -4,6 +4,8 @@ import { TaskLineage } from "./task-lineage.mjs";
 import { createServer } from "node:http";
 import { createServer as tlsServer } from "node:https";
 import { readFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+import { Readable } from "node:stream";
 import { sdkDraft, sdkServer, sdkStdio } from "./common.mjs";
 const {
   validateInterceptRequest,
@@ -39,15 +41,71 @@ const tlsRejectionCodes = {};
 if (!validateCapabilities(discovery).ok)
   throw Error("Invalid discovery capabilities");
 // All ordinary messages use the same public Web handler on either transport.
-const handleRequest = (request) =>
-  sdkServer.hooks.handle(request, async (message) => {
-    if (message.method === "hooks/capabilities") return { manifest };
-    if (message.method === "hooks/observe") return;
-    const decoded = validateInterceptResponse(await fixtureResult(message));
-    if (!decoded.ok) throw Error("Invalid fixture result");
-    const { protocolVersion, ...fields } = decoded.value.result;
-    return fields;
-  });
+const fixtureHandler = async (ctx) => {
+  const decoded = validateInterceptResponse(await fixtureResult(ctx.request));
+  if (!decoded.ok) throw Error("Invalid fixture result");
+  const { protocolVersion, ...fields } = decoded.value.result;
+  return fields;
+};
+const handlers = {
+  intercept: {
+    configChangeBefore: fixtureHandler,
+    contextCompactAfter: fixtureHandler,
+    contextCompactBefore: fixtureHandler,
+    modelRequestBefore: fixtureHandler,
+    modelResponseAfter: fixtureHandler,
+    modelSwitchBefore: fixtureHandler,
+    sessionStart: fixtureHandler,
+    taskChangeBefore: fixtureHandler,
+    toolAfter: fixtureHandler,
+    toolBatchAfter: fixtureHandler,
+    toolBefore: fixtureHandler,
+    toolPermissionRequest: fixtureHandler,
+    turnFinishBefore: fixtureHandler,
+    turnStart: fixtureHandler,
+    userElicitationRequest: fixtureHandler,
+    userElicitationResult: fixtureHandler,
+    userMessageInbound: fixtureHandler,
+    userMessageOutbound: fixtureHandler,
+    workspaceChangeBefore: fixtureHandler
+  },
+  capabilities: () => ({ manifest }),
+  observe: {
+    configChangeAfter: () => { },
+    fileChanged: () => { },
+    hookFailure: () => { },
+    modelError: () => { },
+    modelSwitchAfter: () => { },
+    sessionEnd: () => { },
+    taskChangeAfter: () => { },
+    toolPermissionResolved: () => { },
+    toolProgress: () => { },
+    turnEnd: () => { },
+    turnProgress: () => { },
+    userAttention: () => { },
+    workspaceChangeAfter: () => { },
+    configChangeBefore: () => { },
+    contextCompactAfter: () => { },
+    contextCompactBefore: () => { },
+    modelRequestBefore: () => { },
+    modelResponseAfter: () => { },
+    modelSwitchBefore: () => { },
+    sessionStart: () => { },
+    taskChangeBefore: () => { },
+    toolAfter: () => { },
+    toolBatchAfter: () => { },
+    toolBefore: () => { },
+    toolPermissionRequest: () => { },
+    turnFinishBefore: () => { },
+    turnStart: () => { },
+    userElicitationRequest: () => { },
+    userElicitationResult: () => { },
+    userMessageInbound: () => { },
+    userMessageOutbound: () => { },
+    workspaceChangeBefore: () => { }
+  }
+};
+const handleRequest = (request) => sdkServer.hooks.handle(request, handlers);
 /** @param {unknown} request */
 async function handleMessage(request) {
   const response = await handleRequest(
@@ -201,21 +259,32 @@ const endpoint =
     : "stdio";
 if (cfg.transport === "stdio") {
   // Start without awaiting so the independent HTTP control plane stays ready.
-  void sdkStdio
-    .serveStdio(async (request) => {
+  void (async () => {
+    const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+    for await (const line of lines) {
       let message;
       try {
-        message = await request.clone().json();
+        message = JSON.parse(line);
       } catch {
         // The public handler, not fixture routing, owns malformed input replies.
-        return handleRequest(request);
       }
       const row = rows.find((row) => row.id === message?.params?.event?.id);
-      // Only explicit adversarial fixtures bypass validation. Preserve their reply.
-      if (message?.method === "hooks/intercept" && row?.expectError)
-        return new Response(JSON.stringify(await fixtureResult(message)));
-      return handleRequest(request);
-    })
+      // Only explicit adversarial fixtures bypass validation. Preserve their reply
+      // and await its write before admitting the next line.
+      if (message?.method === "hooks/intercept" && row?.expectError) {
+        const text = JSON.stringify(await fixtureResult(message));
+        await new Promise((resolve, reject) =>
+          process.stdout.write(text.replace(/[\r\n]/g, " ") + "\n", (error) =>
+            error ? reject(error) : resolve(),
+          ),
+        );
+      } else {
+        await sdkStdio.serveStdio(handlers, {
+          stdin: Readable.from([line + "\n"]),
+        });
+      }
+    }
+  })()
     .then(
       () => process.exit(0),
       (error) => {

@@ -36,7 +36,7 @@ export async function runConformance(
     },
     {
       source: "urn:agenthooksprotocol:conformance:runner",
-      capabilities: { "tool.before": { effects: ["deny"] } },
+      capabilities: { toolBefore: { intercept: { deny: true } } },
     },
   );
   const checks: ConformanceReport["checks"] = [];

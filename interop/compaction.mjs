@@ -113,12 +113,12 @@ export async function runCompaction(
           return;
         }
         const row = rows[Number(req.url.slice(1))];
-        const invoke = async (message) => {
-          const event = message.params.event;
+        const invoke = async (ctx) => {
+          const event = ctx.event;
           const snapshot = structuredClone(state);
           if (row.boundary === "before") {
             snapshot.instructions = structuredClone(event.instructions);
-            const candidate = message.params.state?.candidate;
+            const candidate = ctx.state?.candidate;
             snapshot.candidate = candidate
               ? {
                   body: structuredClone(candidate.value),
@@ -139,7 +139,7 @@ export async function runCompaction(
             Object.assign(snapshot, { applied: true, generated, provenance });
           seen.push(structuredClone(snapshot));
           const effects = await row.run(snapshot);
-          return message.method === "hooks/observe" ? undefined : { effects };
+          return row.observation === true ? undefined : { effects };
         };
         // Explicit adversarial fixture escape hatch, never a positive response path.
         if (row.bypass === true) {
@@ -147,9 +147,13 @@ export async function runCompaction(
           response = Response.json({
             jsonrpc: "2.0",
             id: message.id,
-            result: { protocolVersion: "draft", ...(await invoke(message)) },
+            result: { protocolVersion: "draft", ...(await invoke({ event: message.params.event, state: message.params.state })) },
           });
-        } else response = await hooks.handle(request, invoke);
+        } else response = await hooks.handle(request, row.observation === true
+          ? { observe: { contextCompactAfter: invoke } }
+          : { intercept: row.boundary === "before"
+              ? { contextCompactBefore: invoke }
+              : { contextCompactAfter: invoke } });
         // Attribute only an authenticated, valid emitted response. A rejected
         // compound must not overwrite the supplier of an equal earlier value.
         if (row.bypass !== true && response.ok) {
@@ -203,13 +207,16 @@ export async function runCompaction(
     {
       source: "urn:ahp:compaction-host",
       capabilities: {
-        "context.compact.before": compactionCapabilities("before"),
-        "context.compact.after": {
-          modes: options.observeOnly ? ["observe"]
-            : options.observers?.length ? ["intercept", "observe"] : ["intercept"],
-          ...(!options.observeOnly ? { capabilities: compactionCapabilities("after") } : {}),
+        contextCompactBefore: {
+          intercept: { modifyInstructions: "replace", message: true, returnResult: true, deny: true },
         },
-        "session.end": { modes: ["observe"] },
+        contextCompactAfter: options.observeOnly
+          ? { observe: true }
+          : {
+              intercept: { modifySummary: "replace", message: true },
+              ...(options.observers?.length ? { observe: true } : {}),
+            },
+        sessionEnd: { observe: true },
       },
       auth: auth({
         resolveEnvironmentVariable: (name) =>
@@ -223,8 +230,8 @@ export async function runCompaction(
    */
   async function settle(boundary, input) {
     const result = await (boundary === "before"
-      ? client.contextCompactBefore(/** @type {import("agenthooksprotocol/client").BoundaryInput<"context.compact.before">} */ (input))
-      : client.contextCompactAfter(/** @type {import("agenthooksprotocol/client").BoundaryInput<"context.compact.after">} */ (input)));
+      ? client.contextCompactBefore(/** @type {import("agenthooksprotocol/client").BoundaryInput<"context.compact.before">} */ (input), { capabilities: compactionCapabilities("before") })
+      : client.contextCompactAfter(/** @type {import("agenthooksprotocol/client").BoundaryInput<"context.compact.after">} */ (input), options.observeOnly ? {} : { capabilities: compactionCapabilities("after") }));
     failures.push(
       ...result.diagnostics.filter(d => d.phase !== "observation").map((error) => ({
         boundary,

@@ -1,71 +1,56 @@
 import {
   hooks,
   attachments,
-  type Message,
-  type InterceptResult,
-  type CapabilitiesResult,
+  type ServerHandlers,
+  type ServerReply,
+  type InterceptContext,
 } from "agenthooksprotocol/server";
+import { serveStdio, type StdioOptions } from "agenthooksprotocol/server/stdio";
+import type { Readable, Writable } from "node:stream";
 declare const request: Request;
 declare const user: { id: string };
 declare const policyService: {
-  handle(
-    message: Message,
-    user: { id: string },
-  ): Promise<InterceptResult | CapabilitiesResult | void>;
+  handle(context: InterceptContext<"tool.before">, user: { id: string }): Promise<ServerReply<"tool.before">>;
 };
-const route: Promise<Response> = hooks.handle(request, (message) =>
-  policyService.handle(message, user),
-);
+const handlers = {
+  intercept: {
+    toolBefore(ctx) {
+      const eventType: "tool.before" = ctx.event.type;
+      const toolName: string = ctx.event.tool.name;
+      const signal: AbortSignal = ctx.signal;
+      void eventType;
+      void toolName;
+      void signal;
+      return policyService.handle(ctx, user);
+    },
+  },
+  observe: {
+    sessionEnd(ctx) {
+      const eventType: "session.end" = ctx.event.type;
+      void eventType;
+    },
+  },
+} satisfies ServerHandlers;
+const route: Promise<Response> = hooks.handle(request, handlers);
 void route;
-hooks.handle(request, (message) => {
-  switch (message.method) {
-    case "hooks/intercept": {
-      const eventId: string = typeof message.params.event.id === "string" ? message.params.event.id : "unknown";
-      void eventId;
-      return { effects: [{ type: "deny", reason: "policy" }] };
-    }
-    case "hooks/observe":
-      return;
-    case "hooks/capabilities":
-      return {
-        manifest: {
-          authentication: [],
-          contentCategories: [],
-          correlationIdentityFields: [],
-          events: [],
-          gaps: [],
-          limits: {},
-          managedPolicy: { disableable: true, scopes: [] },
-          toolPaths: [],
-          transports: ["http"],
-        },
-      };
-  }
-});
+hooks.handle(request, { intercept: { toolBefore() { return { effects: [{ type: "deny", reason: "policy" }] }; } } });
 const upload = attachments.parse(request);
 const stream: ReadableStream<Uint8Array> = upload.body;
 void stream;
-attachments.response({
-  ref: "stored",
-  size: upload.size,
-  sha256: upload.sha256,
-});
+attachments.response({ ref: "stored", size: upload.size, sha256: upload.sha256 });
 // @ts-expect-error SDK supplies protocolVersion, not the application.
-const bad: InterceptResult = { effects: [], protocolVersion: "draft" };
-// @ts-expect-error exact optional fields do not accept explicit undefined.
-const badOptional: InterceptResult = { effects: [], extensions: undefined };
-// @ts-expect-error result fields are mandatory.
-hooks.handle(request, () => ({ status: "ok" }));
+const bad: ServerReply<"tool.before"> = { effects: [], protocolVersion: "draft" };
+// @ts-expect-error intercept handlers must return a reply, not void.
+hooks.handle(request, { intercept: { toolBefore() {} } });
+// @ts-expect-error observations cannot return control replies.
+hooks.handle(request, { observe: { sessionEnd() { return { effects: [] }; } } });
+// @ts-expect-error observation-only events cannot intercept.
+hooks.handle(request, { intercept: { sessionEnd() { return { effects: [] }; } } });
+// @ts-expect-error raw method-switch callbacks are no longer supported.
+hooks.handle(request, () => ({ effects: [] }));
 // @ts-expect-error descriptor digest is required.
 attachments.response({ ref: "stored", size: 0 });
 void bad;
-void badOptional;
-
-import {
-  serveStdio,
-  type StdioOptions,
-} from "agenthooksprotocol/server/stdio";
-import type { Readable, Writable } from "node:stream";
 declare const input: Readable;
 declare const output: Writable;
 const stdioOptions: StdioOptions = {
@@ -73,14 +58,12 @@ const stdioOptions: StdioOptions = {
   stdout: output,
   signal: new AbortController().signal,
 };
-const serving: Promise<void> = serveStdio(
-  (request) => hooks.handle(request, () => ({ effects: [] })),
-  stdioOptions,
-);
+const serving: Promise<void> = serveStdio(handlers, stdioOptions);
 void serving;
+// @ts-expect-error stdio accepts the same typed table, not an HTTP callback.
 serveStdio(() => new Response(null));
-// @ts-expect-error A stdio handler returns a Web Response, not a protocol result.
-serveStdio(() => ({ effects: [] }));
+// @ts-expect-error stdio intercept handlers cannot return void.
+serveStdio({ intercept: { toolBefore() {} } });
 
 // Both actual request envelopes expose the same discriminated Event contract.
 import type { Event, InterceptRequest, ObserveNotification, ContentReference, ContentUploadReceipt } from "agenthooksprotocol/server";

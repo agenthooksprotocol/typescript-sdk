@@ -4,10 +4,9 @@ import {
   Hooks,
   Permission,
   state,
-  effects,
   Attachment,
 } from "agenthooksprotocol/client";
-import { effects as serverEffects } from "agenthooksprotocol/server";
+
 
 const facts = {
   callId: "c",
@@ -18,10 +17,7 @@ const facts = {
 };
 function hooks(
   fetch,
-  capabilities = {
-    effects: ["allow", "modify"],
-    modify: { input: { replace: true, merge: false } },
-  },
+  capabilities = { toolBefore: { intercept: { allow: true, modifyInput: "replace" } } },
 ) {
   return new Hooks(
     {
@@ -44,7 +40,7 @@ function hooks(
     },
     {
       source: "urn:test:ergonomic",
-      capabilities: { "tool.before": capabilities },
+      capabilities,
       fetch,
     },
   );
@@ -60,8 +56,8 @@ test("named boundaries project generated flattened host facts into canonical wir
       result: {
         protocolVersion: "draft",
         effects: [
-          serverEffects.modify_input_effect("replace", { path: "accepted" }),
-          effects.allow(),
+          { type: "modify", target: "input", operation: "replace", value: { path: "accepted" } },
+          { type: "allow" },
         ],
       },
     });
@@ -169,23 +165,13 @@ test("named generated inputs bind lazy sources without manual content paths", as
   }
 });
 
-import {
-  capabilities,
-  events,
-} from "agenthooksprotocol/client";
+import { events } from "agenthooksprotocol/client";
+import { hostCapabilitiesToWire } from "agenthooksprotocol/draft";
 import { createHash } from "node:crypto";
 
-test("generated declarations are immutable, explicit and boundary-compatible", async () => {
-  const base = capabilities.intercept().deny();
-  const composed = base.modifyInput({ replace: true });
-  assert.deepEqual(base.capabilities.effects, ["deny"]);
-  assert.deepEqual(composed.modes, ["intercept", "observe"]);
-  assert.deepEqual(composed.capabilities.modify.input, {
-    merge: false,
-    replace: true,
-  });
-  assert.throws(() => capabilities.intercept().build(), /empty/);
-  assert.throws(() => base.modifyInput({}), /nonempty/);
+test("typed host declarations preserve narrowing and event boundaries", async () => {
+  const base = { toolBefore: { intercept: { deny: true } } };
+  const composed = { toolBefore: { intercept: { deny: true, modifyInput: "replace" }, observe: true } };
   let deliveries = 0;
   const client = hooks(async (_, init) => {
     deliveries++;
@@ -198,39 +184,27 @@ test("generated declarations are immutable, explicit and boundary-compatible", a
     });
   }, composed);
   try {
-    await client.toolBefore(facts, { capabilities: base.capabilities });
+    await client.toolBefore(facts, { capabilities: { effects: ["deny"] } });
     assert.equal(deliveries, 1);
-    await assert.rejects(
-      client.toolBefore(facts, {
-        capabilities: capabilities.intercept().allow().capabilities,
-      }),
-    );
+    await assert.rejects(client.toolBefore(facts, { capabilities: { effects: ["allow"] } }));
     assert.equal(deliveries, 1, "narrowing cannot widen before delivery");
+    assert.deepEqual(base, { toolBefore: { intercept: { deny: true } } });
   } finally {
     await client.close();
   }
-  const incompatible = hooks(
-    async () => {
-      throw new Error("must not deliver");
+  assert.deepEqual(hostCapabilitiesToWire(base), {
+    "tool.before": { modes: ["intercept"], capabilities: { effects: ["deny"] } },
+  });
+  assert.deepEqual(hostCapabilitiesToWire({ toolBefore: { observe: true } }), {
+    "tool.before": { modes: ["observe"] },
+  });
+  assert.deepEqual(hostCapabilitiesToWire({ userElicitationRequest: { intercept: { elicitation: { form: true } } } }), {
+    "user.elicitation.request": {
+      modes: ["intercept"],
+      capabilities: { effects: [], elicitation: { form: {} } },
     },
-    capabilities.intercept().modifySummary({ replace: true }),
-  );
-  try {
-    await assert.rejects(incompatible.toolBefore(facts));
-  } finally {
-    await incompatible.close();
-  }
+  });
   assert.equal(events.toolBefore, "tool.before");
-  assert.deepEqual(capabilities.observe(), { modes: ["observe"] });
-  assert.equal(
-    "elicitation" in capabilities.intercept().return().capabilities,
-    false,
-  );
-  assert.deepEqual(
-    capabilities.intercept().return().elicitationForm().capabilities
-      .elicitation,
-    { form: {} },
-  );
 });
 
 test("named source binding prepares receiver references from descriptors without caller refs", async () => {
@@ -284,7 +258,7 @@ test("named source binding prepares receiver references from descriptors without
     },
     {
       source: "urn:test:source-binding",
-      capabilities: { [events.toolBefore]: capabilities.intercept().deny() },
+      capabilities: { toolBefore: { intercept: { deny: true } } },
       fetch: async (url, init) => {
         if (url.endsWith("/upload")) {
           const actual = new Uint8Array(
@@ -373,7 +347,7 @@ for (const mode of ["metadata", "omit"])
       },
       {
         source: "urn:test:source-unused",
-        capabilities: { [events.toolBefore]: capabilities.observe() },
+        capabilities: { toolBefore: { observe: true } },
         fetch: async () => new Response(null, { status: 204 }),
       },
     );

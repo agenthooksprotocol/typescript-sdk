@@ -1,24 +1,20 @@
 import type {
   BoundaryResult,
   BoundaryState,
-  EventCapabilities,
-  EventGrant,
+  HostCapabilities,
 } from "agenthooksprotocol/client";
 
-const observe: EventGrant = { modes: ["observe"] };
-const both: EventGrant = {
-  modes: ["intercept", "observe"],
-  capabilities: { effects: ["deny"] },
-};
-const grants: EventCapabilities = {
-  "tool.after": observe,
-  "tool.before": both,
-  "session.start": { effects: [] },
+const observe: NonNullable<HostCapabilities["toolBefore"]> = { observe: true };
+const both: NonNullable<HostCapabilities["toolBefore"]> = { intercept: { deny: true }, observe: true };
+const grants: HostCapabilities = {
+  toolAfter: { observe: true },
+  toolBefore: both,
+  sessionStart: { intercept: { message: true } },
 };
 void grants;
-const invalid: EventGrant = {
-  // @ts-expect-error Delivery modes are explicit canonical modes.
-  modes: ["automatic"],
+const invalid: HostCapabilities = {
+  // @ts-expect-error Observation-only events do not admit interception.
+  sessionEnd: { intercept: { deny: true } },
 };
 void invalid;
 declare const result: BoundaryResult<"tool.before">;
@@ -95,3 +91,44 @@ for (const effect of messages.effects) {
   // @ts-expect-error Accepted modifications are execution facts in event, not residual effects.
   if (effect.type === 'modify') void effect;
 }
+
+// Removed declaration APIs must not return through public exports.
+// @ts-expect-error Legacy builder class is not public.
+import { CapabilityBuilder } from "agenthooksprotocol/client";
+// @ts-expect-error Legacy capability constructor is not public.
+import { capabilities } from "agenthooksprotocol/client";
+import type { StaticCapabilityManifest, HooksOptions } from "agenthooksprotocol/client";
+declare const wireManifest: StaticCapabilityManifest;
+const invalidManifest: HooksOptions = {
+  source: "urn:test:manifest",
+  // @ts-expect-error A canonical discovery manifest is not a typed host declaration.
+  capabilities: wireManifest,
+};
+void invalidManifest;
+// @ts-expect-error Legacy event grants are not public.
+import type { EventGrant } from "agenthooksprotocol/client";
+// @ts-expect-error Legacy event capability maps are not public.
+import type { EventCapabilities } from "agenthooksprotocol/client";
+// @ts-expect-error Draft generated exports must not retain the builder.
+import { CapabilityBuilder as DraftBuilder } from "agenthooksprotocol/draft";
+// @ts-expect-error Server exports must not retain the generic result type.
+import type { InterceptResult } from "agenthooksprotocol/server";
+// @ts-expect-error Server exports must not retain the generic handler type.
+import type { Handler } from "agenthooksprotocol/server";
+const badEvent: HostCapabilities = {
+  // @ts-expect-error Known catalogue entries use camelCase fields, not wire keys.
+  "tool.before": { intercept: { deny: true } },
+};
+const badControl: HostCapabilities = {
+  // @ts-expect-error Known tool controls do not include summary modifications.
+  toolBefore: { intercept: { modifySummary: "replace" } },
+};
+const badModification: HostCapabilities = {
+  // @ts-expect-error Modification operations are catalogue literals.
+  toolBefore: { intercept: { modifyInput: "append" } },
+};
+const badBoolean: HostCapabilities = {
+  // @ts-expect-error Presence grants are literal true, not arbitrary booleans.
+  toolBefore: { intercept: { deny: false } },
+};
+void [badEvent, badControl, badModification, badBoolean];

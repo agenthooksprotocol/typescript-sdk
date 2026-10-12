@@ -11,12 +11,12 @@ function client(type, capabilities, reply, count = 1) {
   return new Hooks({ protocolVersion: 'draft', hooks: Array.from({ length: count }, (_, index) => ({
     id: `test.typed.backend${index}`, transport: { type: 'http', url: `https://backend${index}.test/hooks` },
     subscriptions: [{ mode: 'intercept', events: [type], timeoutMs: 1000, failurePolicy: 'fail-open', content: { default: 'body' } }],
-  })) }, { source: 'urn:test:typed', capabilities: { [type]: capabilities }, fetch: async (url, init) => {
+  })) }, { source: 'urn:test:typed', capabilities: { [type.replace(/\.([a-z])/g, (_, letter) => letter.toUpperCase())]: capabilities }, fetch: async (url, init) => {
     const wire = JSON.parse(init.body);
     return Response.json({ jsonrpc: '2.0', id: wire.id, result: { protocolVersion: 'draft', ...reply(wire, String(url)) } });
   } });
 }
-const caps = target => ({ effects: ['modify'], modify: { [target]: { replace: true, merge: false } } });
+const caps = target => ({ intercept: { ['modify' + target[0].toUpperCase() + target.slice(1)]: 'replace' } });
 
 for (const result of [{ protocolVersion: 'draft' }, { protocolVersion: 'draft', effects: [] }]) {
   test(`neutral response ${Object.hasOwn(result, 'effects') ? 'empty' : 'absent'} settles to typed empty effects without mutating wire`, async () => {
@@ -28,7 +28,7 @@ for (const result of [{ protocolVersion: 'draft' }, { protocolVersion: 'draft', 
     assert.equal(parsed.ok, true);
     assert.deepEqual(parsed.value.result.effects ?? [], []);
     assert.deepEqual(wire, before);
-    const hooks = client('tool.before', { effects: [] }, () => result);
+    const hooks = client('tool.before', { intercept: { deny: true } }, () => result);
     const settled = await hooks.toolBefore({ callId: 'call', name: 'read', input: {}, path: 'native', origin: 'native' });
     assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
     assert.deepEqual(settled.effects, []);
@@ -93,7 +93,7 @@ test('invalid later response rolls back all its edits while retaining earlier ac
 });
 for (const reply of [{}, { effects: [] }]) test(`backend helper accepts neutral ${Object.hasOwn(reply, 'effects') ? 'empty' : 'absent'} effects`, async () => {
   const request = { jsonrpc: '2.0', id: 'event', method: 'hooks/intercept', params: { protocolVersion: 'draft', capabilities: { effects: [] }, event: { id: 'event', source: 'urn:test:backend', time: '2026-01-01T00:00:00Z', type: 'tool.before', call: { id: 'call' }, path: 'native', tool: { name: 'read', origin: 'native', input: {} } } } };
-  const response = await backendHooks.handle(new Request('https://backend.test/hooks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request) }), () => reply);
+  const response = await backendHooks.handle(new Request('https://backend.test/hooks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request) }), { intercept: { toolBefore: () => reply } });
   const wire = await response.json();
   assert.equal(wire.result.protocolVersion, 'draft');
   assert.deepEqual(wire.result.effects ?? [], []);
@@ -113,7 +113,7 @@ test('public workspace edit preserves opaque change metadata without attachment 
 
 test('public model return retains a canonical whole message list', async () => {
   const value = [message('model', 'assistant')];
-  const hooks = client('model.request.before', { effects: ['return'] }, () => ({ effects: [{ type: 'return', value }] }));
+  const hooks = client('model.request.before', { intercept: { returnResult: true } }, () => ({ effects: [{ type: 'return', value }] }));
   const settled = await hooks.modelRequestBefore({ model: { id: 'model', provider: 'test' }, attempt: { id: 'attempt', number: 1 }, params: {}, items: [] });
   assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.deepEqual(settled.state.candidate.value, value);
@@ -122,7 +122,7 @@ test('public model return retains a canonical whole message list', async () => {
 
 test('public elicitation return retains a canonical ElicitResult and form answer', async () => {
   const value = { action: 'accept', content: { answer: 'yes' } };
-  const hooks = client('user.elicitation.request', { effects: ['return'], elicitation: { form: {} } }, () => ({ effects: [{ type: 'return', value }] }));
+  const hooks = client('user.elicitation.request', { intercept: { returnResult: true, elicitation: { form: true } } }, () => ({ effects: [{ type: 'return', value }] }));
   const settled = await hooks.userElicitationRequest({ elicitation: { mode: 'form', server: 'test', request: text('request', JSON.stringify({ message: 'Answer?', requestedSchema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] } })) } });
   assert.deepEqual(settled.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.deepEqual(settled.state.candidate.value, value);
@@ -131,7 +131,7 @@ test('public elicitation return retains a canonical ElicitResult and form answer
 
 for (const value of ['summary', { action: 'accept', content: null }]) {
   test('elicitation rejects noncanonical return atomically: ' + JSON.stringify(value), async () => {
-    const hooks = client('user.elicitation.request', { effects: ['return'], elicitation: { form: {} } }, () => ({ effects: [{ type: 'return', value }] }));
+    const hooks = client('user.elicitation.request', { intercept: { returnResult: true, elicitation: { form: true } } }, () => ({ effects: [{ type: 'return', value }] }));
     const settled = await hooks.userElicitationRequest({ elicitation: { mode: 'form', server: 'test', request: text('request', JSON.stringify({ message: 'Answer?', requestedSchema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] } })) } });
     assert.equal(settled.state.candidate, null);
     assert.deepEqual(settled.acceptedResponses, []);

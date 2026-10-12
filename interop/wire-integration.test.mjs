@@ -141,7 +141,7 @@ for (const [transport, mode, authenticatedUpload] of [
         origin,
         tokenRequests = 0;
       const controller = new AbortController();
-      /** @param {import("agenthooksprotocol/server").Message} message */
+      /** @param {import("agenthooksprotocol/server").InterceptRequest | import("agenthooksprotocol/server").ObserveNotification} message */
       async function policy(message) {
         const event = message.params.event;
         assert.ok(event);
@@ -228,7 +228,10 @@ for (const [transport, mode, authenticatedUpload] of [
           } else if (!authorize(incoming, credentials)) {
             response = new Response(null, { status: 401 });
           } else {
-            response = await serverHooks.handle(request, policy);
+            response = await serverHooks.handle(request, {
+              intercept: { toolBefore: async (ctx) => (await policy(ctx.request)) ?? {} },
+              observe: { toolBefore: async (ctx) => { await policy(ctx.notification); } },
+            });
           }
           outgoing.writeHead(
             response.status,
@@ -264,14 +267,18 @@ for (const [transport, mode, authenticatedUpload] of [
       for await (const line of createInterface({ input: process.stdin })) {
         const response = await hooks.handle(new Request('http://localhost/hooks', {
           method: 'POST', headers: { 'content-type': 'application/json' }, body: line,
-        }), async message => {
+        }), {
+          intercept: { toolBefore: async ctx => (await forward(ctx.request)) ?? {} },
+          observe: { toolBefore: async ctx => { await forward(ctx.notification); } },
+        });
+        async function forward(message) {
           const result = await fetch(${JSON.stringify(origin + "/policy")}, {
             method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(message),
           });
           if (!result.ok) throw Error('Policy failed');
           const value = await result.json();
           return value === null ? undefined : value;
-        });
+        }
         const text = await response.text();
         if (text) process.stdout.write(text + '\\n');
         else if (response.status !== 204) process.exit(1);
@@ -382,13 +389,14 @@ for (const [transport, mode, authenticatedUpload] of [
             auth: provider,
             ...(transportFetch ? { fetch: transportFetch } : {}),
             capabilities: {
-              "tool.before": {
-                modes: ["intercept", "observe"],
-                capabilities: {
-                  effects: ["modify", "allow", "deny", "flow"],
-                  modify: { input: { merge: true, replace: true } },
+              toolBefore: {
+                intercept: {
+                  modifyInput: "replace-and-merge",
+                  allow: true,
+                  deny: true,
                   flow: { operations: ["stop"] },
                 },
+                observe: true,
               },
             },
           },
@@ -433,7 +441,14 @@ for (const [transport, mode, authenticatedUpload] of [
           const result = await client.dispatch(
             "tool.before",
             input,
-            status === "interrupted" ? { signal: controller.signal } : {},
+            {
+              ...(status === "interrupted" ? { signal: controller.signal } : {}),
+              capabilities: {
+                effects: ["modify", "allow", "deny", "flow"],
+                modify: { input: { merge: true, replace: true } },
+                flow: { operations: ["stop"] },
+              },
+            },
           );
           assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
           assert.equal(result.interrupted, status === "interrupted");

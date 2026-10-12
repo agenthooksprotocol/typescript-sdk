@@ -71,18 +71,16 @@ This TypeScript example uses Node.js types (`@types/node`):
 import { readFile } from "node:fs/promises";
 import {
   Hooks,
-  capabilities as capability,
-  events,
   state,
   Permission,
-  type EventCapabilities,
+  type HostCapabilities,
 } from "agenthooksprotocol/client";
 
 // Hooks validates registration; JSON.parse alone does not validate it.
 const config: unknown = JSON.parse(await readFile("hooks.json", "utf8"));
-const capabilities: EventCapabilities = {
-  [events.toolBefore]: capability.intercept().deny(),
-};
+const capabilities = {
+  toolBefore: { intercept: { deny: true } },
+} satisfies HostCapabilities;
 const hooks = new Hooks(config, {
   source: "urn:example:agent",
   capabilities,
@@ -229,29 +227,32 @@ host's trust policy. Configured missing credentials fail closed. Upload bindings
 never fall back to event credentials. The `auth()` discovery/exchange helpers
 are optional; TLS/network policy belongs in the trusted HTTP adapter.
 
-Generated `capability.intercept()` deliberately advertises both interception and
-observation; `capability.observe()` advertises observation only. Builders compose
-without mutating reused declarations, and host boundary compatibility is checked
-before delivery. Effect helpers imported as `effects` from the server entry point
-construct canonical effects; they never grant permission to emit those effects.
+Literal helpers imported as `effect` from the server entrypoint construct canonical
+effects. Event-correlated replies constrain their types; request grants and host
+policy still determine whether they may be emitted or enacted.
 
-Raw capability declarations never infer observation authority. A plain event value
-such as `{ effects: ["deny"] }` grants interception only. Use explicit `modes`
-when the harness supports observations, including fallback notifications after a
-normal short-circuit:
+Host capabilities declare interception controls and observation interest explicitly.
+Use plain readonly event declarations checked with `HostCapabilities`:
 
 ```ts
-const capabilities: EventCapabilities = {
-  "tool.before": {
-    modes: ["intercept", "observe"],
-    capabilities: { effects: ["deny"] },
-  },
-  "tool.after": { modes: ["observe"] },
-};
+const capabilities = {
+  toolBefore: { intercept: { deny: true }, observe: true },
+  toolAfter: { observe: true },
+} satisfies HostCapabilities;
 ```
 
-Omitted events and modes grant nothing. Full static manifests are also supported.
-Effect grants and elicitation `form`/`url` grants must also be explicit.
+Omitted events, delivery modes, controls, and elicitation dimensions grant nothing.
+An interception declaration needs a supported control or facility; elicitation-only
+interception can advertise form or URL handling without an effect grant. Fields
+are specific to the event: observation-only events cannot declare interception,
+and unsupported modification targets are rejected by TypeScript. Count-bearing
+flow declarations use `capabilityCount(value)` to validate nonnegative safe integers
+once. The SDK assembles canonical grants directly without a JSON roundtrip.
+
+Use `HooksOptions.manifestMetadata` for non-event advertisements: authentication
+methods, transports, policy scopes, limits, and opaque extensions. Hooks copies
+metadata synchronously. The `events` field is forbidden; typed capabilities
+exclusively determine grants and interest. Metadata is not attachment content.
 
 `ReadFileArguments` checks the host's original arguments at compile time. The SDK
 models tool input as structural JSON, not as a tool-specific generic schema. If you
@@ -262,27 +263,36 @@ for tool-specific runtime validation and for enacting any other granted effects.
 
 ## Serve hooks over stdio (Node.js)
 
-Keep the same Web `Request`/`Response` handler for HTTP and stdio:
+Use the same event-correlated handler maps for HTTP and stdio:
 
 ```ts
-import { hooks } from "agenthooksprotocol/server";
+import { hooks, effect, type ServerHandlers } from "agenthooksprotocol/server";
 import { serveStdio } from "agenthooksprotocol/server/stdio";
 
-await serveStdio((request) =>
-  hooks.handle(request, (message) => {
-    if (message.method === "hooks/intercept") {
-      return { effects: [{ type: "deny", reason: "Blocked by policy" }] };
-    }
-    // Observe callbacks return void. Add a manifest for hooks/capabilities
-    // when this backend supports discovery.
-  }),
-);
+const handlers = {
+  intercept: {
+    toolBefore(ctx) {
+      return { effects: [effect.replaceInput({ ...ctx.event.tool.input, limit: 10 }), effect.allow()] };
+    },
+  },
+  observe: {
+    sessionEnd(ctx) { console.error(ctx.event.type); },
+  },
+} satisfies ServerHandlers;
+
+await serveStdio(handlers);
+// In an authenticated HTTP route: await hooks.handle(request, handlers).
 ```
 
-`serveStdio(handler, { stdin?, stdout?, signal? })` defaults to the Node process
-streams. Each UTF-8 NDJSON line becomes a POST `Request` with an
-`application/json` body; the shim does not parse or validate JSON-RPC.
-`hooks.handle` performs validation and response correlation.
+Intercept replies are correlated to their callback event; `{}` is a valid no-op.
+Observation callbacks return void and cannot return controls. The server owns
+JSON-RPC envelope IDs and protocol version. It validates complete replies against
+the event and the request's dynamic grants; types do not grant execution authority.
+Applications own HTTP authentication and routing.
+
+`serveStdio(handlers, { stdin?, stdout?, signal? })` defaults to the Node process
+streams. Each UTF-8 NDJSON line uses the same validation and envelope core as
+`hooks.handle(request, handlers)`.
 Nonempty response bodies are written even for error HTTP statuses; empty bodies
 (including notification responses) produce no output. Physical CR/LF characters
 in response bodies become spaces so each reply occupies one line. Log to stderr,

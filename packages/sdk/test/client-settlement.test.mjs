@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { Hooks } from '../dist/src/client/index.js';
 import { decodeSettledEvent, decodeSettledState } from '../dist/src/client/settlement.js';
 
-const hooksFor = (type, replies = [{}], capabilities = { effects: [] }) => new Hooks({ protocolVersion: 'draft', hooks: replies.map((_, index) => ({
+const hooksFor = (type, replies = [{}], capabilities = { intercept: { deny: true } }) => new Hooks({ protocolVersion: 'draft', hooks: replies.map((_, index) => ({
   id: `settlement.backend${index}`, transport: { type: 'http', url: `https://backend${index}.test/hooks` },
   subscriptions: [{ mode: 'intercept', events: [type], timeoutMs: 1000, failurePolicy: 'fail-open', content: { default: 'metadata' } }],
 })) }, {
-  source: 'urn:test:settlement', capabilities: { [type]: capabilities },
+  source: 'urn:test:settlement', capabilities: { [type.replace(/\.([a-z])/g, (_, letter) => letter.toUpperCase())]: capabilities },
   fetch: async (url, init) => {
     const index = Number(new URL(url).hostname.match(/backend(\d+)/)[1]);
     const reply = replies[index];
@@ -98,7 +98,7 @@ test('public final decode failure throws without authorization and preserves acc
     id: 'settlement.backend', transport: { type: 'http', url: 'https://backend.test/hooks' },
     subscriptions: [{ mode: 'intercept', events: ['model.request.before'], timeoutMs: 1000, failurePolicy: 'fail-open', content: { default: 'metadata' } }, { mode: 'observe', events: ['model.request.before'], content: { default: 'metadata' } }],
   }] }, {
-    source: 'urn:test:settlement', capabilities: { 'model.request.before': { modes: ['intercept', 'observe'], capabilities: { effects: [] } } },
+    source: 'urn:test:settlement', capabilities: { modelRequestBefore: {intercept: {deny: true}, observe: true} },
     fetch: async (_, init) => {
       // Simulate invalid host-owned schema facts after admission. The neutral
       // receiver response is still canonical acceptance evidence, not authority.
@@ -199,7 +199,7 @@ test('accepted typed responses retain injection order, delivery timing and opaqu
     { type: 'inject', target: 'context', operation: 'append', deliverAt: 'next_turn', value: [message('second')] },
   ];
   const hooks = hooksFor('model.request.before', [{ result: { effects: injections, future: { order: [1, 2], selected: null } } }], {
-    effects: ['inject'], inject: { context: { append: true, deliverAt: ['now', 'next_turn'] } },
+    intercept: { inject: { context: { append: true, deliverAt: ['now', 'next_turn'] } } },
   });
   try {
     const settled = await hooks.modelRequestBefore({ model: { provider: 'test', id: 'model' }, attempt: { id: 'attempt', number: 1 }, params: {}, items: [] });

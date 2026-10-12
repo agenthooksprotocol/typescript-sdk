@@ -4,7 +4,7 @@ import {
   scenarios,
   atomic,
   fixtureRegistration,
-  fixtureCapabilities,
+  fixtureHostCapabilities,
   sdkClient,
   sdkDraft,
 } from "./common.mjs";
@@ -62,7 +62,7 @@ try {
     // function on Hooks while routing each operation to its own source recorder.
     /** @type {ReturnType<typeof createContentAdapter> | undefined} */
     let activeContent;
-    const capabilities = fixtureCapabilities(rows);
+    const capabilities = fixtureHostCapabilities;
     let serverFixture;
     if (cfg.transport === "http") {
       // The canonical HTTP fixture binding exposes GET /capabilities.

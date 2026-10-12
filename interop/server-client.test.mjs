@@ -78,9 +78,14 @@ test(
           // This controlled test explicitly permits anonymous calls. Production
           // authentication and authorization belong here, before the SDK helper.
           const user = { id: "explicitly-authorized-local-test" };
-          response = await hooks.handle(request, (message) =>
-            policyService.handle(message, user),
-          );
+          response = await hooks.handle(request, {
+            intercept: {
+              toolBefore: (ctx) => policyService.handle(ctx.request, user),
+            },
+            observe: {
+              toolBefore: (ctx) => { policyService.handle(ctx.notification, user); },
+            },
+          });
         }
         outgoing.writeHead(
           response.status,
@@ -125,12 +130,9 @@ test(
       {
         source: "urn:test:harness",
         capabilities: {
-          "tool.before": {
-            modes: ["intercept", "observe"],
-            capabilities: {
-              effects: ["modify"],
-              modify: { input: { merge: true, replace: true } },
-            },
+          toolBefore: {
+            intercept: { modifyInput: "replace-and-merge" },
+            observe: true,
           },
         },
       },
@@ -153,6 +155,11 @@ test(
             })),
           },
         ],
+      }, {
+        capabilities: {
+          effects: ["modify"],
+          modify: { input: { merge: true, replace: true } },
+        },
       });
       assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
       assert.deepEqual(result.event.tool.input, { path: "a", checked: true });

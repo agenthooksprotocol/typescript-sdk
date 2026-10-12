@@ -58,19 +58,14 @@ export async function uploadBytes(
           ),
           ...{ duplex: "half" },
         }),
-        (message) => {
-          if (
-            message.method !== "hooks/intercept" ||
-            message.params.event.type !== "tool.before"
-          )
-            throw Error("Unexpected fixture event");
+        { intercept: { toolBefore: (ctx) => {
           const parsed = sdkDraft.draftCodecs.parseContentReference(
-            message.params.event.items?.[0]?.body,
+            ctx.event.items?.[0]?.body,
           );
           if (!parsed.ok) throw Error("Missing SDK upload descriptor");
           descriptor = parsed.value;
           return { effects: [] };
-        },
+        } } },
       );
       outgoing.writeHead(response.status, Object.fromEntries(response.headers));
       outgoing.end(new Uint8Array(await response.arrayBuffer()));
@@ -111,7 +106,7 @@ export async function uploadBytes(
       },
       {
         source: "urn:ahp:interop:upload",
-        capabilities: { "tool.before": { effects: [] } },
+        capabilities: { toolBefore: { intercept: { deny: true } } },
         auth: auth({ resolveEnvironmentVariable: (name) => env[name] }),
       },
     );
@@ -132,7 +127,7 @@ export async function uploadBytes(
           })),
         },
       ],
-    });
+    }, { capabilities: { effects: [] } });
     if (result.diagnostics.filter(d => d.phase !== "observation").length || !descriptor)
       throw Object.assign(Error("Required SDK upload failed"), {
         errors: result.diagnostics.filter(d => d.phase !== "observation"),

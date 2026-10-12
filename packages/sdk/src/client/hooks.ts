@@ -1,7 +1,7 @@
 import {
   _projectHostInput,
   ownedAttachment,
-  CapabilityBuilder,
+  hostCapabilitiesToWire,
   Permission,
   responseForRequest,
 } from "../draft/raw.js";
@@ -19,6 +19,7 @@ import type {
   ObserveSubscription,
   Registration,
   StaticCapabilityManifest,
+  WireCapabilities,
 } from "../draft/raw.js";
 import {
   validateCapabilities,
@@ -48,6 +49,43 @@ import {
 type DeliveryFailure = Omit<DeliveryDiagnostic, "code"> & {
   code: "PREPARATION_FAILED" | "DELIVERY_FAILED" | "DEADLINE_EXCEEDED" | "INTERRUPTED";
 };
+// The generated renderer guarantees canonical grant shapes. Detach its readonly
+// data before mutable delivery snapshots; outer configuration admission remains
+// authoritative. No serialization, JSON decoding, or generic builder is involved.
+function ownedCapabilities(value: WireCapabilities): Capabilities {
+  return structuredClone(value) as unknown as Capabilities;
+}
+/** Check supplied metadata fields only. Opaque extensions are not wire grants
+ * or content, and must not be recursively interpreted as either. */
+function validateManifestMetadata(metadata: NonNullable<HooksOptions["manifestMetadata"]>): void {
+  const invalid = (field: string): never => { throw new ConfigurationError([
+    { path: `manifestMetadata.${field}`, code: "INVALID_CAPABILITIES" },
+  ]); };
+  const object = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === "object" && !Array.isArray(value);
+  const strings = (value: unknown): boolean =>
+    Array.isArray(value) && value.every(item => typeof item === "string");
+  for (const field of ["authentication", "transports", "contentCategories", "correlationIdentityFields", "toolPaths"] as const)
+    if (metadata[field] !== undefined && !strings(metadata[field])) invalid(field);
+  if (metadata.managedPolicy !== undefined) {
+    const policy = metadata.managedPolicy;
+    if (!object(policy) || typeof policy.disableable !== "boolean" || !strings(policy.scopes))
+      invalid("managedPolicy");
+  }
+  if (metadata.limits !== undefined) {
+    const limits = metadata.limits;
+    if (!object(limits)) return invalid("limits");
+    for (const field of ["maxContinuations", "maxTimeoutMs", "maxUploadBytes", "minTimeoutMs"] as const) {
+      const value = limits[field];
+      if (value !== undefined && !(typeof value === "bigint" ? value >= 0n
+        : typeof value === "number" && Number.isSafeInteger(value) && value >= 0))
+        invalid(`limits.${field}`);
+    }
+  }
+  if (metadata.gaps !== undefined && (!Array.isArray(metadata.gaps) ||
+      !metadata.gaps.every(gap => object(gap) && typeof gap.path === "string" && typeof gap.reason === "string")))
+    invalid("gaps");
+}
 type Subscription = InterceptSubscription | ObserveSubscription;
 type Route = {
   backend: Backend;
@@ -55,27 +93,6 @@ type Route = {
   index: number;
   transport: BackendTransport;
 };
-const interceptable = new Set<EventType>([
-  "tool.before",
-  "tool.after",
-  "session.start",
-  "config.change.before",
-  "turn.start",
-  "turn.finish.before",
-  "model.request.before",
-  "model.response.after",
-  "model.switch.before",
-  "tool.permission.request",
-  "tool.batch.after",
-  "context.compact.before",
-  "context.compact.after",
-  "task.change.before",
-  "user.elicitation.request",
-  "user.elicitation.result",
-  "user.message.inbound",
-  "user.message.outbound",
-  "workspace.change.before",
-]);
 const eventTypes: EventType[] = [
   "tool.before",
   "tool.after",
@@ -163,20 +180,10 @@ export class Hooks {
     this.uploadLimiter = new UploadLimiter(options.maxConcurrentUploads);
     this.options = {
       ...options,
-      capabilities: structuredClone(
-        Array.isArray(
-          (options.capabilities as StaticCapabilityManifest)?.events,
-        )
-          ? options.capabilities
-          : Object.fromEntries(
-              Object.entries(options.capabilities ?? {}).map(
-                ([event, grant]) => [
-                  event,
-                  grant instanceof CapabilityBuilder ? grant.build() : grant,
-                ],
-              ),
-            ),
-      ),
+      capabilities: structuredClone(options.capabilities),
+      ...(options.manifestMetadata === undefined ? {} : {
+        manifestMetadata: structuredClone(options.manifestMetadata),
+      }),
     };
     this.provider = options.auth ?? auth();
     // No credentials or processes are acquired until a matching boundary needs them.
@@ -227,9 +234,16 @@ export class Hooks {
       throw new ConfigurationError([
         { path: "capabilities", code: "INVALID_CAPABILITIES" },
       ]);
-    this.manifest = Array.isArray((c as StaticCapabilityManifest).events)
-      ? (c as StaticCapabilityManifest)
-      : {
+    const metadata = this.options.manifestMetadata;
+    if (metadata !== undefined &&
+        (!metadata || typeof metadata !== "object" || Array.isArray(metadata) ||
+         Object.hasOwn(metadata, "events")))
+      throw new ConfigurationError([
+        { path: "manifestMetadata", code: "INVALID_CAPABILITIES" },
+      ]);
+    if (metadata !== undefined) validateManifestMetadata(metadata);
+    const declarations = hostCapabilitiesToWire(c);
+    this.manifest = {
           authentication: ["bearer", "oauth"],
           contentCategories: [
             "text",
@@ -245,18 +259,6 @@ export class Hooks {
             "call.id",
             "parentEventId",
           ],
-          events: Object.entries(c).map(([event, grant]) => {
-            const explicit = Object.hasOwn(grant ?? {}, "modes");
-            return {
-              event,
-              modes: explicit ? grant.modes : ["intercept"],
-              ...(explicit
-                ? grant.capabilities === undefined
-                  ? {}
-                  : { capabilities: grant.capabilities }
-                : { capabilities: grant }),
-            };
-          }),
           gaps: [],
           limits: {
             maxUploadBytes: this.options.maxContentBytes ?? 64 * 1024 * 1024,
@@ -267,32 +269,14 @@ export class Hooks {
           },
           toolPaths: ["*"],
           transports: ["stdio", "http"],
+          ...metadata,
+          events: Object.entries(declarations).map(([event, declaration]) => ({
+            event, modes: [...declaration.modes],
+            ...(declaration.capabilities === undefined ? {} : {
+              capabilities: ownedCapabilities(declaration.capabilities),
+            }),
+          })),
         };
-    const manifestErrors = validateWire("capabilities-response", {
-      jsonrpc: "2.0",
-      id: "init",
-      result: { protocolVersion: "draft", manifest: this.manifest },
-    });
-    for (const path of manifestErrors)
-      issues.push({
-        path: `capabilities${path}`,
-        code: "INVALID_CAPABILITIES",
-      });
-    for (const item of this.manifest.events) {
-      if (item.capabilities && !validateCapabilities(item.capabilities).ok)
-        issues.push({
-          path: `capabilities.${item.event}`,
-          code: "INVALID_CAPABILITIES",
-        });
-      if (
-        item.modes.includes("intercept") &&
-        !interceptable.has(item.event as EventType)
-      )
-        issues.push({
-          path: `capabilities.${item.event}`,
-          code: "NOT_INTERCEPTABLE",
-        });
-    }
     const ids = new Set<string>();
     for (const backend of registration.hooks) {
       if (ids.has(backend.id))
@@ -618,7 +602,8 @@ export class Hooks {
       options.capabilities ?? staticCaps,
     );
     // Reject widening before deriving occurrence counters or clamping budgets.
-    if (!validateCapabilities(caps).ok || !isNarrower(caps, staticCaps))
+    if ((options.capabilities !== undefined && !validateCapabilities(caps).ok) ||
+        !isNarrower(caps, staticCaps))
       throw new ConfigurationError([
         { path: type, code: "INVALID_CAPABILITY_NARROWING" },
       ]);
@@ -632,8 +617,7 @@ export class Hooks {
         );
     }
     if (
-      !validateCapabilities(caps).ok ||
-      !isNarrower(caps, advertised.capabilities ?? { effects: [] })
+      !isNarrower(caps, staticCaps)
     )
       throw new ConfigurationError([
         { path: type, code: "INVALID_CAPABILITY_NARROWING" },

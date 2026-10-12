@@ -158,7 +158,7 @@ function deliveryFixture(provider, fetch, authentication, upload) {
     },
     {
       source: "urn:test:auth-provider",
-      capabilities: { "tool.before": { effects: ["deny"] } },
+      capabilities: { toolBefore: {intercept: {deny: true}} },
       auth: provider,
       fetch,
     },

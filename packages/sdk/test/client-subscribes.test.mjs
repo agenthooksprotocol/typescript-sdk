@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { Hooks, ContentManager } from 'agenthooksprotocol/client';
 
 const capabilities = {
-  'tool.before': { effects: [] },
-  'tool.after': { modes: ['observe'] },
-  'session.end': { modes: ['observe'] },
+  toolBefore: {intercept: {deny: true}},
+  toolAfter: {observe: true},
+  sessionEnd: {observe: true},
 };
 const subscription = (events, mode = 'intercept', extras = {}) => ({
   events, mode, content: { default: 'metadata' },

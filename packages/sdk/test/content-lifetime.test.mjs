@@ -24,9 +24,9 @@ function client({ effects = () => [], fetchHook, maxContentBytes } = {}) {
   }] }, {
     source: "urn:test:lifetime", maxContentBytes,
     capabilities: {
-      [requestType]: { effects: ["return", "deny"], elicitation: { form: {} } },
-      [resultType]: { effects: ["modify"], modify: { content: { replace: true, append: false, merge: false } }, elicitation: { form: {} } },
-      "session.end": { modes: ["observe"] },
+      userElicitationRequest: { intercept: { returnResult: true, deny: true, elicitation: { form: true } } },
+      userElicitationResult: { intercept: { modifyContent: "replace", elicitation: { form: true } } },
+      sessionEnd: {observe: true},
     },
     fetch: async (url, init) => {
       if (String(url).endsWith("/upload")) {

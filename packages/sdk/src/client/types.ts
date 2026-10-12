@@ -1,5 +1,6 @@
 import type {
   HostEventInputs,
+  HostCapabilities,
   OwnedAttachment,
   EventType,
   Permission,
@@ -60,20 +61,13 @@ type DirectHostValue<T> = T extends OwnedAttachment<unknown>
   : T extends object ? { [P in keyof T]: DirectHostValue<T[P]> } : T;
 export type EventInput<K extends EventType> = DirectHostValue<HostEventInputs<Attachment>[K]>;
 /** Explicit delivery authority for one event. Effects remain separately granted. */
-export interface EventGrant {
-  modes: ("intercept" | "observe")[];
-  capabilities?: Capabilities;
-}
-/** A plain capability value grants interception only. Omitted events grant nothing. */
-export type EventCapabilities = Partial<
-  Record<EventType, Capabilities | EventGrant>
->;
 export interface HooksOptions {
   source: string;
-  /** A static manifest, or explicit event declarations. Plain Capabilities
-   * entries grant intercept only; use EventGrant to opt into observe. Omitted
-   * events, delivery modes, effects and elicitation form/url grants stay absent. */
-  capabilities: StaticCapabilityManifest | EventCapabilities;
+  /** Typed event declarations. Omitted events and facilities grant nothing. */
+  capabilities: HostCapabilities;
+  /** Static non-event advertisements. Event grants always come from capabilities.
+   * Opaque extension data is not content and is never traversed for attachments. */
+  manifestMetadata?: Omit<StaticCapabilityManifest, "events"> & { events?: never };
   auth?: DeliveryAuthProvider;
   /** Trusted HTTP network adapter (for example, host-managed TLS). The SDK still
    * owns protocol/authentication and cancellation. Scope transport credentials

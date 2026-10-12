@@ -57,10 +57,14 @@ test("public sender never inherits event Authorization when upload auth is omitt
     }
     await respond(
       outgoing,
-      await hooks.handle(request(incoming), (message) => {
-        events.push({ authorization: incoming.headers.authorization, message });
-        assert.ok(stored.has(message.params.event.items[0].body.ref));
-        return { effects: [] };
+      await hooks.handle(request(incoming), {
+        intercept: {
+          toolBefore: (ctx) => {
+            events.push({ authorization: incoming.headers.authorization, message: ctx.request });
+            assert.ok(stored.has(ctx.event.items[0].body.ref));
+            return { effects: [] };
+          },
+        },
       }),
     );
   });
@@ -96,7 +100,7 @@ test("public sender never inherits event Authorization when upload auth is omitt
       },
       {
         source: "urn:typescript:isolation",
-        capabilities: { "tool.before": { effects: [] } },
+        capabilities: { toolBefore: { intercept: { deny: true } } },
         auth: auth({
           resolveCredentialReference(reference) {
             assert.equal(reference, "event");
@@ -124,7 +128,7 @@ test("public sender never inherits event Authorization when upload auth is omitt
           })),
         },
       ],
-    });
+    }, { capabilities: { effects: [] } });
     assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
     assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
     assert.deepEqual(result.effects, []);

@@ -110,6 +110,33 @@ test("catalogue native payloads and lineage negatives run through public server 
     ),
   );
   const lineage = new TaskLineage();
+  const observeLineage = (ctx) => lineage.accept(ctx.notification);
+  const handlers = {
+    observe: {
+      fileChanged: observeLineage,
+      modelError: observeLineage,
+      modelSwitchAfter: observeLineage,
+      taskChangeAfter: observeLineage,
+      toolPermissionResolved: observeLineage,
+      toolProgress: observeLineage,
+      turnEnd: observeLineage,
+      turnProgress: observeLineage,
+      workspaceChangeAfter: observeLineage,
+      contextCompactAfter: observeLineage,
+      contextCompactBefore: observeLineage,
+      modelRequestBefore: observeLineage,
+      modelResponseAfter: observeLineage,
+      modelSwitchBefore: observeLineage,
+      taskChangeBefore: observeLineage,
+      toolAfter: observeLineage,
+      toolBatchAfter: observeLineage,
+      toolBefore: observeLineage,
+      toolPermissionRequest: observeLineage,
+      turnFinishBefore: observeLineage,
+      turnStart: observeLineage,
+      workspaceChangeBefore: observeLineage
+    }
+  };
   for (const row of scenarios)
     for (const step of row.steps) {
       if (step.op !== "notify" && step.op !== "rawNotify") continue;
@@ -119,9 +146,7 @@ test("catalogue native payloads and lineage negatives run through public server 
           headers: { "content-type": "application/json" },
           body: JSON.stringify(step.message),
         }),
-        (message) => {
-          lineage.accept(message);
-        },
+        handlers,
       );
       if (step.op === "notify") assert.equal(response.status, 204, row.id);
       else assert.notEqual(response.status, 204, row.id);

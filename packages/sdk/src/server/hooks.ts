@@ -6,39 +6,16 @@ import {
 } from "../draft/index.js";
 import {
   PROTOCOL_VERSION,
+  events,
   parseObserveNotification,
   responseForRequest,
   type EventResponses,
-  type CapabilitiesRequest,
-  type CapabilitiesResponse,
   type InterceptRequest,
-  type InterceptResponse,
-  type ObserveNotification,
 } from "../draft/raw.js";
 import { validateWire } from "../client/validation.js";
 import { parseJson, stringifyJson } from "../json.js";
 
-/** A decoded canonical wire message, not a host execution boundary. */
-export type Message =
-  | InterceptRequest
-  | ObserveNotification
-  | CapabilitiesRequest;
-type ResultFields<T> = {
-  [K in keyof T as string extends K
-    ? never
-    : K extends "protocolVersion"
-      ? never
-      : K]: T[K];
-};
-export type InterceptResult = ResultFields<EventResponses[keyof EventResponses]["result"]>;
-export type CapabilitiesResult = ResultFields<CapabilitiesResponse["result"]>;
-export type Handler = (
-  message: Message,
-) =>
-  | InterceptResult
-  | CapabilitiesResult
-  | void
-  | Promise<InterceptResult | CapabilitiesResult | void>;
+import type { ServerHandlers } from "./types.js";
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -108,7 +85,7 @@ function supported(
  * HTTP framing errors use 4xx; evaluated RPC failures use 200. Exceptions and
  * invalid callback results are replaced by fixed, credential-free errors.
  */
-async function handle(request: Request, handler: Handler): Promise<Response> {
+async function handle(request: Request, handlers: ServerHandlers): Promise<Response> {
   if (request.method !== "POST")
     return new Response(null, { status: 405, headers: { allow: "POST" } });
   if (
@@ -182,7 +159,26 @@ async function handle(request: Request, handler: Handler): Promise<Response> {
     const message = decoded.value;
     // Retain trusted correlation and advertisements if application code mutates its message.
     const canonical = structuredClone(message);
-    const result = await handler(message);
+    let result: unknown;
+    if (message.method === "hooks/capabilities") {
+      if (!handlers.capabilities) throw new Error("Missing capabilities handler");
+      result = await handlers.capabilities({ request: message, signal: request.signal });
+    } else {
+      const name = Object.entries(events).find(([, event]) => event === message.params.event.type)?.[0];
+      if (!name) throw new Error("Missing event handler");
+      const callbacks = handlers.intercept as Record<string, unknown> | undefined;
+      if (message.method === "hooks/observe") {
+        const observations = handlers.observe as Record<string, unknown> | undefined;
+        const callback = observations?.[name];
+        if (typeof callback !== "function") throw new Error("Missing observation handler");
+        result = await callback({ event: message.params.event, notification: message, signal: request.signal });
+      } else {
+        const callback = callbacks?.[name];
+        if (typeof callback !== "function") throw new Error("Missing intercept handler");
+        result = await callback({ event: message.params.event, capabilities: message.params.capabilities,
+          state: message.params.state, request: message, signal: request.signal });
+      }
+    }
     if (canonical.method === "hooks/observe")
       return new Response(null, { status: result === undefined ? 204 : 500 });
     if (!object(result) || Object.hasOwn(result, "protocolVersion"))

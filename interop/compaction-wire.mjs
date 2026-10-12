@@ -34,8 +34,8 @@ const malformedResponses = new Set([
 ]);
 async function receive(request, sub, config, store) {
   let bodies = {};
-  const evaluate = (message) => {
-    const event = message.params.event;
+  const evaluate = (ctx) => {
+    const event = ctx.event;
     for (const item of event.items ?? []) bodies[item.id] = inlineText(item.parts);
     for (const key of ["instructions", "summary"])
       if (key in event) bodies[key] = inlineText(event[key]);
@@ -63,17 +63,16 @@ async function receive(request, sub, config, store) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),
       }),
-      (message) => {
-        evaluate(message);
-        return { effects: [] };
-      },
+      { intercept: request.params.event.type === "context.compact.before"
+          ? { contextCompactBefore: (ctx) => { evaluate(ctx); return { effects: [] }; } }
+          : { contextCompactAfter: (ctx) => { evaluate(ctx); return { effects: [] }; } } },
     );
     response = await checked.json();
     if (!response.error)
       response = {
         jsonrpc: "2.0",
         id: request.id,
-        result: { protocolVersion: "draft", ...evaluate(request) },
+        result: { protocolVersion: "draft", ...evaluate({ event: request.params.event }) },
       };
   } else {
     const handled = await hooks.handle(
@@ -82,7 +81,9 @@ async function receive(request, sub, config, store) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(request),
       }),
-      evaluate,
+      { intercept: request.params.event.type === "context.compact.before"
+          ? { contextCompactBefore: evaluate }
+          : { contextCompactAfter: evaluate } },
     );
     response = await handled.json();
   }
@@ -175,7 +176,9 @@ async function exchange(plan, sub, name, snapshot) {
     },
     {
       source: "urn:ahp:compaction-host",
-      capabilities: { [type]: snapshot.capabilities },
+      capabilities: snapshot.boundary === "before"
+        ? { contextCompactBefore: { intercept: { modifyInstructions: "replace", message: true, returnResult: true, deny: true } } }
+        : { contextCompactAfter: { intercept: { modifySummary: "replace", message: true } } },
       auth: auth({
         resolveEnvironmentVariable: (name) =>
           name === "UPLOAD" ? credentials.uploadToken : credentials.token,
@@ -183,7 +186,7 @@ async function exchange(plan, sub, name, snapshot) {
     },
   );
   try {
-    const result = await client.dispatch(type, event);
+    const result = await client.dispatch(type, event, { capabilities: snapshot.capabilities });
     // Receipts are independent receiver evidence, not reconstructed SDK envelopes.
     // The fixture command's final arguments are schema, shared store, and config.
     const store = plan.receiverCommand.at(-2);

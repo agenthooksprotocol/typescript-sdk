@@ -40,7 +40,7 @@ for (const mode of ["no-effect", "deny"] as const) {
       },
       {
         source: "urn:testing:public-fixture",
-        capabilities: { "tool.before": { effects: ["deny"] } },
+        capabilities: { toolBefore: { intercept: { deny: true } } },
         auth: auth(),
       },
     );

@@ -44,7 +44,7 @@ const client = (...fixtures: Fixture[]) => new Hooks({
   })),
 }, {
   source: "urn:agenthooksprotocol:tests:runner",
-  capabilities: { "tool.before": { effects: ["deny"] } },
+  capabilities: { toolBefore: { intercept: { deny: true } } },
 });
 async function exchange(...fixtures: Fixture[]) {
   const hooks = client(...fixtures);

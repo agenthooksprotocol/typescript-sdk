@@ -65,15 +65,13 @@ for (const selection of ["body", "metadata", "omit"] as const) {
               request.headers.get("authorization"),
               "Bearer event-only",
             );
-            return hooks.handle(request, (message) => {
-              assert.equal(message.method, "hooks/observe");
-              if (message.method !== "hooks/observe")
-                throw Error("Unexpected method");
-              const event = message.params.event;
+            return hooks.handle(request, { observe: { userMessageInbound: (ctx) => {
+              assert.equal(ctx.notification.method, "hooks/observe");
+              const event = ctx.event;
               assert.equal(event.type, "user.message.inbound");
               if (event.type !== "user.message.inbound")
                 throw Error("Unexpected event");
-              const item = (event as import("agenthooksprotocol/client").UserMessageInboundEvent).message.messages[0]!.parts[0]!;
+              const item = event.message.messages[0]!.parts[0]!;
               assert.equal(item.id, "item");
               assert.equal(item.selection, selection);
               const body = item.body;
@@ -94,9 +92,9 @@ for (const selection of ["body", "metadata", "omit"] as const) {
               assert.equal(item.gap, undefined);
               if (selection === "body") assert.equal(uploads, 1);
               deliveries++;
-            });
+            } } });
           },
-          capabilities: { "user.message.inbound": { modes: ["observe"] } },
+          capabilities: { userMessageInbound: { observe: true } },
           auth: auth({
             authenticate: async (context) => ({
               token: context.url.endsWith("/uploads")
@@ -444,14 +442,14 @@ for (const selection of ["body", "metadata", "omit"] as const) {
       subscriptions: [{ mode: "observe", events: ["user.message.inbound"], content: { default: selection } }],
     }] }, {
       source: "urn:test:inline",
-      capabilities: { "user.message.inbound": { modes: ["observe"] } },
+      capabilities: { userMessageInbound: { observe: true } },
       fetch: async (input, init) => {
         const request = new Request(input, init);
         assert.equal(request.url, "https://receiver.test/hooks");
-        return hooks.handle(request, (message) => {
-          if (message.method !== "hooks/observe" || message.params.event.type !== "user.message.inbound")
+        return hooks.handle(request, { observe: { userMessageInbound: (ctx) => {
+          if (ctx.notification.method !== "hooks/observe" || ctx.event.type !== "user.message.inbound")
             throw Error("Unexpected delivery");
-          const event = message.params.event as import("agenthooksprotocol/client").UserMessageInboundEvent;
+          const event = ctx.event;
           assert.equal(event.message.messages.length, 2);
           for (const [index, value] of event.message.messages.entries()) {
             assert.equal(value.id, `message-${index}`);
@@ -464,7 +462,7 @@ for (const selection of ["body", "metadata", "omit"] as const) {
             assert.equal(part.gap, undefined);
           }
           deliveries++;
-        });
+        } } });
       },
     });
     try {

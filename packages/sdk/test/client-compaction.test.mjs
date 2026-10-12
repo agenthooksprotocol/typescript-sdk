@@ -8,8 +8,8 @@ function client(reply) {
     id: 'test.compaction', transport: { type: 'http', url: 'https://backend.test/hooks' },
     subscriptions: [{ mode: 'intercept', events: ['context.compact.before', 'context.compact.after'], timeoutMs: 1000, failurePolicy: 'fail-open', content: { default: 'body' } }],
   }] }, { source: 'urn:test:compaction', capabilities: {
-    'context.compact.before': { effects: ['return'] },
-    'context.compact.after': { effects: [] },
+    contextCompactBefore: {intercept: {returnResult: true}},
+    contextCompactAfter: { intercept: { modifySummary: "replace" } },
   }, fetch: async (_url, init) => {
     const request = JSON.parse(init.body);
     return Response.json({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: 'draft', effects: reply(request) } });

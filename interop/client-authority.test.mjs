@@ -33,21 +33,34 @@ function registration(subscriptions) {
   };
 }
 for (const [name, capabilities] of [
-  ["empty shorthand", {}],
-  ["omitted event", { "session.end": { modes: ["observe"] } }],
-  ["intercept-only shorthand", { "tool.before": { effects: ["deny"] } }],
+  ["no event declarations", {}],
   [
-    "explicit intercept-only declaration",
+    "omitted event",
     {
-      "tool.before": {
-        modes: ["intercept"],
-        capabilities: { effects: ["deny"] },
+      sessionEnd: {
+        observe: true,
       },
     },
   ],
   [
-    "empty modes",
-    { "tool.before": { modes: [], capabilities: { effects: [] } } },
+    "intercept-only authority",
+    {
+      toolBefore: {
+        intercept: {
+          deny: true,
+        },
+      },
+    },
+  ],
+  [
+    "explicit deny-only interception",
+    {
+      toolBefore: {
+        intercept: {
+          deny: true,
+        },
+      },
+    },
   ],
 ]) {
   test(`observation requires explicit authority: ${name}`, async () => {
@@ -76,7 +89,11 @@ test("explicit observe-only declaration delivers no interception or effect grant
   const messages = [];
   const client = new Hooks(registration([subscription("observe")]), {
     source: "urn:test:authority",
-    capabilities: { "tool.before": { modes: ["observe"] } },
+    capabilities: {
+      toolBefore: {
+        observe: true,
+      },
+    },
     fetch: async (_url, init) => {
       messages.push(JSON.parse(init.body));
       return new Response(null, { status: 204 });
@@ -84,7 +101,10 @@ test("explicit observe-only declaration delivers no interception or effect grant
   });
   try {
     const result = await client.dispatch("tool.before", input);
-    assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
+    assert.deepEqual(
+      result.diagnostics.filter((d) => d.phase === "observation"),
+      [],
+    );
     assert.deepEqual(result.effects, []);
     assert.equal(messages.length, 1);
     assert.equal(messages[0].method, "hooks/observe");
@@ -97,14 +117,14 @@ test("explicit observe-only declaration delivers no interception or effect grant
 for (const observe of [false, true]) {
   test(`short-circuit fallback observation is ${observe ? "explicitly granted" : "not inferred"}`, async () => {
     const messages = [];
-    const capabilities = { effects: ["deny"] };
+    const capabilities = { intercept: { deny: true } };
     const client = new Hooks(
       registration([subscription("intercept"), subscription("intercept")]),
       {
         source: "urn:test:authority",
         capabilities: {
-          "tool.before": observe
-            ? { modes: ["intercept", "observe"], capabilities }
+          toolBefore: observe
+            ? { ...capabilities, observe: true }
             : capabilities,
         },
         fetch: async (_url, init) => {
@@ -125,7 +145,10 @@ for (const observe of [false, true]) {
     );
     try {
       const result = await client.dispatch("tool.before", input);
-      assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
+      assert.deepEqual(
+        result.diagnostics.filter((d) => d.phase === "observation"),
+        [],
+      );
       assert.deepEqual(
         messages.map((message) => message.method),
         observe ? ["hooks/intercept", "hooks/observe"] : ["hooks/intercept"],
@@ -140,15 +163,23 @@ test("wildcard subscriptions intersect explicit modes without broadening them", 
   let deliveries = 0;
   const client = new Hooks(registration([subscription("observe", ["*"])]), {
     source: "urn:test:authority",
-    capabilities: { "tool.before": { effects: [] } },
+    capabilities: {
+      toolBefore: {
+        intercept: {
+          message: true,
+        },
+      },
+    },
     fetch: async () => {
       deliveries++;
       return new Response(null, { status: 204 });
     },
   });
   try {
-    const result = await client.dispatch("tool.before", input);
-    result.diagnostics.filter(d => d.phase === "observation");
+    const result = await client.dispatch("tool.before", input, {
+      capabilities: { effects: [] },
+    });
+    result.diagnostics.filter((d) => d.phase === "observation");
     assert.equal(deliveries, 0);
   } finally {
     await client.close();

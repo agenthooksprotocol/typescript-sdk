@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 
 test(
-  "public event grants and canonical final-state declarations are explicit and readonly",
+  "public typed host capabilities and canonical final-state declarations are explicit and readonly",
   { timeout: 30000 },
   () => {
     const result = spawnSync(

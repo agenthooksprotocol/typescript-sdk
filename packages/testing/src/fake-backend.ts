@@ -129,14 +129,16 @@ async function main(): Promise<void> {
           headers: { "content-type": "application/json" },
           body: line,
         }),
-        (message) => {
-          if (message.method === "hooks/observe") return;
-          return {
-            effects:
-              config.mode === "deny"
-                ? [{ type: "deny", reason: config.reason }]
-                : [],
-          };
+        {
+          intercept: {
+            toolBefore: () => ({
+              effects:
+                config.mode === "deny"
+                  ? [{ type: "deny", reason: config.reason }]
+                  : [],
+            }),
+          },
+          observe: { toolBefore: () => {} },
         },
       );
       const frame = await response.text();

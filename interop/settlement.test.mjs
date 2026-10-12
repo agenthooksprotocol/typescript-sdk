@@ -24,8 +24,8 @@ const { hooks } = await import(
 /**
  * @param {import("node:test").TestContext} t
  * @param {{id: string, mode: "intercept" | "observe", events: import("agenthooksprotocol/client").EventType[]}[]} routes
- * @param {import("agenthooksprotocol/client").EventCapabilities} capabilities
- * @param {(message: import("agenthooksprotocol/server").Message, route: string) => ReturnType<import("agenthooksprotocol/server").Handler>} handler
+ * @param {import("agenthooksprotocol/client").HostCapabilities} capabilities
+ * @param {(message: import("agenthooksprotocol/server").InterceptRequest | import("agenthooksprotocol/server").ObserveNotification, route: string) => import("agenthooksprotocol/server").ServerReply<"tool.before" | "task.change.before" | "workspace.change.before"> | void | Promise<import("agenthooksprotocol/server").ServerReply<"tool.before" | "task.change.before" | "workspace.change.before"> | void>} handler
  * @param {string} source
  */
 async function receiver(
@@ -48,7 +48,18 @@ async function receiver(
           },
           body: Buffer.concat(chunks),
         }),
-        (message) => handler(message, req.url),
+        {
+          intercept: {
+            toolBefore: async (ctx) => (await handler(ctx.request, req.url)) ?? {},
+            taskChangeBefore: async (ctx) => (await handler(ctx.request, req.url)) ?? {},
+            workspaceChangeBefore: async (ctx) => (await handler(ctx.request, req.url)) ?? {},
+          },
+          observe: {
+            toolBefore: async (ctx) => { await handler(ctx.notification, req.url); },
+            taskChangeBefore: async (ctx) => { await handler(ctx.notification, req.url); },
+            taskChangeAfter: async (ctx) => { await handler(ctx.notification, req.url); },
+          },
+        },
       );
       res.writeHead(response.status, Object.fromEntries(response.headers));
       res.end(Buffer.from(await response.arrayBuffer()));
@@ -119,7 +130,7 @@ test("effective observation payload and offline composition use public SDK respo
   const client = await receiver(
     t,
     [{ id: "policy", mode: "intercept", events: ["tool.before"] }],
-    { "tool.before": capabilities },
+    { toolBefore: { intercept: { modifyInput: "replace" } } },
     (message) => {
       assert.equal(message.method, "hooks/intercept");
       if (message.method !== "hooks/intercept")
@@ -137,7 +148,7 @@ test("effective observation payload and offline composition use public SDK respo
       };
     },
   );
-  const result = await client.dispatch("tool.before", toolInput);
+  const result = await client.dispatch("tool.before", toolInput, { capabilities });
   assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
   result.diagnostics.filter(d => d.phase === "observation");
   assert.equal(result.event.tool.input.x, 2);
@@ -182,8 +193,8 @@ test("task lineage receives canonical SDK events and rejects malformed explicit 
       },
     ],
     {
-      "task.change.before": { modes: ["observe"] },
-      "task.change.after": { modes: ["observe"] },
+      taskChangeBefore: { observe: true },
+      taskChangeAfter: { observe: true },
     },
     (message) => {
       messages.push(message);
@@ -233,7 +244,7 @@ test("task lineage receives canonical SDK events and rejects malformed explicit 
   const other = await receiver(
     t,
     [{ id: "other", mode: "observe", events: ["task.change.before"] }],
-    { "task.change.before": { modes: ["observe"] } },
+    { taskChangeBefore: { observe: true } },
     (message) => lineage.accept(message),
     "urn:other",
   );
@@ -259,10 +270,9 @@ test("typed task/workspace controls use public SDK and reject malformed offline 
       },
     ],
     {
-      "task.change.before": { effects: ["deny"] },
-      "workspace.change.before": {
-        effects: ["modify", "deny"],
-        modify: { workspace: { replace: true, merge: true } },
+      taskChangeBefore: { intercept: { deny: true } },
+      workspaceChangeBefore: {
+        intercept: { modifyWorkspace: "replace-and-merge", deny: true },
       },
     },
     (message) => {
@@ -279,7 +289,7 @@ test("typed task/workspace controls use public SDK and reject malformed offline 
       operation: "update",
       change: { status: "native-done" },
     },
-  });
+  }, { capabilities: { effects: ["deny"] } });
   assert.deepEqual(task.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(task.effects[0].type, "deny");
   assert.ok(request);
@@ -311,7 +321,12 @@ test("typed task/workspace controls use public SDK and reject malformed offline 
     id: "workspace-before",
     workspace: { kind: "cwd", change: { cwd: "/old" } },
   };
-  const modified = await client.dispatch("workspace.change.before", input);
+  const modified = await client.dispatch("workspace.change.before", input, {
+    capabilities: {
+      effects: ["modify", "deny"],
+      modify: { workspace: { replace: true, merge: true } },
+    },
+  });
   assert.deepEqual(modified.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(modified.event.workspace.change.cwd, "/new");
   // Deliberately bypass hooks.handle, which would reject an unsupported effect.
@@ -332,6 +347,11 @@ test("typed task/workspace controls use public SDK and reject malformed offline 
   const denied = await client.dispatch("workspace.change.before", {
     ...input,
     id: "workspace-denied",
+  }, {
+    capabilities: {
+      effects: ["modify", "deny"],
+      modify: { workspace: { replace: true, merge: true } },
+    },
   });
   assert.deepEqual(denied.diagnostics.filter(d => d.phase !== "observation"), []);
   assert.equal(denied.effects[0].type, "deny");
@@ -352,12 +372,9 @@ test("short-circuit downgrades only uncalled interceptors and awaits observers",
       { id: "explicit", mode: "observe", events: ["tool.before"] },
     ],
     {
-      "tool.before": {
-        modes: ["intercept", "observe"],
-        capabilities: {
-          effects: ["modify", "deny"],
-          modify: { input: { replace: true, merge: false } },
-        },
+      toolBefore: {
+        intercept: { modifyInput: "replace", deny: true },
+        observe: true,
       },
     },
     async (message, route) => {
@@ -378,7 +395,12 @@ test("short-circuit downgrades only uncalled interceptors and awaits observers",
     },
   );
   let settled = false;
-  const work = client.dispatch("tool.before", toolInput).then((result) => {
+  const work = client.dispatch("tool.before", toolInput, {
+    capabilities: {
+      effects: ["modify", "deny"],
+      modify: { input: { replace: true, merge: false } },
+    },
+  }).then((result) => {
     settled = true;
     return result;
   });
@@ -429,21 +451,26 @@ test("chain refreshes receiver evidence after a fast final interception", async 
         headers: { "content-type": "application/json" },
         body: Buffer.concat(chunks),
       }),
-      (message) => {
-        assert.notEqual(message.method, "hooks/capabilities");
-        if (message.method === "hooks/capabilities")
+      {
+        capabilities: (ctx) => {
+          assert.notEqual(ctx.request.method, "hooks/capabilities");
           throw Error("Unexpected discovery");
-        if (message.method === "hooks/intercept") {
-          assert.equal(message.params.state?.permission, "none");
-          assert.equal(message.params.state?.candidate, null);
-        }
-        entries.push({
-          kind: message.method === "hooks/intercept" ? "received" : "observed",
-          id: message.params.event.id,
-        });
-        return message.method === "hooks/intercept"
-          ? { effects: [] }
-          : undefined;
+        },
+        intercept: {
+          toolBefore: (ctx) => {
+            assert.notEqual(ctx.request.method, "hooks/capabilities");
+            assert.equal(ctx.state?.permission, "none");
+            assert.equal(ctx.state?.candidate, null);
+            entries.push({ kind: "received", id: ctx.event.id });
+            return { effects: [] };
+          },
+        },
+        observe: {
+          toolBefore: (ctx) => {
+            assert.notEqual(ctx.notification.method, "hooks/capabilities");
+            entries.push({ kind: "observed", id: ctx.event.id });
+          },
+        },
       },
     );
     res

@@ -6,19 +6,16 @@ import {
   type EventType,
   type HarnessEvent,
   type HooksOptions,
-  type StaticCapabilityManifest,
+  type HostCapabilities,
 } from "agenthooksprotocol/client";
 
 const options: HooksOptions = {
   source: "urn:test:harness",
   capabilities: {
-    "tool.before": {
-      modes: ["intercept", "observe"],
-      capabilities: { effects: ["deny", "modify"] },
-    },
-    "user.message.inbound": { modes: ["observe"] },
-    "model.request.before": { modes: ["observe"] },
-    "session.start": { modes: ["observe"] },
+    toolBefore: {intercept: {deny: true}, observe: true},
+    userMessageInbound: {observe: true},
+    modelRequestBefore: {observe: true},
+    sessionStart: {observe: true},
   },
 };
 const hooks = new Hooks(
@@ -100,7 +97,7 @@ void hooks.dispatch("tool.before", minimalTool, {
   state: { permission: "none", candidate: null },
 });
 
-declare const manifest: StaticCapabilityManifest;
+declare const manifest: HostCapabilities;
 const staticOptions: HooksOptions = {
   source: "urn:test:harness",
   capabilities: manifest,

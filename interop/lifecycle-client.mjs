@@ -227,8 +227,6 @@ async function sdkCall(
       mode,
       bodySelected,
       ...(content ? { content } : {}),
-      capabilities:
-        mode === "intercept" ? message.params.capabilities : undefined,
       transport,
       ...(upload ? { upload } : {}),
       auth: fixtureAuth(auth),
@@ -248,6 +246,7 @@ async function sdkCall(
       event,
       message.params.state,
       signal,
+      mode === "intercept" ? message.params.capabilities : undefined,
     );
     const observations = result.diagnostics.filter(d => d.phase === "observation");
     const confirmations = adapter.contentUploads.map((confirmation) => ({

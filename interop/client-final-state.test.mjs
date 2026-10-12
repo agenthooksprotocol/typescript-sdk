@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
-const { Hooks } = await import(
+const { capabilityCount, Hooks } = await import(
   require.resolve("agenthooksprotocol/client")
 );
 const { hooks } = await import(
@@ -46,13 +46,34 @@ function setup(responses, failurePolicy = "fail-open") {
     },
     {
       source: "urn:test:final-state",
-      capabilities: { "tool.before": caps, "session.start": { effects: [] } },
+      capabilities: {
+        toolBefore: {
+          intercept: {
+            allow: true,
+            deny: true,
+            returnResult: true,
+            modifyInput: "replace-and-merge",
+          },
+        },
+        sessionStart: {
+          intercept: {
+            message: true,
+          },
+        },
+      },
       fetch: async (url, init) => {
         const response = responses[Number(new URL(url).pathname.slice(1))];
         if (typeof response === "function") return response();
-        return hooks.handle(new Request(url, init), () => ({
-          effects: response,
-        }));
+        return hooks.handle(new Request(url, init), {
+          intercept: {
+            toolBefore: () => ({
+              effects: response,
+            }),
+            sessionStart: () => ({
+              effects: response,
+            }),
+          },
+        });
       },
     },
   );
@@ -245,22 +266,31 @@ test("final-state projection does not append continuation instructions twice", a
     {
       source: "urn:test:final-state",
       capabilities: {
-        "turn.finish.before": {
-          effects: ["flow"],
-          flow: {
-            operations: ["continue"],
-            continuationCount: 0,
-            maxContinuations: 2,
-            remainingContinuations: 2,
+        turnFinishBefore: {
+          intercept: {
+            flow: {
+              operations: ["continue"],
+              continuationCount: capabilityCount(0),
+              maxContinuations: capabilityCount(2),
+              remainingContinuations: capabilityCount(2),
+            },
           },
         },
       },
       fetch: async (url, init) =>
-        hooks.handle(new Request(url, init), () => ({
-          effects: [
-            { type: "flow", operation: "continue", instruction: "Check once" },
-          ],
-        })),
+        hooks.handle(new Request(url, init), {
+          intercept: {
+            turnFinishBefore: () => ({
+              effects: [
+                {
+                  type: "flow",
+                  operation: "continue",
+                  instruction: "Check once",
+                },
+              ],
+            }),
+          },
+        }),
     },
   );
   try {
@@ -280,7 +310,10 @@ test("final-state projection does not append continuation instructions twice", a
         },
       },
     );
-    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.deepEqual(
+      result.diagnostics.filter((d) => d.phase !== "observation"),
+      [],
+    );
     assert.equal(result.state.flow, "continue");
     assert.deepEqual(result.state.instructions, ["Earlier", "Check once"]);
     assert.ok(Object.isFrozen(result.state.instructions));

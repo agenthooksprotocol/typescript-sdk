@@ -128,7 +128,7 @@ for (const name of ["compaction", "elicitation"])
               },
               {
                 source: "urn:test",
-                capabilities: { "context.compact.before": { effects: [] } },
+                capabilities: { contextCompactBefore: { intercept: { deny: true } } },
                 auth: auth({
                   authenticate(context, options) {
                     if (context.authentication)
@@ -152,7 +152,7 @@ for (const name of ["compaction", "elicitation"])
                     text: "changed",
                   },
                 ],
-              });
+              }, { capabilities: { effects: [] } });
               assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
               assert.deepEqual(result.effects, []);
             } finally {

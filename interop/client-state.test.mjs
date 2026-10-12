@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 const require = createRequire(
   new URL("../packages/sdk/package.json", import.meta.url),
 );
-const { Hooks, ConfigurationError, Attachment } = await import(
+const { capabilityCount, Hooks, ConfigurationError, Attachment } = await import(
   require.resolve("agenthooksprotocol/client")
 );
 const { hooks } = await import(
@@ -30,7 +30,14 @@ const seed = () => ({
 });
 function setup(
   responses,
-  staticCaps = caps,
+  staticCaps = {
+    allow: true,
+    ask: true,
+    deny: true,
+    returnResult: true,
+    modifyInput: "replace-and-merge",
+    flow: { operations: ["stop"] },
+  },
   extra = {},
   failurePolicy = "fail-open",
 ) {
@@ -56,16 +63,24 @@ function setup(
       ...extra,
       source: "urn:test:state",
       capabilities: {
-        "tool.before": {
-          modes: ["intercept", "observe"],
-          capabilities: staticCaps,
-        },
+        toolBefore: { intercept: staticCaps, observe: true },
       },
       fetch: async (url, init) =>
-        hooks.handle(new Request(url, init), (message) => {
-          seen.push(structuredClone(message));
-          if (message.method === "hooks/observe") return;
-          return { effects: responses[Number(new URL(url).pathname.slice(1))] };
+        hooks.handle(new Request(url, init), {
+          intercept: {
+            toolBefore: ({ request: message }) => {
+              seen.push(structuredClone(message));
+              if (message.method === "hooks/observe") return;
+              return {
+                effects: responses[Number(new URL(url).pathname.slice(1))],
+              };
+            },
+          },
+          observe: {
+            toolBefore: ({ notification: message }) => {
+              seen.push(structuredClone(message));
+            },
+          },
         }),
     },
   );
@@ -73,9 +88,17 @@ function setup(
 }
 test("event-map delivery modes never infer elicitation answer grants", async () => {
   const capabilities = {
-    "user.elicitation.request": { effects: ["deny"] },
-    "session.start": { modes: ["observe"] },
-    "session.end": { modes: ["observe"] },
+    userElicitationRequest: {
+      intercept: {
+        deny: true,
+      },
+    },
+    sessionStart: {
+      observe: true,
+    },
+    sessionEnd: {
+      observe: true,
+    },
   };
   const client = new Hooks(
     {
@@ -124,9 +147,17 @@ test("event-map delivery modes never infer elicitation answer grants", async () 
       ConfigurationError,
     );
     assert.deepEqual(capabilities, {
-      "user.elicitation.request": { effects: ["deny"] },
-      "session.start": { modes: ["observe"] },
-      "session.end": { modes: ["observe"] },
+      userElicitationRequest: {
+        intercept: {
+          deny: true,
+        },
+      },
+      sessionStart: {
+        observe: true,
+      },
+      sessionEnd: {
+        observe: true,
+      },
     });
   } finally {
     await client.close();
@@ -275,12 +306,16 @@ test("preseeded terminal state reaches the first receiver and settles after acce
 });
 test("complete narrowing validates controls and continuation budgets without merging omissions", async () => {
   const advertised = {
-    ...caps,
+    allow: true,
+    ask: true,
+    deny: true,
+    returnResult: true,
+    modifyInput: "replace-and-merge",
     flow: {
       operations: ["stop"],
-      maxContinuations: 2,
-      remainingContinuations: 1,
-      continuationCount: 1,
+      maxContinuations: capabilityCount(2),
+      remainingContinuations: capabilityCount(1),
+      continuationCount: capabilityCount(1),
     },
   };
   const { client, seen } = setup([[]], advertised);
@@ -292,7 +327,10 @@ test("complete narrowing validates controls and continuation budgets without mer
     const result = await client.dispatch("tool.before", tool(), {
       capabilities: narrowed,
     });
-    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.deepEqual(
+      result.diagnostics.filter((d) => d.phase !== "observation"),
+      [],
+    );
     assert.deepEqual(seen[0].params.capabilities, narrowed);
     for (const flow of [
       { operations: ["stop", "continue"] },
@@ -370,7 +408,15 @@ test("host input validation follows SDK acceptance, without atomic protocol reje
     ];
     const { client, seen } = setup(
       [effects, []],
-      { ...caps, effects: [...caps.effects, "message"] },
+      {
+        allow: true,
+        ask: true,
+        deny: true,
+        returnResult: true,
+        modifyInput: "replace-and-merge",
+        message: true,
+        flow: { operations: ["stop"] },
+      },
       {},
       failurePolicy,
     );
@@ -378,10 +424,18 @@ test("host input validation follows SDK acceptance, without atomic protocol reje
       const input = tool();
       input.tool.input = { task: 1 };
       const result = await client.dispatch("tool.before", input);
-      assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+      assert.deepEqual(
+        result.diagnostics.filter((d) => d.phase !== "observation"),
+        [],
+      );
       assert.equal(result.event.tool.input.task, 0);
       assert.equal(seen[1].params.event.tool.input.task, 0);
-      assert.deepEqual(result.effects, effects.filter(effect => effect.type !== "modify" && effect.type !== "return"));
+      assert.deepEqual(
+        result.effects,
+        effects.filter(
+          (effect) => effect.type !== "modify" && effect.type !== "return",
+        ),
+      );
       assert.deepEqual(result.acceptedResponses[0].result.effects, effects);
       // Host refuses execution; it does not roll back SDK effects or invoke
       // subscription failure policy. task > 0 is not an AHP constraint.
@@ -437,7 +491,7 @@ test("pending state omits unrelated neutral fields but preserves explicit fields
 test("immediate abort returns an interrupted result without auth, delivery or content reads", async () => {
   let authCalls = 0;
   let pulls = 0;
-  const { client, seen } = setup([[]], caps, {
+  const { client, seen } = setup([[]], undefined, {
     auth: {
       credential() {
         authCalls++;
@@ -456,16 +510,19 @@ test("immediate abort returns an interrupted result without auth, delivery or co
     input.items = [
       {
         id: "body",
-        kind: "attachment", selection: "body",
+        kind: "attachment",
+        selection: "body",
         mediaType: "application/octet-stream",
-        body: Attachment.stream(new ReadableStream(
-          {
-            pull() {
-              pulls++;
+        body: Attachment.stream(
+          new ReadableStream(
+            {
+              pull() {
+                pulls++;
+              },
             },
-          },
-          { highWaterMark: 0 },
-        )),
+            { highWaterMark: 0 },
+          ),
+        ),
       },
     ];
     const result = await client.dispatch("tool.before", input, {
@@ -473,7 +530,10 @@ test("immediate abort returns an interrupted result without auth, delivery or co
     });
     assert.equal(result.interrupted, true);
     assert.deepEqual(result.effects, []);
-    assert.deepEqual(result.diagnostics.filter(d => d.phase === "observation"), []);
+    assert.deepEqual(
+      result.diagnostics.filter((d) => d.phase === "observation"),
+      [],
+    );
     assert.equal(authCalls, 0);
     assert.equal(pulls, 0);
     assert.equal(seen.length, 0);
@@ -496,27 +556,33 @@ test("host validation can inspect effective input without reading content stream
       ],
       [],
     ],
-    caps,
+    undefined,
   );
   try {
     const input = tool();
     input.items = [
       {
         id: "body",
-        kind: "attachment", selection: "body",
+        kind: "attachment",
+        selection: "body",
         mediaType: "application/octet-stream",
-        body: Attachment.stream(new ReadableStream(
-          {
-            pull() {
-              pulls++;
+        body: Attachment.stream(
+          new ReadableStream(
+            {
+              pull() {
+                pulls++;
+              },
             },
-          },
-          { highWaterMark: 0 },
-        )),
+            { highWaterMark: 0 },
+          ),
+        ),
       },
     ];
     const result = await client.dispatch("tool.before", input);
-    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.deepEqual(
+      result.diagnostics.filter((d) => d.phase !== "observation"),
+      [],
+    );
     assert.equal(result.event.tool.input.x > 0, true);
     assert.equal(pulls, 0);
     assert.equal(seen[0].params.event.tool.input.x, 1);
@@ -528,23 +594,7 @@ test("host validation can inspect effective input without reading content stream
 });
 
 test("explicit subscriptions require advertised event and mode; wildcards intersect the host manifest", async () => {
-  const manifest = {
-    authentication: [],
-    contentCategories: ["text"],
-    correlationIdentityFields: [],
-    events: [
-      {
-        event: "tool.before",
-        modes: ["intercept"],
-        capabilities: { effects: [] },
-      },
-    ],
-    gaps: [],
-    limits: {},
-    managedPolicy: { disableable: false, scopes: ["user"] },
-    toolPaths: ["*"],
-    transports: ["http"],
-  };
+  const capabilities = { toolBefore: { intercept: { message: true } } };
   function create(subscriptions) {
     const seen = [];
     const client = new Hooks(
@@ -560,11 +610,21 @@ test("explicit subscriptions require advertised event and mode; wildcards inters
       },
       {
         source: "urn:test:manifest",
-        capabilities: manifest,
+        capabilities,
         fetch: (url, init) =>
-          hooks.handle(new Request(url, init), (message) => {
-            seen.push(message.method);
-            if (message.method === "hooks/intercept") return { effects: [] };
+          hooks.handle(new Request(url, init), {
+            intercept: {
+              toolBefore: ({ request: message }) => {
+                seen.push(message.method);
+                if (message.method === "hooks/intercept")
+                  return { effects: [] };
+              },
+            },
+            observe: {
+              toolBefore: ({ notification: message }) => {
+                seen.push(message.method);
+              },
+            },
           }),
       },
     );
@@ -587,7 +647,9 @@ test("explicit subscriptions require advertised event and mode; wildcards inters
     try {
       await assert.rejects(client.initialized, ConfigurationError);
       await assert.rejects(
-        client.dispatch("tool.before", tool()),
+        client.dispatch("tool.before", tool(), {
+          capabilities: { effects: [] },
+        }),
         ConfigurationError,
       );
       assert.deepEqual(seen, []);
@@ -601,13 +663,18 @@ test("explicit subscriptions require advertised event and mode; wildcards inters
   ]);
   try {
     await client.initialized;
-    const result = await client.dispatch("tool.before", tool());
-    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+    const result = await client.dispatch("tool.before", tool(), {
+      capabilities: { effects: [] },
+    });
+    assert.deepEqual(
+      result.diagnostics.filter((d) => d.phase !== "observation"),
+      [],
+    );
     assert.deepEqual(seen, ["hooks/intercept"]);
   } finally {
     await client.close();
   }
-  manifest.events[0].modes = ["observe"];
+  capabilities.toolBefore = { observe: true };
   const observeOnly = create([
     sub("observe", "tool.before"),
     sub("intercept", "*"),
@@ -615,7 +682,10 @@ test("explicit subscriptions require advertised event and mode; wildcards inters
   try {
     await observeOnly.client.initialized;
     const result = await observeOnly.client.dispatch("tool.before", tool());
-    assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.deepEqual(
+      result.diagnostics.filter((d) => d.phase !== "observation"),
+      [],
+    );
     assert.deepEqual(observeOnly.seen, ["hooks/observe"]);
   } finally {
     await observeOnly.client.close();

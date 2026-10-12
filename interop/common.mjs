@@ -235,14 +235,42 @@ export function fixtureRegistration(cfg, rows) {
   return parsed.value;
 }
 
+/** Explicit host support for the fixture adapter. Occurrence grants remain wire data.
+ * @type {import("agenthooksprotocol/client").HostCapabilities}
+ */
+export const fixtureHostCapabilities = {
+  toolBefore: {
+    intercept: {
+      allow: true,
+      deny: true,
+      ask: true,
+      returnResult: true,
+      message: true,
+      modifyInput: "replace-and-merge",
+      flow: { operations: ["stop"] },
+      inject: { context: { append: true, deliverAt: ["now", "next_turn"] } },
+    },
+  },
+  turnFinishBefore: {
+    intercept: {
+      message: true,
+      flow: {
+        operations: ["stop", "continue"],
+        remainingContinuations: sdkClient.capabilityCount(2),
+        continuationCount: sdkClient.capabilityCount(0),
+        maxContinuations: sdkClient.capabilityCount(2),
+      },
+    },
+  },
+};
 /**
  * Union the capabilities exercised by host fixtures. Per-occurrence narrowing is
  * passed separately to Hooks; a later scenario must not replace earlier support.
  * @param {Array<{request: import("agenthooksprotocol/draft").InterceptRequest}>} rows
- * @returns {import("agenthooksprotocol/client").EventCapabilities}
+ * @returns {Partial<Record<import("agenthooksprotocol/client").EventType, import("agenthooksprotocol/client").Capabilities>>}
  */
 export function fixtureCapabilities(rows) {
-  /** @type {import("agenthooksprotocol/client").EventCapabilities} */
+  /** @type {Partial<Record<import("agenthooksprotocol/client").EventType, import("agenthooksprotocol/client").Capabilities>>} */
   const result = {};
   for (const { request } of rows) {
     const type = request.params.event.type;
