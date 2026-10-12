@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.4.1...agenthooksprotocol-v0.5.0) (2026-10-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* replace draft compatibility surfaces with typed event APIs
+
+### Features
+
+* replace draft compatibility surfaces with typed event APIs ([1121ed1](https://github.com/agenthooksprotocol/typescript-sdk/commit/1121ed16bc48b9070ea68860ae35307d9e8716e4))
+
+
+### Bug Fixes
+
+* sync merged canonical provenance and pre-major release policy ([a4ba9c5](https://github.com/agenthooksprotocol/typescript-sdk/commit/a4ba9c5b22f19d384607005da1ba50cafb6c27f0))
+
 ## [0.4.1](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.4.0...agenthooksprotocol-v0.4.1) (2026-10-11)
 
 

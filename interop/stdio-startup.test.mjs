@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rename, rm } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { waitForStdioReady } from "./stdio-startup.mjs";
 
@@ -31,10 +31,14 @@ test("discovery begins only after bounded startup, not during compilation/relay 
     });
     await delay(40);
     assert.equal(discovered, false);
-    await writeFile(
-      ready,
-      JSON.stringify({ controlEndpoint: "http://127.0.0.1:1" }),
-    );
+    // Publish only the completed payload: writeFile can expose an empty file.
+    const pendingReady = ready + ".tmp";
+    const payload = JSON.stringify({ controlEndpoint: "http://127.0.0.1:1" });
+    await writeFile(pendingReady, payload);
+    await assert.rejects(readFile(ready, "utf8"), { code: "ENOENT" });
+    assert.equal(discovered, false);
+    await rename(pendingReady, ready);
+    assert.equal(await readFile(ready, "utf8"), payload);
     await starting;
     assert.equal(discovered, true);
     assert.equal(child.listenerCount("exit"), 0);
@@ -63,4 +67,6 @@ test("malformed readiness is not a successful handshake", () =>
   fixture(async ({ child, ready, config }) => {
     await writeFile(ready, "{}");
     await assert.rejects(waitForStdioReady(child, config), /Invalid readiness/);
+    await writeFile(ready, "{");
+    await assert.rejects(waitForStdioReady(child, config), SyntaxError);
   }));
