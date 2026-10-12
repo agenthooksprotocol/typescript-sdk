@@ -190,8 +190,8 @@ const host = { sessionStart: { observe: true }, toolBefore: { intercept: { allow
 const elicitationFacility = { userElicitationRequest: { intercept: { elicitation: { form: true } } } } satisfies HostCapabilities;
 // @ts-expect-error Empty interception grants no facility.
 const emptyIntercept = { toolBefore: { intercept: {} } } satisfies HostCapabilities;
-// @ts-expect-error Entries need interception or explicit observation.
-const missingMode = { toolBefore: {} } satisfies HostCapabilities;
+// Empty or observe: false entries are valid declarations that grant nothing.
+const missingMode = { toolBefore: {}, sessionEnd: { observe: false } } satisfies HostCapabilities;
 // @ts-expect-error Observation-only events cannot intercept.
 const wrongMode = { sessionEnd: { intercept: { deny: true } } } satisfies HostCapabilities;
 const widerWrongTarget = { toolBefore: { intercept: { deny: true as const, modifySummary: 'replace' as const } } };

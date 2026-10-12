@@ -244,6 +244,9 @@ const capabilities = {
 ```
 
 Omitted events, delivery modes, controls, and elicitation dimensions grant nothing.
+Each event has its own declaration type (for example `ToolBeforeHostCapabilities`
+or `SessionEndHostCapabilities`) with an optional boolean `observe`; an empty
+entry or `observe: false` is valid and grants nothing.
 An interception declaration needs a supported control or facility; elicitation-only
 interception can advertise form or URL handling without an effect grant. Fields
 are specific to the event: observation-only events cannot declare interception,
@@ -356,6 +359,10 @@ limits; `Hooks` shares its upload limit across its concurrent invocations.
 caller-supplied fetch adapter. The adapter owns network policy and authentication;
 close the transport to release its processes and pending requests. Transport
 handling validates envelopes, not application contracts or boundary admission.
+
+## Migrating
+
+Breaking changes between releases are listed in [MIGRATING.md](MIGRATING.md).
 
 ## Packages
 

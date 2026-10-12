@@ -6865,15 +6865,13 @@ function capabilityOwnedHost(value: unknown): HostCapabilities {
     const rule = capabilityRules[event]!;
     const declaration = capabilityObject(selected);
     capabilityKeys(declaration, ["observe", "intercept"]);
+    // observe: false is the same as omitting observe; a declaration with neither mode installs nothing.
     if (
       declaration.observe !== undefined &&
-      (!rule.observe || declaration.observe !== true)
+      (!rule.observe || typeof declaration.observe !== "boolean")
     )
       capabilityInvalid();
-    if (declaration.intercept === undefined) {
-      if (declaration.observe !== true) capabilityInvalid();
-      continue;
-    }
+    if (declaration.intercept === undefined) continue;
     if (!rule.intercept) capabilityInvalid();
     const grants = capabilityObject(declaration.intercept);
     const allowed = [...rule.controls, ...Object.keys(rule.modify)];
@@ -6951,10 +6949,6 @@ function capabilityOwnedHost(value: unknown): HostCapabilities {
   return host as HostCapabilities;
 }
 
-export type CapabilityObservation = {
-  readonly observe: true;
-  readonly intercept?: never;
-};
 export type CapabilityFlowOperation = "continue" | "stop";
 export type CapabilityDelivery = "next_turn" | "now";
 export type CapabilityFlow =
@@ -7010,6 +7004,10 @@ export interface WireDeclaration {
     | readonly ["intercept", "observe"];
   readonly capabilities?: WireCapabilities;
 }
+export type ConfigChangeAfterHostCapabilities = {
+  readonly observe?: boolean;
+  readonly intercept?: never;
+};
 export type ConfigChangeBeforeIntercept = CapabilityAtLeastOne<{
   readonly deny?: true;
   readonly elicitation?: CapabilityAtLeastOne<{
@@ -7033,9 +7031,10 @@ export type ConfigChangeBeforeIntercept = CapabilityAtLeastOne<{
   readonly modifyWorkspace?: never;
   readonly returnResult?: never;
 };
-export type ConfigChangeBeforeHostCapabilities =
-  | { readonly intercept: ConfigChangeBeforeIntercept; readonly observe?: true }
-  | CapabilityObservation;
+export type ConfigChangeBeforeHostCapabilities = {
+  readonly intercept?: ConfigChangeBeforeIntercept;
+  readonly observe?: boolean;
+};
 export type ContextCompactAfterIntercept = CapabilityAtLeastOne<{
   readonly elicitation?: CapabilityAtLeastOne<{
     readonly form?: true;
@@ -7064,12 +7063,10 @@ export type ContextCompactAfterIntercept = CapabilityAtLeastOne<{
   readonly modifyWorkspace?: never;
   readonly returnResult?: never;
 };
-export type ContextCompactAfterHostCapabilities =
-  | {
-      readonly intercept: ContextCompactAfterIntercept;
-      readonly observe?: true;
-    }
-  | CapabilityObservation;
+export type ContextCompactAfterHostCapabilities = {
+  readonly intercept?: ContextCompactAfterIntercept;
+  readonly observe?: boolean;
+};
 export type ContextCompactBeforeIntercept = CapabilityAtLeastOne<{
   readonly deny?: true;
   readonly elicitation?: CapabilityAtLeastOne<{
@@ -7098,12 +7095,22 @@ export type ContextCompactBeforeIntercept = CapabilityAtLeastOne<{
   readonly modifySummary?: never;
   readonly modifyWorkspace?: never;
 };
-export type ContextCompactBeforeHostCapabilities =
-  | {
-      readonly intercept: ContextCompactBeforeIntercept;
-      readonly observe?: true;
-    }
-  | CapabilityObservation;
+export type ContextCompactBeforeHostCapabilities = {
+  readonly intercept?: ContextCompactBeforeIntercept;
+  readonly observe?: boolean;
+};
+export type FileChangedHostCapabilities = {
+  readonly observe?: boolean;
+  readonly intercept?: never;
+};
+export type HookFailureHostCapabilities = {
+  readonly observe?: boolean;
+  readonly intercept?: never;
+};
+export type ModelErrorHostCapabilities = {
+  readonly observe?: boolean;
+  readonly intercept?: never;
+};
 export type ModelRequestBeforeIntercept = CapabilityAtLeastOne<{
   readonly deny?: true;
   readonly elicitation?: CapabilityAtLeastOne<{
@@ -7134,9 +7141,10 @@ export type ModelRequestBeforeIntercept = CapabilityAtLeastOne<{
   readonly modifySummary?: never;
   readonly modifyWorkspace?: never;
 };
-export type ModelRequestBeforeHostCapabilities =
-  | { readonly intercept: ModelRequestBeforeIntercept; readonly observe?: true }
-  | CapabilityObservation;
+export type ModelRequestBeforeHostCapabilities = {
+  readonly intercept?: ModelRequestBeforeIntercept;
+  readonly observe?: boolean;
+};
 export type ModelResponseAfterIntercept = CapabilityAtLeastOne<{
   readonly elicitation?: CapabilityAtLeastOne<{
     readonly form?: true;
@@ -7162,9 +7170,14 @@ export type ModelResponseAfterIntercept = CapabilityAtLeastOne<{
   readonly modifyWorkspace?: never;
   readonly returnResult?: never;
 };
-export type ModelResponseAfterHostCapabilities =
-  | { readonly intercept: ModelResponseAfterIntercept; readonly observe?: true }
-  | CapabilityObservation;
+export type ModelResponseAfterHostCapabilities = {
+  readonly intercept?: ModelResponseAfterIntercept;
+  readonly observe?: boolean;
+};
+export type ModelSwitchAfterHostCapabilities = {
+  readonly observe?: boolean;
+  readonly intercept?: never;
+};
 export type ModelSwitchBeforeIntercept = CapabilityAtLeastOne<{
   readonly deny?: true;
   readonly elicitation?: CapabilityAtLeastOne<{
@@ -7190,9 +7203,14 @@ export type ModelSwitchBeforeIntercept = CapabilityAtLeastOne<{
   readonly modifyWorkspace?: never;
   readonly returnResult?: never;
 };
-export type ModelSwitchBeforeHostCapabilities =
-  | { readonly intercept: ModelSwitchBeforeIntercept; readonly observe?: true }
-  | CapabilityObservation;
+export type ModelSwitchBeforeHostCapabilities = {
+  readonly intercept?: ModelSwitchBeforeIntercept;
+  readonly observe?: boolean;
+};
+export type SessionEndHostCapabilities = {
+  readonly observe?: boolean;
+  readonly intercept?: never;
+};
 export type SessionStartIntercept = CapabilityAtLeastOne<{
   readonly elicitation?: CapabilityAtLeastOne<{
     readonly form?: true;
@@ -7221,9 +7239,14 @@ export type SessionStartIntercept = CapabilityAtLeastOne<{
   readonly modifyWorkspace?: never;
   readonly returnResult?: never;
 };
-export type SessionStartHostCapabilities =
-  | { readonly intercept: SessionStartIntercept; readonly observe?: true }
-  | CapabilityObservation;
+export type SessionStartHostCapabilities = {
+  readonly intercept?: SessionStartIntercept;
+  readonly observe?: boolean;
+};
+export type TaskChangeAfterHostCapabilities = {
+  readonly observe?: boolean;
+  readonly intercept?: never;
+};
 export type TaskChangeBeforeIntercept = CapabilityAtLeastOne<{
   readonly deny?: true;
   readonly elicitation?: CapabilityAtLeastOne<{
@@ -7247,9 +7270,10 @@ export type TaskChangeBeforeIntercept = CapabilityAtLeastOne<{
   readonly modifyWorkspace?: never;
   readonly returnResult?: never;
 };
-export type TaskChangeBeforeHostCapabilities =
-  | { readonly intercept: TaskChangeBeforeIntercept; readonly observe?: true }
-  | CapabilityObservation;
+export type TaskChangeBeforeHostCapabilities = {
+  readonly intercept?: TaskChangeBeforeIntercept;
+  readonly observe?: boolean;
+};
 export type ToolAfterIntercept = CapabilityAtLeastOne<{
   readonly elicitation?: CapabilityAtLeastOne<{
     readonly form?: true;
@@ -7280,9 +7304,10 @@ export type ToolAfterIntercept = CapabilityAtLeastOne<{
   readonly modifyWorkspace?: never;
   readonly returnResult?: never;
 };
-export type ToolAfterHostCapabilities =
-  | { readonly intercept: ToolAfterIntercept; readonly observe?: true }
-  | CapabilityObservation;
+export type ToolAfterHostCapabilities = {
+  readonly intercept?: ToolAfterIntercept;
+  readonly observe?: boolean;
+};
 export type ToolBatchAfterIntercept = CapabilityAtLeastOne<{
   readonly elicitation?: CapabilityAtLeastOne<{
     readonly form?: true;
@@ -7313,9 +7338,10 @@ export type ToolBatchAfterIntercept = CapabilityAtLeastOne<{
   readonly modifyWorkspace?: never;
   readonly returnResult?: never;
 };
-export type ToolBatchAfterHostCapabilities =
-  | { readonly intercept: ToolBatchAfterIntercept; readonly observe?: true }
-  | CapabilityObservation;
+export type ToolBatchAfterHostCapabilities = {
+  readonly intercept?: ToolBatchAfterIntercept;
+  readonly observe?: boolean;
+};
 export type ToolBeforeIntercept = CapabilityAtLeastOne<{
   readonly allow?: true;
   readonly ask?: true;
@@ -7346,9 +7372,10 @@ export type ToolBeforeIntercept = CapabilityAtLeastOne<{
   readonly modifySummary?: never;
   readonly modifyWorkspace?: never;
 };
-export type ToolBeforeHostCapabilities =
-  | { readonly intercept: ToolBeforeIntercept; readonly observe?: true }
-  | CapabilityObservation;
+export type ToolBeforeHostCapabilities = {
+  readonly intercept?: ToolBeforeIntercept;
+  readonly observe?: boolean;
+};
 export type ToolPermissionRequestIntercept = CapabilityAtLeastOne<{
   readonly allow?: true;
   readonly deny?: true;
@@ -7374,12 +7401,22 @@ export type ToolPermissionRequestIntercept = CapabilityAtLeastOne<{
   readonly modifyWorkspace?: never;
   readonly returnResult?: never;
 };
-export type ToolPermissionRequestHostCapabilities =
-  | {
-      readonly intercept: ToolPermissionRequestIntercept;
-      readonly observe?: true;
-    }
-  | CapabilityObservation;
+export type ToolPermissionRequestHostCapabilities = {
+  readonly intercept?: ToolPermissionRequestIntercept;
+  readonly observe?: boolean;
+};
+export type ToolPermissionResolvedHostCapabilities = {
+  readonly observe?: boolean;
+  readonly intercept?: never;
+};
+export type ToolProgressHostCapabilities = {
+  readonly observe?: boolean;
+  readonly intercept?: never;
+};
+export type TurnEndHostCapabilities = {
+  readonly observe?: boolean;
+  readonly intercept?: never;
+};
 export type TurnFinishBeforeIntercept = CapabilityAtLeastOne<{
   readonly elicitation?: CapabilityAtLeastOne<{
     readonly form?: true;
@@ -7405,9 +7442,14 @@ export type TurnFinishBeforeIntercept = CapabilityAtLeastOne<{
   readonly modifyWorkspace?: never;
   readonly returnResult?: never;
 };
-export type TurnFinishBeforeHostCapabilities =
-  | { readonly intercept: TurnFinishBeforeIntercept; readonly observe?: true }
-  | CapabilityObservation;
+export type TurnFinishBeforeHostCapabilities = {
+  readonly intercept?: TurnFinishBeforeIntercept;
+  readonly observe?: boolean;
+};
+export type TurnProgressHostCapabilities = {
+  readonly observe?: boolean;
+  readonly intercept?: never;
+};
 export type TurnStartIntercept = CapabilityAtLeastOne<{
   readonly deny?: true;
   readonly elicitation?: CapabilityAtLeastOne<{
@@ -7438,9 +7480,14 @@ export type TurnStartIntercept = CapabilityAtLeastOne<{
   readonly modifyWorkspace?: never;
   readonly returnResult?: never;
 };
-export type TurnStartHostCapabilities =
-  | { readonly intercept: TurnStartIntercept; readonly observe?: true }
-  | CapabilityObservation;
+export type TurnStartHostCapabilities = {
+  readonly intercept?: TurnStartIntercept;
+  readonly observe?: boolean;
+};
+export type UserAttentionHostCapabilities = {
+  readonly observe?: boolean;
+  readonly intercept?: never;
+};
 export type UserElicitationRequestIntercept = CapabilityAtLeastOne<{
   readonly deny?: true;
   readonly elicitation?: CapabilityAtLeastOne<{
@@ -7464,12 +7511,10 @@ export type UserElicitationRequestIntercept = CapabilityAtLeastOne<{
   readonly modifySummary?: never;
   readonly modifyWorkspace?: never;
 };
-export type UserElicitationRequestHostCapabilities =
-  | {
-      readonly intercept: UserElicitationRequestIntercept;
-      readonly observe?: true;
-    }
-  | CapabilityObservation;
+export type UserElicitationRequestHostCapabilities = {
+  readonly intercept?: UserElicitationRequestIntercept;
+  readonly observe?: boolean;
+};
 export type UserElicitationResultIntercept = CapabilityAtLeastOne<{
   readonly elicitation?: CapabilityAtLeastOne<{
     readonly form?: true;
@@ -7493,12 +7538,10 @@ export type UserElicitationResultIntercept = CapabilityAtLeastOne<{
   readonly modifyWorkspace?: never;
   readonly returnResult?: never;
 };
-export type UserElicitationResultHostCapabilities =
-  | {
-      readonly intercept: UserElicitationResultIntercept;
-      readonly observe?: true;
-    }
-  | CapabilityObservation;
+export type UserElicitationResultHostCapabilities = {
+  readonly intercept?: UserElicitationResultIntercept;
+  readonly observe?: boolean;
+};
 export type UserMessageInboundIntercept = CapabilityAtLeastOne<{
   readonly deny?: true;
   readonly elicitation?: CapabilityAtLeastOne<{
@@ -7522,9 +7565,10 @@ export type UserMessageInboundIntercept = CapabilityAtLeastOne<{
   readonly modifyWorkspace?: never;
   readonly returnResult?: never;
 };
-export type UserMessageInboundHostCapabilities =
-  | { readonly intercept: UserMessageInboundIntercept; readonly observe?: true }
-  | CapabilityObservation;
+export type UserMessageInboundHostCapabilities = {
+  readonly intercept?: UserMessageInboundIntercept;
+  readonly observe?: boolean;
+};
 export type UserMessageOutboundIntercept = CapabilityAtLeastOne<{
   readonly deny?: true;
   readonly elicitation?: CapabilityAtLeastOne<{
@@ -7548,12 +7592,14 @@ export type UserMessageOutboundIntercept = CapabilityAtLeastOne<{
   readonly modifyWorkspace?: never;
   readonly returnResult?: never;
 };
-export type UserMessageOutboundHostCapabilities =
-  | {
-      readonly intercept: UserMessageOutboundIntercept;
-      readonly observe?: true;
-    }
-  | CapabilityObservation;
+export type UserMessageOutboundHostCapabilities = {
+  readonly intercept?: UserMessageOutboundIntercept;
+  readonly observe?: boolean;
+};
+export type WorkspaceChangeAfterHostCapabilities = {
+  readonly observe?: boolean;
+  readonly intercept?: never;
+};
 export type WorkspaceChangeBeforeIntercept = CapabilityAtLeastOne<{
   readonly deny?: true;
   readonly elicitation?: CapabilityAtLeastOne<{
@@ -7577,44 +7623,42 @@ export type WorkspaceChangeBeforeIntercept = CapabilityAtLeastOne<{
   readonly modifySummary?: never;
   readonly returnResult?: never;
 };
-export type WorkspaceChangeBeforeHostCapabilities =
-  | {
-      readonly intercept: WorkspaceChangeBeforeIntercept;
-      readonly observe?: true;
-    }
-  | CapabilityObservation;
+export type WorkspaceChangeBeforeHostCapabilities = {
+  readonly intercept?: WorkspaceChangeBeforeIntercept;
+  readonly observe?: boolean;
+};
 export interface HostCapabilities {
-  readonly configChangeAfter?: CapabilityObservation;
+  readonly configChangeAfter?: ConfigChangeAfterHostCapabilities;
   readonly configChangeBefore?: ConfigChangeBeforeHostCapabilities;
   readonly contextCompactAfter?: ContextCompactAfterHostCapabilities;
   readonly contextCompactBefore?: ContextCompactBeforeHostCapabilities;
-  readonly fileChanged?: CapabilityObservation;
-  readonly hookFailure?: CapabilityObservation;
-  readonly modelError?: CapabilityObservation;
+  readonly fileChanged?: FileChangedHostCapabilities;
+  readonly hookFailure?: HookFailureHostCapabilities;
+  readonly modelError?: ModelErrorHostCapabilities;
   readonly modelRequestBefore?: ModelRequestBeforeHostCapabilities;
   readonly modelResponseAfter?: ModelResponseAfterHostCapabilities;
-  readonly modelSwitchAfter?: CapabilityObservation;
+  readonly modelSwitchAfter?: ModelSwitchAfterHostCapabilities;
   readonly modelSwitchBefore?: ModelSwitchBeforeHostCapabilities;
-  readonly sessionEnd?: CapabilityObservation;
+  readonly sessionEnd?: SessionEndHostCapabilities;
   readonly sessionStart?: SessionStartHostCapabilities;
-  readonly taskChangeAfter?: CapabilityObservation;
+  readonly taskChangeAfter?: TaskChangeAfterHostCapabilities;
   readonly taskChangeBefore?: TaskChangeBeforeHostCapabilities;
   readonly toolAfter?: ToolAfterHostCapabilities;
   readonly toolBatchAfter?: ToolBatchAfterHostCapabilities;
   readonly toolBefore?: ToolBeforeHostCapabilities;
   readonly toolPermissionRequest?: ToolPermissionRequestHostCapabilities;
-  readonly toolPermissionResolved?: CapabilityObservation;
-  readonly toolProgress?: CapabilityObservation;
-  readonly turnEnd?: CapabilityObservation;
+  readonly toolPermissionResolved?: ToolPermissionResolvedHostCapabilities;
+  readonly toolProgress?: ToolProgressHostCapabilities;
+  readonly turnEnd?: TurnEndHostCapabilities;
   readonly turnFinishBefore?: TurnFinishBeforeHostCapabilities;
-  readonly turnProgress?: CapabilityObservation;
+  readonly turnProgress?: TurnProgressHostCapabilities;
   readonly turnStart?: TurnStartHostCapabilities;
-  readonly userAttention?: CapabilityObservation;
+  readonly userAttention?: UserAttentionHostCapabilities;
   readonly userElicitationRequest?: UserElicitationRequestHostCapabilities;
   readonly userElicitationResult?: UserElicitationResultHostCapabilities;
   readonly userMessageInbound?: UserMessageInboundHostCapabilities;
   readonly userMessageOutbound?: UserMessageOutboundHostCapabilities;
-  readonly workspaceChangeAfter?: CapabilityObservation;
+  readonly workspaceChangeAfter?: WorkspaceChangeAfterHostCapabilities;
   readonly workspaceChangeBefore?: WorkspaceChangeBeforeHostCapabilities;
 }
 const capabilityRules: Readonly<Record<string, CapabilityRule>> = {
@@ -7915,7 +7959,8 @@ export function hostCapabilitiesToWire(
   {
     const declaration = host.configChangeAfter;
     if (declaration !== undefined) {
-      result["config.change.after"] = { modes: ["observe"] };
+      if (declaration.observe === true)
+        result["config.change.after"] = { modes: ["observe"] };
     }
   }
   {
@@ -7942,7 +7987,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["config.change.before"] = { modes: ["observe"] };
       }
     }
@@ -7992,7 +8037,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["context.compact.after"] = { modes: ["observe"] };
       }
     }
@@ -8046,7 +8091,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["context.compact.before"] = { modes: ["observe"] };
       }
     }
@@ -8054,19 +8099,22 @@ export function hostCapabilitiesToWire(
   {
     const declaration = host.fileChanged;
     if (declaration !== undefined) {
-      result["file.changed"] = { modes: ["observe"] };
+      if (declaration.observe === true)
+        result["file.changed"] = { modes: ["observe"] };
     }
   }
   {
     const declaration = host.hookFailure;
     if (declaration !== undefined) {
-      result["hook.failure"] = { modes: ["observe"] };
+      if (declaration.observe === true)
+        result["hook.failure"] = { modes: ["observe"] };
     }
   }
   {
     const declaration = host.modelError;
     if (declaration !== undefined) {
-      result["model.error"] = { modes: ["observe"] };
+      if (declaration.observe === true)
+        result["model.error"] = { modes: ["observe"] };
     }
   }
   {
@@ -8125,7 +8173,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["model.request.before"] = { modes: ["observe"] };
       }
     }
@@ -8173,7 +8221,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["model.response.after"] = { modes: ["observe"] };
       }
     }
@@ -8181,7 +8229,8 @@ export function hostCapabilitiesToWire(
   {
     const declaration = host.modelSwitchAfter;
     if (declaration !== undefined) {
-      result["model.switch.after"] = { modes: ["observe"] };
+      if (declaration.observe === true)
+        result["model.switch.after"] = { modes: ["observe"] };
     }
   }
   {
@@ -8217,7 +8266,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["model.switch.before"] = { modes: ["observe"] };
       }
     }
@@ -8225,7 +8274,8 @@ export function hostCapabilitiesToWire(
   {
     const declaration = host.sessionEnd;
     if (declaration !== undefined) {
-      result["session.end"] = { modes: ["observe"] };
+      if (declaration.observe === true)
+        result["session.end"] = { modes: ["observe"] };
     }
   }
   {
@@ -8262,7 +8312,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["session.start"] = { modes: ["observe"] };
       }
     }
@@ -8270,7 +8320,8 @@ export function hostCapabilitiesToWire(
   {
     const declaration = host.taskChangeAfter;
     if (declaration !== undefined) {
-      result["task.change.after"] = { modes: ["observe"] };
+      if (declaration.observe === true)
+        result["task.change.after"] = { modes: ["observe"] };
     }
   }
   {
@@ -8297,7 +8348,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["task.change.before"] = { modes: ["observe"] };
       }
     }
@@ -8356,7 +8407,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["tool.after"] = { modes: ["observe"] };
       }
     }
@@ -8404,7 +8455,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["tool.batch.after"] = { modes: ["observe"] };
       }
     }
@@ -8467,7 +8518,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["tool.before"] = { modes: ["observe"] };
       }
     }
@@ -8517,7 +8568,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["tool.permission.request"] = { modes: ["observe"] };
       }
     }
@@ -8525,19 +8576,22 @@ export function hostCapabilitiesToWire(
   {
     const declaration = host.toolPermissionResolved;
     if (declaration !== undefined) {
-      result["tool.permission.resolved"] = { modes: ["observe"] };
+      if (declaration.observe === true)
+        result["tool.permission.resolved"] = { modes: ["observe"] };
     }
   }
   {
     const declaration = host.toolProgress;
     if (declaration !== undefined) {
-      result["tool.progress"] = { modes: ["observe"] };
+      if (declaration.observe === true)
+        result["tool.progress"] = { modes: ["observe"] };
     }
   }
   {
     const declaration = host.turnEnd;
     if (declaration !== undefined) {
-      result["turn.end"] = { modes: ["observe"] };
+      if (declaration.observe === true)
+        result["turn.end"] = { modes: ["observe"] };
     }
   }
   {
@@ -8583,7 +8637,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["turn.finish.before"] = { modes: ["observe"] };
       }
     }
@@ -8591,7 +8645,8 @@ export function hostCapabilitiesToWire(
   {
     const declaration = host.turnProgress;
     if (declaration !== undefined) {
-      result["turn.progress"] = { modes: ["observe"] };
+      if (declaration.observe === true)
+        result["turn.progress"] = { modes: ["observe"] };
     }
   }
   {
@@ -8649,7 +8704,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["turn.start"] = { modes: ["observe"] };
       }
     }
@@ -8657,7 +8712,8 @@ export function hostCapabilitiesToWire(
   {
     const declaration = host.userAttention;
     if (declaration !== undefined) {
-      result["user.attention"] = { modes: ["observe"] };
+      if (declaration.observe === true)
+        result["user.attention"] = { modes: ["observe"] };
     }
   }
   {
@@ -8685,7 +8741,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["user.elicitation.request"] = { modes: ["observe"] };
       }
     }
@@ -8724,7 +8780,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["user.elicitation.result"] = { modes: ["observe"] };
       }
     }
@@ -8764,7 +8820,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["user.message.inbound"] = { modes: ["observe"] };
       }
     }
@@ -8804,7 +8860,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["user.message.outbound"] = { modes: ["observe"] };
       }
     }
@@ -8812,7 +8868,8 @@ export function hostCapabilitiesToWire(
   {
     const declaration = host.workspaceChangeAfter;
     if (declaration !== undefined) {
-      result["workspace.change.after"] = { modes: ["observe"] };
+      if (declaration.observe === true)
+        result["workspace.change.after"] = { modes: ["observe"] };
     }
   }
   {
@@ -8850,7 +8907,7 @@ export function hostCapabilitiesToWire(
               : ["intercept"],
           capabilities,
         };
-      } else {
+      } else if (declaration.observe === true) {
         result["workspace.change.before"] = { modes: ["observe"] };
       }
     }
