@@ -4,6 +4,7 @@
   "packages": {
     "packages/sdk": {
       "release-type": "node",
+      "bump-minor-pre-major": true,
       "component": "agenthooksprotocol",
       "include-component-in-tag": true,
       "initial-version": "0.1.0"
