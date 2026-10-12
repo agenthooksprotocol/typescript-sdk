@@ -32,10 +32,39 @@ function error(
   message: string,
   notification: boolean,
   status = 200,
+  data?: unknown,
 ): Response {
   return notification
     ? new Response(null, { status: status === 200 ? 500 : status })
-    : json({ jsonrpc: "2.0", id, error: { code, message } }, status);
+    : json(
+        {
+          jsonrpc: "2.0",
+          id,
+          error: data === undefined ? { code, message } : { code, message, data },
+        },
+        status,
+      );
+}
+
+/** A fixed, credential-free JSON-RPC failure raised while evaluating a request. */
+class Failure {
+  constructor(
+    readonly code: number,
+    readonly message: string,
+  ) {}
+}
+const methodNotFound = new Failure(-32601, "Method not found");
+const unsupportedEvent = new Failure(-32002, "Unsupported event");
+const backendInternal = new Failure(-32004, "Backend internal error");
+const internalError = new Failure(-32603, "Internal error");
+
+/** Run application code; any throw or rejection is a backend failure. */
+async function invoke(callback: () => unknown): Promise<unknown> {
+  try {
+    return await callback();
+  } catch {
+    throw backendInternal;
+  }
 }
 
 /** Check support without executing, resolving bodies, or composing host state. */
@@ -81,9 +110,12 @@ function supported(
 }
 
 /** Handle one HTTP POST. The application owns authentication and routing.
- * Observe callbacks return void. No notification receives a JSON-RPC reply.
- * HTTP framing errors use 4xx; evaluated RPC failures use 200. Exceptions and
- * invalid callback results are replaced by fixed, credential-free errors.
+ * Observe callbacks return void. No notification receives a JSON-RPC reply; a
+ * known observe event without an observer is accepted with 204.
+ * HTTP framing errors use 4xx; evaluated RPC failures use 200. Missing
+ * capabilities handlers are -32601, intercepts without a handler -32002,
+ * callback exceptions and invalid callback results -32004, and SDK-internal
+ * failures -32603, all with fixed, credential-free messages.
  */
 async function handle(request: Request, handlers: ServerHandlers): Promise<Response> {
   if (request.method !== "POST")
@@ -136,6 +168,7 @@ async function handle(request: Request, handlers: ServerHandlers): Promise<Respo
       "Unsupported AHP protocol version",
       notification,
       notification ? 400 : 200,
+      { supported: [PROTOCOL_VERSION] },
     );
   }
   try {
@@ -161,46 +194,59 @@ async function handle(request: Request, handlers: ServerHandlers): Promise<Respo
     const canonical = structuredClone(message);
     let result: unknown;
     if (message.method === "hooks/capabilities") {
-      if (!handlers.capabilities) throw new Error("Missing capabilities handler");
-      result = await handlers.capabilities({ request: message, signal: request.signal });
+      const callback = handlers.capabilities;
+      if (!callback) throw methodNotFound;
+      result = await invoke(() => callback({ request: message, signal: request.signal }));
     } else {
       const name = Object.entries(events).find(([, event]) => event === message.params.event.type)?.[0];
-      if (!name) throw new Error("Missing event handler");
-      const callbacks = handlers.intercept as Record<string, unknown> | undefined;
+      if (!name) throw unsupportedEvent;
       if (message.method === "hooks/observe") {
         const observations = handlers.observe as Record<string, unknown> | undefined;
         const callback = observations?.[name];
-        if (typeof callback !== "function") throw new Error("Missing observation handler");
-        result = await callback({ event: message.params.event, notification: message, signal: request.signal });
+        // A known event without an observer is accepted silently, like any notification.
+        if (typeof callback !== "function") return new Response(null, { status: 204 });
+        result = await invoke(() =>
+          callback({ event: message.params.event, notification: message, signal: request.signal }));
       } else {
+        const callbacks = handlers.intercept as Record<string, unknown> | undefined;
         const callback = callbacks?.[name];
-        if (typeof callback !== "function") throw new Error("Missing intercept handler");
-        result = await callback({ event: message.params.event, capabilities: message.params.capabilities,
-          state: message.params.state, request: message, signal: request.signal });
+        if (typeof callback !== "function") throw unsupportedEvent;
+        result = await invoke(() =>
+          callback({ event: message.params.event, capabilities: message.params.capabilities,
+            state: message.params.state, request: message, signal: request.signal }));
       }
     }
     if (canonical.method === "hooks/observe")
       return new Response(null, { status: result === undefined ? 204 : 500 });
-    if (!object(result) || Object.hasOwn(result, "protocolVersion"))
-      throw new Error("Invalid result");
-    const envelope = {
-      jsonrpc: "2.0",
-      id: canonical.id,
-      result: { ...result, protocolVersion: PROTOCOL_VERSION },
-    };
-    if (canonical.method === "hooks/intercept") {
-      if (!isEventType(canonical.params.event.type)) throw new Error("Unknown contextual event");
-      const validation = validateInterceptResponse(envelope);
-      const response = responseForRequest(canonical.params.event.type, envelope);
-      if (!validation.ok || !response.ok || !supported(canonical, response.value))
-        throw new Error("Invalid result");
+    // Application results that cannot be admitted, including non-JSON values that
+    // exhaust validation, are backend failures.
+    try {
+      if (!object(result) || Object.hasOwn(result, "protocolVersion"))
+        throw backendInternal;
+      const envelope = {
+        jsonrpc: "2.0",
+        id: canonical.id,
+        result: { ...result, protocolVersion: PROTOCOL_VERSION },
+      };
+      if (canonical.method === "hooks/intercept") {
+        if (!isEventType(canonical.params.event.type)) throw internalError;
+        const validation = validateInterceptResponse(envelope);
+        const response = responseForRequest(canonical.params.event.type, envelope);
+        if (!validation.ok || !response.ok || !supported(canonical, response.value))
+          throw backendInternal;
+        return json(response.value);
+      }
+      const response = validateCapabilitiesResponse(envelope);
+      if (!response.ok) throw backendInternal;
       return json(response.value);
+    } catch (caught) {
+      throw caught instanceof Failure ? caught : backendInternal;
     }
-    const response = validateCapabilitiesResponse(envelope);
-    if (!response.ok) throw new Error("Invalid result");
-    return json(response.value);
-  } catch {
-    return error(id, -32004, "Backend internal error", notification);
+  } catch (caught) {
+    // Anything not attributed above (e.g. validator stack exhaustion) is an SDK-internal failure.
+    const failure = caught instanceof Failure ? caught : internalError;
+    return error(id, failure.code, failure.message, notification,
+      notification && failure !== backendInternal ? 400 : 200);
   }
 }
 

@@ -292,6 +292,15 @@ JSON-RPC envelope IDs and protocol version. It validates complete replies agains
 the event and the request's dynamic grants; types do not grant execution authority.
 Applications own HTTP authentication and routing.
 
+Requests that cannot be served get fixed, credential-free JSON-RPC errors:
+`-32601` when no `capabilities` handler is configured, `-32002`
+(`unsupported_event`) for an intercept without a handler for its event, `-32004`
+(`backend_internal_error`) when a callback throws or returns a result that cannot
+be admitted, `-32001` with `data.supported` for an unsupported protocol version,
+and `-32603` for SDK-internal failures. Notifications never get a JSON-RPC body:
+an observe event without an observer is accepted (HTTP 204, no stdio output),
+and a failing observer yields an empty HTTP 500.
+
 `serveStdio(handlers, { stdin?, stdout?, signal? })` defaults to the Node process
 streams. Each UTF-8 NDJSON line uses the same validation and envelope core as
 `hooks.handle(request, handlers)`.

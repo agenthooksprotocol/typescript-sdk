@@ -416,7 +416,7 @@ for (const depth of [32, 512, 1500, 2500, 5000, 10000]) {
           } else {
             // The validator may report invalid params or throw at a different
             // recursion depth on each supported Node version. Both stay safe.
-            assert.ok([-32602, -32004].includes(reply.error?.code));
+            assert.ok([-32602, -32603].includes(reply.error?.code));
             assert.deepEqual(reply, {
               jsonrpc: "2.0",
               id: "e",
@@ -425,7 +425,7 @@ for (const depth of [32, 512, 1500, 2500, 5000, 10000]) {
                 message:
                   reply.error.code === -32602
                     ? "Invalid params"
-                    : "Backend internal error",
+                    : "Internal error",
               },
             });
           }
