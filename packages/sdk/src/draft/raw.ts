@@ -5545,14 +5545,14 @@ export function responseForRequest<K extends keyof EventResponses>(
   validate?: (response: ResponseFor<K>) => readonly ParseDiagnostic[],
 ): ParseResult<ResponseFor<K>>;
 export function responseForRequest(
-  eventType: string,
+  eventType: EventType,
   input: string | unknown,
   validate?: (
     response: EventResponses[keyof EventResponses],
   ) => readonly ParseDiagnostic[],
 ): ParseResult<EventResponses[keyof EventResponses]>;
 export function responseForRequest(
-  eventType: string,
+  eventType: EventType,
   input: string | unknown,
   validate?: (response: never) => readonly ParseDiagnostic[],
 ): ParseResult<any> {
@@ -7909,9 +7909,9 @@ const capabilityRules: Readonly<Record<string, CapabilityRule>> = {
 };
 export function hostCapabilitiesToWire(
   host: HostCapabilities,
-): Readonly<Record<string, WireDeclaration>> {
+): Readonly<Partial<Record<EventType, WireDeclaration>>> {
   host = capabilityOwnedHost(host);
-  const result: Record<string, WireDeclaration> = {};
+  const result: Partial<Record<EventType, WireDeclaration>> = {};
   {
     const declaration = host.configChangeAfter;
     if (declaration !== undefined) {

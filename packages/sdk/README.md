@@ -33,12 +33,14 @@ workspace packages are not published.
 
 ## Static subscription interest
 
-Call `hooks.subscribes(event)` before expensive occurrence or content preparation.
+Call `hooks.subscribes(event)` with a generated `EventType` before expensive
+occurrence or content preparation.
 The synchronous lookup uses validated event selectors and the host's configured
-modes, including observe-only subscriptions. Exact names, `*`, and family selectors
-such as `tool.*` follow the dispatch matcher. Payload filters are not evaluated:
+modes, including observe-only subscriptions. Registration selectors use exact
+names, `*`, or families such as `tool.*`; the query takes one canonical event name. Payload filters are not evaluated:
 a matching subscription remains interesting even if its filters might reject the
-completed occurrence. Unknown or unconfigured events return `false`.
+completed occurrence. Unconfigured canonical events return `false`; TypeScript
+rejects unknown names and arbitrary strings.
 
 The lookup performs no delivery, authentication, uploads, or input preparation.
 It reports static interest, not permission or a delivery guarantee. A `false`

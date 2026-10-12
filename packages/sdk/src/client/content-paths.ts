@@ -63,10 +63,12 @@ const textPaths: Partial<Record<EventType, readonly (readonly string[])[]>> = {
   "user.elicitation.request": [["elicitation", "request"]],
   "user.elicitation.result": [["elicitation", "result"]],
 };
+// Raw projection may encounter unknown external variants. Their opaque fields
+// are not interpreted as canonical attachment locations.
 export function pathsFor(type: string): readonly (readonly string[])[] {
   return [...(contentPaths[type as EventType] ?? []), ...(textPaths[type as EventType] ?? [])];
 }
-export function isPartPath(type: string, path: readonly (string | number)[]): boolean {
+export function isPartPath(type: EventType, path: readonly (string | number)[]): boolean {
   return pathsFor(type).some(pattern => pattern.length === path.length && pattern.every((key, i) =>
     key === "*" ? typeof path[i] === "number" && Number.isSafeInteger(path[i]) && Number(path[i]) >= 0 : key === path[i]));
 }

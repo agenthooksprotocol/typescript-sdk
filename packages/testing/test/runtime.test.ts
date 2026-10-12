@@ -517,7 +517,7 @@ test("task comparisons ignore object key order and expose committed partial chan
 });
 
 test("observation routing stays local and never adds subscription identity to the wire", async () => {
-  const event = { id: "event", source: "urn:ahp:test", type: "tool.before" };
+  const event = { id: "event", source: "urn:ahp:test", type: "tool.before" as const };
   const subscriptions = [
     { id: "local-observer", mode: "observe" as const },
     { id: "called-interceptor", mode: "intercept" as const },

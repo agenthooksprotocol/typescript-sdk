@@ -163,7 +163,12 @@ void hooks.toolBefore(input).then(result => {
 });
 
 const staticInterest: boolean = hooks.subscribes('tool.before');
+// @ts-expect-error Interest requires a generated canonical event name.
 const unknownInterest: boolean = hooks.subscribes('future.event');
+declare const arbitraryEventName: string;
+// @ts-expect-error Arbitrary strings are not canonical event identifiers.
+hooks.subscribes(arbitraryEventName);
+for (const name of Object.values(events)) hooks.subscribes(name);
 void [staticInterest, unknownInterest];
 
 import type { HostCapabilities } from 'agenthooksprotocol/client';
@@ -193,3 +198,36 @@ const widerWrongTarget = { toolBefore: { intercept: { deny: true as const, modif
 // @ts-expect-error Unsupported known capabilities remain forbidden through a wider variable.
 const wrongTarget = widerWrongTarget satisfies HostCapabilities;
 void [host, elicitationFacility, emptyIntercept, missingMode, wrongMode, wrongTarget];
+
+import { events } from "agenthooksprotocol/client";
+import { reference, responseForRequest } from 'agenthooksprotocol/draft';
+// @ts-expect-error Contextual response admission requires a canonical event name.
+responseForRequest(arbitraryEventName, {});
+// @ts-expect-error Unknown wire names must stay at explicit raw admission boundaries.
+responseForRequest('future.event', {});
+import type { EventType } from 'agenthooksprotocol/client';
+const canonicalNames = [
+  'tool.before', 'tool.after', 'session.start', 'session.end',
+  'config.change.before', 'config.change.after', 'turn.start', 'turn.finish.before',
+  'turn.end', 'turn.progress', 'model.request.before', 'model.response.after', 'model.error',
+  'model.switch.before', 'model.switch.after', 'tool.permission.request', 'tool.permission.resolved',
+  'tool.progress', 'tool.batch.after', 'context.compact.before', 'context.compact.after',
+  'task.change.before', 'task.change.after', 'user.attention', 'user.elicitation.request',
+  'user.elicitation.result', 'user.message.inbound', 'user.message.outbound',
+  'workspace.change.before', 'workspace.change.after', 'file.changed', 'hook.failure',
+] as const satisfies readonly EventType[];
+for (const type of canonicalNames) {
+  hooks.subscribes(type);
+  responseForRequest(type, {});
+  const observation = { id: 'occurrence', source: 'urn:test:source', type } satisfies reference.ObservationEvent;
+  void observation;
+}
+// @ts-expect-error Dispatch requires a canonical event identifier, not an arbitrary string.
+hooks.dispatch(arbitraryEventName, {} as never);
+// @ts-expect-error Reference observation names use the same generated catalogue.
+const unknownObservation: reference.ObservationEvent = { id: 'occurrence', source: 'urn:test:source', type: 'future.event' };
+// @ts-expect-error Dynamic strings are not canonical observation names.
+const dynamicObservation: reference.ObservationEvent = { id: 'occurrence', source: 'urn:test:source', type: arbitraryEventName };
+const taskChange = reference.actualTaskChange({ count: 1 }, { count: 2 }, 'occurrence');
+const taskChangeName: Extract<EventType, 'task.change.after'> | undefined = taskChange?.type;
+void [unknownObservation, dynamicObservation, taskChangeName];

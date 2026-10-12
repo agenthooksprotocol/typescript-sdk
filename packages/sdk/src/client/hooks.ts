@@ -2,6 +2,7 @@ import {
   _projectHostInput,
   ownedAttachment,
   hostCapabilitiesToWire,
+  events,
   Permission,
   responseForRequest,
 } from "../draft/raw.js";
@@ -93,41 +94,8 @@ type Route = {
   index: number;
   transport: BackendTransport;
 };
-const eventTypes: EventType[] = [
-  "tool.before",
-  "tool.after",
-  "session.start",
-  "session.end",
-  "config.change.before",
-  "config.change.after",
-  "turn.start",
-  "turn.finish.before",
-  "turn.end",
-  "turn.progress",
-  "model.request.before",
-  "model.response.after",
-  "model.error",
-  "model.switch.before",
-  "model.switch.after",
-  "tool.permission.request",
-  "tool.permission.resolved",
-  "tool.progress",
-  "tool.batch.after",
-  "context.compact.before",
-  "context.compact.after",
-  "task.change.before",
-  "task.change.after",
-  "user.attention",
-  "user.elicitation.request",
-  "user.elicitation.result",
-  "user.message.inbound",
-  "user.message.outbound",
-  "workspace.change.before",
-  "workspace.change.after",
-  "file.changed",
-  "hook.failure",
-];
-const matches = (selector: string, type: string) =>
+const eventTypes: readonly EventType[] = Object.values(events);
+const matches = (selector: string, type: EventType) =>
   selector === "*" ||
   selector === type ||
   (selector.endsWith(".*") && selector.slice(0, -2) === type.split(".")[0]);
@@ -202,7 +170,7 @@ export class Hooks {
 
   /** Static subscription interest, not permission or a delivery guarantee.
    * Filters requiring occurrence data are deliberately not evaluated. */
-  subscribes(event: string): boolean {
+  subscribes(event: EventType): boolean {
     if (!this.configured) return false;
     const advertised = this.manifest.events.find(entry => entry.event === event);
     return advertised !== undefined && this.routes.some(route =>

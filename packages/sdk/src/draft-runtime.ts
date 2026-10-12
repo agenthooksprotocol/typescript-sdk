@@ -2,7 +2,7 @@ import { validateEffect } from "./draft/index.js";
 import { validateUploadReceipt, type ContentUploadReceipt } from "./content-upload.js";
 /** Synthetic semantic harness. Wire acceptance remains the canonical validator's job. */
 import { stageResponse, object, type PendingState } from "./draft-atomic.js";
-import type { Effect, Capabilities } from "./draft/index.js";
+import type { Effect, Capabilities, EventType } from "./draft/index.js";
 export interface BoundaryState extends PendingState {
   flow?: "stop" | "continue";
   instructions?: string[];
@@ -320,7 +320,7 @@ export function actualTaskChange<T>(
   parentEventId?: string,
 ): {
   id: string;
-  type: string;
+  type: Extract<EventType, "task.change.after">;
   parentEventId?: string;
   before: T;
   after: T;

@@ -30,7 +30,7 @@ for (const [name, subscriptions, event, expected] of [
   ['global wildcard', [subscription(['*'])], 'tool.before', true],
   ['host-mode ineligible intercept', [subscription(['tool.*'])], 'tool.after', false],
   ['host-mode ineligible observation', [subscription(['tool.*'], 'observe')], 'tool.before', false],
-  ['unknown event', [subscription(['*'])], 'future.event', false],
+  ['unknown event at the untyped JavaScript boundary', [subscription(['*'])], 'future.event', false],
   ['unconfigured catalogue event', [subscription(['*'])], 'session.start', false],
   ['filtered match is conservative', [subscription(['tool.before'], 'intercept', { filters: { paths: ['other'], toolKinds: ['other'] } })], 'tool.before', true],
 ]) {

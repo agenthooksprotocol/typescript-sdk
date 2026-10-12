@@ -1,3 +1,5 @@
+import type { EventType } from "./draft/raw.js";
+
 /** One-way delivery of an already-settled boundary. */
 export interface ObservationSubscription {
   id: string;
@@ -6,7 +8,7 @@ export interface ObservationSubscription {
 export interface ObservationEvent {
   id: string;
   source: string;
-  type: string;
+  type: EventType;
   [key: string]: unknown;
 }
 export interface ObservationNotification {

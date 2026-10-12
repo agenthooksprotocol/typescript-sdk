@@ -2,7 +2,7 @@ import { parseEvent, parseInterceptRequest, responseForRequest } from "../draft/
 import type { Event, EventType, InterceptRequest, InterceptResponse } from "../draft/raw.js";
 import { mapParts } from "./content-paths.js";
 import { Attachment } from "./content.js";
-import { validateWire } from "./validation.js";
+import { isEventType, validateWire } from "./validation.js";
 
 
 /** A consumer decode failed. Canonical acceptance evidence remains available,
@@ -47,6 +47,7 @@ export function decodeSettledEvent<K extends EventType>(event: unknown): Extract
 
 /** Validate origin-correlated pending state before atomic publication. */
 export function decodeSettledState(event: Event, value: InterceptRequest["params"]["state"]) {
+  if (!isEventType(event.type)) throw new SettlementDecodeError("Unknown settlement event");
   const state = value === undefined ? { candidate: null, permission: "none" } : value;
   // Observation-only events have no intercept-request variant. Decode their
   // generic ToolState through a neutral, schema-owned context, not a fabricated

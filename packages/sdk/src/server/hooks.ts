@@ -12,7 +12,7 @@ import {
   type EventResponses,
   type InterceptRequest,
 } from "../draft/raw.js";
-import { validateWire } from "../client/validation.js";
+import { isEventType, validateWire } from "../client/validation.js";
 import { parseJson, stringifyJson } from "../json.js";
 
 import type { ServerHandlers } from "./types.js";
@@ -189,6 +189,7 @@ async function handle(request: Request, handlers: ServerHandlers): Promise<Respo
       result: { ...result, protocolVersion: PROTOCOL_VERSION },
     };
     if (canonical.method === "hooks/intercept") {
+      if (!isEventType(canonical.params.event.type)) throw new Error("Unknown contextual event");
       const validation = validateInterceptResponse(envelope);
       const response = responseForRequest(canonical.params.event.type, envelope);
       if (!validation.ok || !response.ok || !supported(canonical, response.value))

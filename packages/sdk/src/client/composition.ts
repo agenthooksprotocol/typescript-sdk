@@ -1,6 +1,7 @@
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullFormats } from "ajv-formats/dist/formats.js";
 import { addCanonicalSchemas, canonicalSchema, parseJson, stringifyJson } from "../json.js";
+import { isEventType } from "./validation.js";
 import { Attachment } from "./content.js";
 import { mapParts } from "./content-paths.js";
 import { validateElicitationAnswer } from "../elicitation.js";
@@ -29,6 +30,7 @@ type OutboundModifyEffect = Extract<NonNullable<EventResponses["user.message.out
 // Context selects the declared effect shapes; canonical validation checks the
 // complete JSON contract, including constraints beyond the generated codec.
 function decodeResponse(event: ClientEvent, raw: ContextualResponse | InterceptResponse): ContextualResponse {
+  if (!isEventType(event.type)) throw new Error("Unknown contextual event");
   const decoded = responseForRequest(event.type, raw);
   if (!decoded.ok || !validateInterceptResponse(raw).ok)
     throw new Error("Invalid intercept response");
