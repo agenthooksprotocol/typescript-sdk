@@ -374,10 +374,6 @@ To give children the full host environment, set `inheritEnvironment: true` in
 `HooksOptions` (or in the third `BackendTransport` argument). Registration `env`
 still applies on top.
 
-## Migrating
-
-Breaking changes between releases are listed in [MIGRATING.md](MIGRATING.md).
-
 ## Packages
 
 - `agenthooksprotocol/client` — configuration-driven harness client, typed event boundaries, and HTTP/stdio delivery
