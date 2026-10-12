@@ -360,10 +360,6 @@ caller-supplied fetch adapter. The adapter owns network policy and authenticatio
 close the transport to release its processes and pending requests. Transport
 handling validates envelopes, not application contracts or boundary admission.
 
-## Migrating
-
-Breaking changes between releases are listed in [MIGRATING.md](MIGRATING.md).
-
 ## Packages
 
 - `agenthooksprotocol/client` — configuration-driven harness client, typed event boundaries, and HTTP/stdio delivery
