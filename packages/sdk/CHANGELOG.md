@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.5.0...agenthooksprotocol-v0.6.0) (2026-10-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* server conformance, stdio reader, event-specific capabilities and stdio env ([#32](https://github.com/agenthooksprotocol/typescript-sdk/issues/32))
+
+### Features
+
+* server conformance, stdio reader, event-specific capabilities and stdio env ([#32](https://github.com/agenthooksprotocol/typescript-sdk/issues/32)) ([1e50120](https://github.com/agenthooksprotocol/typescript-sdk/commit/1e50120acf802880ca77302e7ba2e206b8a45073))
+
 ## [0.5.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.4.1...agenthooksprotocol-v0.5.0) (2026-10-12)
 
 
