@@ -97,7 +97,10 @@ const handlers = {
 Pass this object to `hooks.handle(request, handlers)` for HTTP or
 `serveStdio(handlers, options)` for stdio. Both share canonical admission and
 server-owned envelope correlation. Empty intercept replies are valid no-ops;
-observations return void. Complete reply effects retain their order and opaque
+observations return void. An optional `observe.any(ctx)` catch-all receives
+observations for events without their own observer. Import `serveStdio` from
+the Node-only `agenthooksprotocol/server/stdio` subpath; the main
+`agenthooksprotocol/server` entry has no `node:` imports. Complete reply effects retain their order and opaque
 extensions. Applications own authentication and routing.
 
 ## Typed caller contracts

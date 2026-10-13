@@ -15,6 +15,8 @@ declare const Buffer: {
 
 declare const process: {
   argv: string[];
+  env: Record<string, string | undefined>;
+  platform: string;
   stdin: unknown;
   stdout: { write(value: string | Uint8Array): boolean };
   stderr: { write(value: string | Uint8Array): boolean };
@@ -23,6 +25,12 @@ declare const process: {
 };
 declare function setImmediate(callback: () => void): unknown;
 
+declare module "node:diagnostics_channel" {
+  export function channel(name: string): {
+    readonly hasSubscribers: boolean;
+    publish(message: unknown): void;
+  };
+}
 declare module "node:crypto" {
   export function randomUUID(): string;
 }

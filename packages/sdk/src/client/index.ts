@@ -20,7 +20,8 @@ export type {
 } from "./auth.js";
 export { Attachment, AttachmentContent, ContentManager } from "./content.js";
 export type { ContentUploadRequest, ContentManagerOptions } from "./content.js";
-export { BackendTransport } from "./transport.js";
+export { BackendTransport, STDIO_DIAGNOSTICS_CHANNEL } from "./transport.js";
+export type { BackendTransportOptions, StdioDiagnostic } from "./transport.js";
 
 // Canonical schema models are intentional advanced APIs. Host projection and
 // upload/composition coordination remain implementation details.
@@ -312,7 +313,24 @@ export type {
   StateCandidate,
   Candidate,
   ElicitResult,
-  HostCapabilities, CapabilityCount, CapabilityFlow, CapabilityInjection, CapabilityElicitation, CapabilityObservation,
+  HostCapabilities, CapabilityCount, CapabilityFlow, CapabilityInjection, CapabilityElicitation,
+  // Per-event host capability declarations.
+  ConfigChangeAfterHostCapabilities, ConfigChangeBeforeHostCapabilities,
+  ContextCompactAfterHostCapabilities, ContextCompactBeforeHostCapabilities,
+  FileChangedHostCapabilities, HookFailureHostCapabilities,
+  ModelErrorHostCapabilities, ModelRequestBeforeHostCapabilities,
+  ModelResponseAfterHostCapabilities, ModelSwitchAfterHostCapabilities,
+  ModelSwitchBeforeHostCapabilities, SessionEndHostCapabilities,
+  SessionStartHostCapabilities, TaskChangeAfterHostCapabilities,
+  TaskChangeBeforeHostCapabilities, ToolAfterHostCapabilities,
+  ToolBatchAfterHostCapabilities, ToolBeforeHostCapabilities,
+  ToolPermissionRequestHostCapabilities, ToolPermissionResolvedHostCapabilities,
+  ToolProgressHostCapabilities, TurnEndHostCapabilities,
+  TurnFinishBeforeHostCapabilities, TurnProgressHostCapabilities,
+  TurnStartHostCapabilities, UserAttentionHostCapabilities,
+  UserElicitationRequestHostCapabilities, UserElicitationResultHostCapabilities,
+  UserMessageInboundHostCapabilities, UserMessageOutboundHostCapabilities,
+  WorkspaceChangeAfterHostCapabilities, WorkspaceChangeBeforeHostCapabilities,
   CapabilityFlowOperation,
   CapabilityDelivery,
 } from "../draft/types.js";

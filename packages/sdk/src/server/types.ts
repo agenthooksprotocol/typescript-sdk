@@ -36,8 +36,13 @@ export type ServerReply<K extends InterceptEvent> = {
   readonly protocolVersion?: never;
   readonly [extension: string]: unknown;
 };
+/** Observation context for any event; narrow with `ctx.event.type`. */
+export type AnyObservationContext = { [K in EventType]: ObservationContext<K> }[EventType];
 type ObserveEntries = {
   readonly [N in keyof EventNames]?: (context: ObservationContext<EventNames[N]>) => void | Promise<void>;
+} & {
+  /** Catch-all observer, invoked only for events without their own observer. */
+  readonly any?: (context: AnyObservationContext) => void | Promise<void>;
 };
 export type ServerObserveHandlers = AtLeastOne<ObserveEntries>;
 export type ServerInterceptHandlers = AtLeastOne<{

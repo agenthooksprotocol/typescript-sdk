@@ -81,6 +81,10 @@ export interface HooksOptions {
   maxConcurrentUploads?: number;
   /** Best-effort observation budget, bounded by the operation signal. */
   observationTimeoutMs?: number;
+  /** Start stdio backends with the full host environment rather than the minimal
+   * base environment (PATH, HOME, locale, temp dirs, ...). Registration `env`
+   * entries apply on top either way. Default false. */
+  inheritEnvironment?: boolean;
 }
 export interface BoundaryOptions<Arguments = unknown, Result = unknown, P = unknown> {
   /** Optional caller contracts run during admission, before any publication. */

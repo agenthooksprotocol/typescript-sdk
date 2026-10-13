@@ -244,6 +244,9 @@ const capabilities = {
 ```
 
 Omitted events, delivery modes, controls, and elicitation dimensions grant nothing.
+Each event has its own declaration type (for example `ToolBeforeHostCapabilities`
+or `SessionEndHostCapabilities`) with an optional boolean `observe`; an empty
+entry or `observe: false` is valid and grants nothing.
 An interception declaration needs a supported control or facility; elicitation-only
 interception can advertise form or URL handling without an effect grant. Fields
 are specific to the event: observation-only events cannot declare interception,
@@ -287,10 +290,21 @@ await serveStdio(handlers);
 ```
 
 Intercept replies are correlated to their callback event; `{}` is a valid no-op.
-Observation callbacks return void and cannot return controls. The server owns
+Observation callbacks return void and cannot return controls. An optional
+`observe.any(ctx)` catch-all receives every validated observe notification whose
+event has no observer of its own; narrow it with `ctx.event.type`. The server owns
 JSON-RPC envelope IDs and protocol version. It validates complete replies against
 the event and the request's dynamic grants; types do not grant execution authority.
 Applications own HTTP authentication and routing.
+
+Requests that cannot be served get fixed, credential-free JSON-RPC errors:
+`-32601` when no `capabilities` handler is configured, `-32002`
+(`unsupported_event`) for an intercept without a handler for its event, `-32004`
+(`backend_internal_error`) when a callback throws or returns a result that cannot
+be admitted, `-32001` with `data.supported` for an unsupported protocol version,
+and `-32603` for SDK-internal failures. Notifications never get a JSON-RPC body:
+an observe event without an observer is accepted (HTTP 204, no stdio output),
+and a failing observer yields an empty HTTP 500.
 
 `serveStdio(handlers, { stdin?, stdout?, signal? })` defaults to the Node process
 streams. Each UTF-8 NDJSON line uses the same validation and envelope core as
@@ -304,8 +318,12 @@ Serving is sequential and respects output backpressure. The returned promise
 resolves after EOF and the final write, without closing stdout or exiting the
 process. Use dedicated streams for a serving session. Errors reject the promise
 without fabricated replies; failure or abort destroys both streams. Long-running
-handlers should honor `request.signal` for cooperative cancellation. The Node-only subpath keeps `node:` imports out of the
-Web server entrypoint.
+handlers should honor `request.signal` for cooperative cancellation.
+
+`serveStdio` is imported from `agenthooksprotocol/server/stdio`, not from
+`agenthooksprotocol/server`. The Node-only subpath keeps `node:` imports out of
+the Web server entrypoint, so edge and browser bundles can import
+`agenthooksprotocol/server` without Node built-ins.
 
 ## Typed caller contracts
 
@@ -356,6 +374,41 @@ limits; `Hooks` shares its upload limit across its concurrent invocations.
 caller-supplied fetch adapter. The adapter owns network policy and authentication;
 close the transport to release its processes and pending requests. Transport
 handling validates envelopes, not application contracts or boundary admission.
+
+A persistent stdio backend has one reader that routes replies by JSON-RPC ID.
+Well-formed replies for no pending request are discarded. A malformed frame
+(non-JSON, invalid UTF-8, an empty line, or anything that is not one JSON-RPC
+response) is discarded too. It fails the request it names, or else the single
+in-flight request (stdio calls are serialized), with `HookOperationalError`;
+the process keeps running. Three consecutive malformed frames terminate the
+backend; the next request starts a new process. Per-event backends still fail
+on the first bad frame. Both cases are published, without frame content, as
+`StdioDiagnostic` messages on the `node:diagnostics_channel` named by
+`STDIO_DIAGNOSTICS_CHANNEL`:
+
+```ts
+import { subscribe } from "node:diagnostics_channel";
+import { STDIO_DIAGNOSTICS_CHANNEL, type StdioDiagnostic } from "agenthooksprotocol/client";
+
+subscribe(STDIO_DIAGNOSTICS_CHANNEL, (message) => {
+  const { backendId, kind, strikes } = message as StdioDiagnostic;
+  console.error(`stdio backend ${backendId}: ${kind} frame (${strikes} consecutive malformed)`);
+});
+```
+
+### Stdio backend environment
+
+Stdio backends do not inherit the host environment. Each child starts with a
+minimal base environment copied from the host: `PATH`, `HOME`, `USER`, `LOGNAME`,
+`SHELL`, `LANG`, `LC_ALL`, `LC_*`, `TZ`, `TMPDIR`, `TEMP` and `TMP`. On Windows,
+`SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`, `USERPROFILE`, `APPDATA`,
+`LOCALAPPDATA` and `PROGRAMDATA` are added, and names match case-insensitively.
+The registration's stdio `env` entries are then applied as literal values, with
+no interpolation, and override base values. Use `env` for backend
+configuration, not AHP endpoint credentials. The SDK never logs `env` values.
+To give children the full host environment, set `inheritEnvironment: true` in
+`HooksOptions` (or in the third `BackendTransport` argument). Registration `env`
+still applies on top.
 
 ## Packages
 
