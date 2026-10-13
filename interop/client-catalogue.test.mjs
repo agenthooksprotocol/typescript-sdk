@@ -48,7 +48,6 @@ const occurrences = {
   "tool.after": { ...tool, outcome: "ok", execution, items: [] },
   "session.start": {
     session: { id: "session" },
-    harness: { name: "test", version: "1" },
     permissionMode: "default",
     trigger: "startup",
     items: [],
@@ -158,6 +157,7 @@ const observe = (includeNative) => ({
   includeNative,
 });
 const options = {
+  harness: { name: "test", version: "1" },
   source: "urn:test:catalogue",
   capabilities: Object.fromEntries(
     Object.keys(occurrences).map((event) => [
@@ -276,6 +276,7 @@ test(
           .catch((error) => assert.fail(`${type}: ${error.message}`));
         assert.equal(result.event.type, type);
         assert.equal(result.event.source, options.source);
+        assert.deepEqual(result.event.harness, options.harness);
         assert.ok(result.event.id);
         assert.ok(Number.isFinite(Date.parse(result.event.time)));
         assert.deepEqual(result.effects, []);
@@ -300,6 +301,7 @@ test(
         assert.equal(message.method, "hooks/observe");
         assert.equal(message.id, undefined);
         assert.equal(message.params.protocolVersion, "draft");
+        assert.deepEqual(message.params.event.harness, options.harness);
         assert.doesNotThrow(() =>
           draftCodecs.parseObserveNotification(message),
         );

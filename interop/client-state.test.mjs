@@ -60,6 +60,7 @@ function setup(
       })),
     },
     {
+      harness: { name: "test", version: "1" },
       ...extra,
       source: "urn:test:state",
       capabilities: {
@@ -118,6 +119,7 @@ test("event-map delivery modes never infer elicitation answer grants", async () 
       ],
     },
     {
+      harness: { name: "test", version: "1" },
       source: "urn:test:mode-authority",
       capabilities,
     },
@@ -125,7 +127,6 @@ test("event-map delivery modes never infer elicitation answer grants", async () 
   try {
     const start = await client.dispatch("session.start", {
       session: { id: "session" },
-      harness: { name: "test", version: "1" },
       permissionMode: "default",
       trigger: "startup",
       items: [],
@@ -352,6 +353,7 @@ test("complete narrowing validates controls and continuation budgets without mer
 
 test("stop dominates continuation without dropping ordered instructions", () => {
   const event = {
+    harness: { name: "test", version: "1" },
     id: "finish",
     type: "turn.finish.before",
     source: "urn:test:state",
@@ -609,6 +611,7 @@ test("explicit subscriptions require advertised event and mode; wildcards inters
         ],
       },
       {
+        harness: { name: "test", version: "1" },
         source: "urn:test:manifest",
         capabilities,
         fetch: (url, init) =>

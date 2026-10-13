@@ -135,7 +135,7 @@ function formHooks(replies, seen) {
     id: `test.form.backend${index}`, transport: { type: 'http', url: `https://backend${index}.test/hooks` },
     subscriptions: [{ mode: 'intercept', events: [type], timeoutMs: 1000, failurePolicy: 'fail-open', content: { default: 'body' } }],
   })) }, {
-    source: 'urn:test:forms', capabilities: { [type.replace(/\.([a-z])/g, (_, letter) => letter.toUpperCase())]: { intercept: { returnResult: true, elicitation: { form: true } } } },
+    source: 'urn:test:forms', harness: { name: 'test', version: '1' }, capabilities: { [type.replace(/\.([a-z])/g, (_, letter) => letter.toUpperCase())]: { intercept: { returnResult: true, elicitation: { form: true } } } },
     fetch: async (url, init) => {
       const wire = JSON.parse(init.body);
       seen.push(wire);

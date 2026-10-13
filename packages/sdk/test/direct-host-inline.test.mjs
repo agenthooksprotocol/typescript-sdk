@@ -9,7 +9,7 @@ function hooks(selection, fetch, backends = 1) {
   return new Hooks({ protocolVersion: 'draft', hooks: Array.from({ length: backends }, (_, i) => ({
     id: `test.inline.backend${i}`, transport: { type: 'http', url: `https://backend${i}.test/hooks` },
     subscriptions: subscriptions.map(s => ({ ...s, ...(selection === 'body' ? { upload: { endpoint: `https://backend${i}.test/upload`, maxBytes: 1024, timeoutMs: 1000 } } : {}) })),
-  })) }, { source: 'urn:test:inline', capabilities: { turnStart: {intercept: {deny: true}} }, fetch });
+  })) }, { source: 'urn:test:inline', harness: { name: 'test', version: '1' }, capabilities: { turnStart: {intercept: {deny: true}} }, fetch });
 }
 const accept = wire => Response.json({ jsonrpc: '2.0', id: wire.id, result: { protocolVersion: 'draft', effects: [] } });
 
@@ -104,7 +104,7 @@ test('schema traversal preserves absent optional content fields', async () => {
     id: 'test.optional', transport: { type: 'http', url: 'https://backend.test/hooks' },
     subscriptions: [{ mode: 'intercept', events: ['tool.before'], timeoutMs: 1000,
       failurePolicy: 'fail-closed', content: { default: 'metadata' } }],
-  }] }, { source: 'urn:test:optional', capabilities: { toolBefore: {intercept: {deny: true}} },
+  }] }, { source: 'urn:test:optional', harness: { name: 'test', version: '1' }, capabilities: { toolBefore: {intercept: {deny: true}} },
     fetch: async (_, init) => { wire = JSON.parse(init.body); return accept(wire); } });
   const result = await client.toolBefore({ callId: 'call', name: 'read', input: {}, path: 'native', origin: 'native' });
   assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);

@@ -49,6 +49,7 @@ test("client network delegation preserves independent event and upload authentic
       ],
     },
     {
+      harness: { name: "test", version: "1" },
       source: "urn:network:fixture",
       capabilities: {
         toolBefore: {

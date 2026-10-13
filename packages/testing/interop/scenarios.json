@@ -15,6 +15,10 @@
       "event": {
         "id": "synthetic-request",
         "source": "urn:ahp:synthetic",
+        "harness": {
+          "name": "test",
+          "version": "1"
+        },
         "type": "tool.before",
         "time": "2026-01-02T03:04:05Z",
         "session": {

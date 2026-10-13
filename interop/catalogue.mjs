@@ -118,6 +118,7 @@ export async function evaluateRegistration(
     const parsed = draftCodecs.parseRegistration(registration);
     if (!parsed.ok) return { accepted: false };
     hooks = new Hooks(parsed.value, {
+      harness: { name: "test", version: "1" },
       source: "urn:ahp:interop:catalogue",
       capabilities: catalogueHostCapabilities,
       auth: hooksAuth({

@@ -21,6 +21,7 @@ for (const status of [202, 204, 400, 409, 500]) {
         params: {
           protocolVersion: "draft",
           event: {
+            harness: { name: "test", version: "1" },
             id: "event",
             source: "urn:catalogue-status",
             time: "2026-01-01T00:00:00Z",

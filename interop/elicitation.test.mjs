@@ -31,6 +31,7 @@ function message() {
       protocolVersion: "draft",
       capabilities: { effects: [], elicitation: { form: {} } },
       event: {
+        harness: { name: "test", version: "1" },
         id: "request",
         source: "urn:test:elicitation",
         type: "user.elicitation.request",

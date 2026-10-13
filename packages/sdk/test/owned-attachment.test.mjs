@@ -12,7 +12,7 @@ function client(mode, extra = {}) {
     subscriptions: [{ mode: 'intercept', events: [mode ? type : "tool.before"], timeoutMs: 2000,
       failurePolicy: 'fail-closed', content: { default: mode ?? "metadata" },
       upload: { endpoint: 'https://example.test/upload', maxBytes: 100, timeoutMs: 100 } }],
-  })) }, { source: 'urn:example:attachments', capabilities: {
+  })) }, { source: 'urn:example:attachments', harness: { name: 'test', version: '1' }, capabilities: {
     toolBefore: {intercept: {deny: true}},
     turnStart: { intercept: { deny: true } },
   }, fetch: async (_, init) => Response.json({ jsonrpc: '2.0', id: JSON.parse(init.body).id,

@@ -11,7 +11,7 @@ const modify = value => ({ type: 'modify', target: 'input', operation: 'merge', 
 const returned = value => ({ type: 'return', value });
 function client(replies, seen = [], type = 'tool.before', caps = { intercept: { modifyInput: 'replace-and-merge', returnResult: true } }) {
   return new Hooks({ protocolVersion: 'draft', hooks: replies.map((_, index) => ({ id: `test.contract.backend${index}`, transport: { type: 'http', url: `https://backend${index}.test/hooks` }, subscriptions: [{ mode: 'intercept', events: [type], timeoutMs: 1000, failurePolicy: 'fail-open', content: { default: 'metadata' }, includeNative: true }] })) }, {
-    source: 'urn:test:contracts', capabilities: { [type.replace(/\.([a-z])/g, (_, letter) => letter.toUpperCase())]: caps }, fetch: async (url, init) => {
+    source: 'urn:test:contracts', harness: { name: 'test', version: '1' }, capabilities: { [type.replace(/\.([a-z])/g, (_, letter) => letter.toUpperCase())]: caps }, fetch: async (url, init) => {
       const request = JSON.parse(init.body); seen.push(request);
       const index = Number(String(url).match(/backend(\d+)/)[1]);
       return Response.json({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: 'draft', effects: replies[index] } });
@@ -277,7 +277,7 @@ test('fail-closed delivery clears a previously accepted candidate without discar
   const hooks = new Hooks({ protocolVersion: 'draft', hooks: [0, 1].map(index => ({
     id: `test.failclosed.backend${index}`, transport: { type: 'http', url: `https://backend${index}.test/hooks` },
     subscriptions: [{ mode: 'intercept', events: ['tool.before'], timeoutMs: 1000, failurePolicy: 'fail-closed', content: { default: 'metadata' } }],
-  })) }, { source: 'urn:test:failclosed', capabilities: { toolBefore: {intercept: {returnResult: true}} }, fetch: async (url, init) => {
+  })) }, { source: 'urn:test:failclosed', harness: { name: 'test', version: '1' }, capabilities: { toolBefore: {intercept: {returnResult: true}} }, fetch: async (url, init) => {
     if (String(url).includes('backend1')) throw Error('delivery unavailable');
     const request = JSON.parse(init.body);
     return Response.json({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: 'draft', effects: [returned('cached')] } });

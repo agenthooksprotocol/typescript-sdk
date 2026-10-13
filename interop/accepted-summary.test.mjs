@@ -60,6 +60,7 @@ test("canonical summaries distinguish SDK protocol rejection from userland tool-
         ],
       },
       {
+        harness: event.harness,
         source: event.source,
         capabilities: summaryCapabilities(event.type),
         fetch: async (_url, init) => {

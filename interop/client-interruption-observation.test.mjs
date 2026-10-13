@@ -44,6 +44,7 @@ function scenario() {
       ],
     },
     {
+      harness: { name: "test", version: "1" },
       source: "urn:test:interruption",
       observationTimeoutMs: 3000,
       capabilities: {

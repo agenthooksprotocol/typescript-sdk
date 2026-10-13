@@ -142,12 +142,16 @@ export class Hooks {
   private readonly activeElicitations = new Set<ElicitationLifetime>();
 
   constructor(config: unknown, options: HooksOptions) {
+    const harnessIssues = validateWire("common", options.harness, "/$defs/harness");
+    if (harnessIssues.length)
+      throw new ConfigurationError(harnessIssues.map(path => ({ path: `harness${path}`, code: "INVALID_HARNESS" })));
     if (options.maxConcurrentUploads !== undefined &&
         (!Number.isSafeInteger(options.maxConcurrentUploads) || options.maxConcurrentUploads <= 0))
       throw new ConfigurationError([{ path: "maxConcurrentUploads", code: "INVALID_LIMIT" }]);
     this.uploadLimiter = new UploadLimiter(options.maxConcurrentUploads);
     this.options = {
       ...options,
+      harness: structuredClone(options.harness),
       capabilities: structuredClone(options.capabilities),
       ...(options.manifestMetadata === undefined ? {} : {
         manifestMetadata: structuredClone(options.manifestMetadata),
@@ -504,10 +508,18 @@ export class Hooks {
     manager: ContentManager,
     exchange?: ElicitationLifetime,
   ): Promise<BoundaryResult<K>> {
+    const suppliedHarness = (input as { harness?: unknown }).harness;
+    if (suppliedHarness !== undefined) {
+      const issues = validateWire("common", suppliedHarness, "/$defs/harness");
+      const supplied = suppliedHarness as HooksOptions["harness"];
+      if (issues.length || supplied.name !== this.options.harness.name || supplied.version !== this.options.harness.version)
+        throw new ConfigurationError([{ path: "harness", code: "INVALID_HARNESS" }]);
+    }
     let event: any = cloneInput({
       ...input,
       type,
       source: this.options.source,
+      harness: structuredClone(this.options.harness),
       id: exchange?.id ?? (input.id === undefined ? randomUUID() : input.id),
       time: input.time === undefined ? new Date().toISOString() : input.time,
     });

@@ -6,7 +6,7 @@ import { serveStdio } from "agenthooksprotocol/server/stdio";
 
 const event = (id = "e") => ({
   id,
-  source: "urn:test:server",
+  source: "urn:test:server", harness: { name: 'test', version: '1' },
   time: "2026-01-01T00:00:00Z",
   type: "tool.before",
   path: "native",

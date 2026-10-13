@@ -45,6 +45,7 @@ export async function runChain(row, options) {
       ],
     },
     {
+      harness: original.params.event.harness,
       source,
       capabilities: {
         toolBefore: { ...fixtureHostCapabilities.toolBefore, observe: true },

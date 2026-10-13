@@ -56,7 +56,7 @@ export function decodeSettledState(event: Event, value: InterceptRequest["params
     jsonrpc: "2.0", id: event.id, result: { protocolVersion: "draft", effects: [] },
   }).ok;
   const schemaEvent: Record<string, unknown> = interceptable ? { ...(event as unknown as Record<string, unknown>) } : {
-    type: "tool.before", id: event.id, time: event.time, source: event.source,
+    type: "tool.before", id: event.id, time: event.time, source: event.source, harness: event.harness,
     path: "native", call: { id: "state" }, tool: { name: "state", origin: "native", input: {} },
   };
   delete schemaEvent.native;

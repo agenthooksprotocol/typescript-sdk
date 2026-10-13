@@ -5,7 +5,7 @@ import { composeResponse, composeResponseAsync } from '../dist/src/client/compos
 
 const text = (id, value) => ({ id, kind: 'text', mediaType: 'text/plain', selection: 'body', text: value });
 const message = (id, role = 'user') => ({ id, role, parts: [text(`${id}.text`, id)] });
-const envelope = (type) => ({ id: 'event', source: 'urn:test:inline', time: '2026-01-01T00:00:00Z', type });
+const envelope = (type) => ({ id: 'event', source: 'urn:test:inline', harness: { name: 'test', version: '1' }, time: '2026-01-01T00:00:00Z', type });
 const response = (...effects) => ({ jsonrpc: '2.0', id: 'request', result: { protocolVersion: 'draft', effects } });
 const edit = (target, operation, value) => ({ type: 'modify', target, operation, value });
 const capabilities = (target) => ({ effects: ['modify'], modify: { [target]: { replace: true, merge: true } } });

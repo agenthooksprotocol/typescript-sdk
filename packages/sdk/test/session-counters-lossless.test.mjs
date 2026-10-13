@@ -13,7 +13,7 @@ function request(counters = {}) {
     params: {
       protocolVersion: "draft", capabilities: { effects: [] },
       event: {
-        id: "event", type: "tool.before", source: "urn:test:lossless",
+        id: "event", type: "tool.before", source: "urn:test:lossless", harness: { name: 'test', version: '1' },
         time: "2026-01-01T00:00:00Z", path: "native", call: { id: "call" },
         tool: { name: "read", origin: "native", input: { opaque: -huge } },
         session: { id: "session", counters, unknown: { exact: huge } },
@@ -109,7 +109,7 @@ test('public Hooks preserves exact session counters and opaque tool integers thr
   const counters = { turns: huge, modelRequests: huge + 1n, toolCalls: 2, inputTokens: huge + 2n, outputTokens: 0, future: huge + 3n };
   let requestText;
   const hooks = new Hooks({ protocolVersion: 'draft', hooks: [{ id: 'test.exact.public', transport: { type: 'http', url: 'https://backend.test/hooks' }, subscriptions: [{ mode: 'intercept', events: ['tool.before'], timeoutMs: 1000, failurePolicy: 'fail-open', content: { default: 'metadata' } }] }] }, {
-    source: 'urn:test:exact:public', capabilities: { toolBefore: {intercept: {returnResult: true}} }, fetch: async (_, init) => {
+    source: 'urn:test:exact:public', harness: { name: 'test', version: '1' }, capabilities: { toolBefore: {intercept: {returnResult: true}} }, fetch: async (_, init) => {
       requestText = init.body;
       const request = parseJson(requestText);
       assert.equal(request.params.event.session.counters.turns, huge);

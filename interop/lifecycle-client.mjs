@@ -212,6 +212,7 @@ async function sdkCall(
   const key = JSON.stringify([
     content,
     event.source,
+    event.harness,
     event.type,
     mode,
     bodySelected,
@@ -223,6 +224,7 @@ async function sdkCall(
   if (!client) {
     client = lifecycleHooks({
       source: event.source,
+      harness: event.harness,
       event: event.type,
       mode,
       bodySelected,

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { composeResponse, composeResponseAsync, normalizeEffects } from '../dist/src/client/composition.js';
 import { mapParts, localParts } from '../dist/src/client/content-paths.js';
 
-const envelope = type => ({ id: 'event', source: 'urn:test:contextual', time: '2026-01-01T00:00:00Z', type });
+const envelope = type => ({ id: 'event', source: 'urn:test:contextual', harness: { name: 'test', version: '1' }, time: '2026-01-01T00:00:00Z', type });
 const response = effects => ({ jsonrpc: '2.0', id: 'event', result: { protocolVersion: 'draft', ...(effects === undefined ? {} : { effects }) } });
 const text = id => ({ id, kind: 'text', mediaType: 'text/plain', selection: 'body', text: id });
 const message = id => ({ id, role: 'user', parts: [text(id + '.text')] });

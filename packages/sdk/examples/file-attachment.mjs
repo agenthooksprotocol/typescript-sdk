@@ -6,6 +6,7 @@ const [configPath, documentPath] = process.argv.slice(2);
 if (!configPath || !documentPath) throw Error('Expected hooks.json and binary document paths');
 const hooks = new Hooks(JSON.parse(await readFile(configPath, 'utf8')), {
   source: 'urn:example:document-agent',
+  harness: { name: 'document-agent', version: '1.0.0' },
   maxContentBytes: 4 * 1024 * 1024,
   capabilities: { turnStart: {intercept: {deny: true}} },
 });

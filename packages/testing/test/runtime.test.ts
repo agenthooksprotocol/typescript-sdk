@@ -199,6 +199,7 @@ test("public boundaries settle intercepts before observers with one occurrence i
       ],
     },
     {
+      harness: { name: "test", version: "1" },
       source: "urn:test:runtime",
       fetch: async (input, init) => {
         const request = new Request(input, init);

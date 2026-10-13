@@ -63,6 +63,7 @@ const request = (id) => ({
   params: {
     protocolVersion: "draft",
     event: {
+      harness: { name: "test", version: "1" },
       id,
       source: "urn:ahp:matrix",
       type: "tool.before",

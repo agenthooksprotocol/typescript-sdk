@@ -100,7 +100,7 @@ import { capabilities } from "agenthooksprotocol/client";
 import type { StaticCapabilityManifest, HooksOptions } from "agenthooksprotocol/client";
 declare const wireManifest: StaticCapabilityManifest;
 const invalidManifest: HooksOptions = {
-  source: "urn:test:manifest",
+  source: "urn:test:manifest", harness: { name: 'test', version: '1' },
   // @ts-expect-error A canonical discovery manifest is not a typed host declaration.
   capabilities: wireManifest,
 };

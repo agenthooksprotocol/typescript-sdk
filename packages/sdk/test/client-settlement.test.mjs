@@ -7,7 +7,7 @@ const hooksFor = (type, replies = [{}], capabilities = { intercept: { deny: true
   id: `settlement.backend${index}`, transport: { type: 'http', url: `https://backend${index}.test/hooks` },
   subscriptions: [{ mode: 'intercept', events: [type], timeoutMs: 1000, failurePolicy: 'fail-open', content: { default: 'metadata' } }],
 })) }, {
-  source: 'urn:test:settlement', capabilities: { [type.replace(/\.([a-z])/g, (_, letter) => letter.toUpperCase())]: capabilities },
+  source: 'urn:test:settlement', harness: { name: 'test', version: '1' }, capabilities: { [type.replace(/\.([a-z])/g, (_, letter) => letter.toUpperCase())]: capabilities },
   fetch: async (url, init) => {
     const index = Number(new URL(url).hostname.match(/backend(\d+)/)[1]);
     const reply = replies[index];
@@ -64,7 +64,7 @@ test('tool supplied null remains a candidate, not absence, with provenance and e
 });
 
 test('invalid decoded settlement events and complete state fail closed instead of returning authority', () => {
-  const event = { type: 'model.request.before', id: 'event', time: '2026-01-01T00:00:00Z', source: 'urn:test:settlement', model: { provider: 'test', id: 'model' }, attempt: { id: 'attempt', number: 1 }, params: {}, items: [] };
+  const event = { type: 'model.request.before', id: 'event', time: '2026-01-01T00:00:00Z', source: 'urn:test:settlement', harness: { name: 'test', version: '1' }, model: { provider: 'test', id: 'model' }, attempt: { id: 'attempt', number: 1 }, params: {}, items: [] };
   assert.throws(() => decodeSettledEvent({ ...event, items: [{ id: 'message', role: 'assistant', parts: [{ kind: 'text', selection: 'body', text: 42 }] }] }), /Invalid decoded settlement event/);
   assert.throws(() => decodeSettledEvent({ ...event, items: [{ id: 'message', role: 'assistant', parts: [{ id: 'text', kind: 'text', mediaType: 'text/plain', text: 'missing selection' }] }] }), /Invalid decoded settlement event/);
   const decoded = decodeSettledEvent(event);
@@ -98,7 +98,7 @@ test('public final decode failure throws without authorization and preserves acc
     id: 'settlement.backend', transport: { type: 'http', url: 'https://backend.test/hooks' },
     subscriptions: [{ mode: 'intercept', events: ['model.request.before'], timeoutMs: 1000, failurePolicy: 'fail-open', content: { default: 'metadata' } }, { mode: 'observe', events: ['model.request.before'], content: { default: 'metadata' } }],
   }] }, {
-    source: 'urn:test:settlement', capabilities: { modelRequestBefore: {intercept: {deny: true}, observe: true} },
+    source: 'urn:test:settlement', harness: { name: 'test', version: '1' }, capabilities: { modelRequestBefore: {intercept: {deny: true}, observe: true} },
     fetch: async (_, init) => {
       // Simulate invalid host-owned schema facts after admission. The neutral
       // receiver response is still canonical acceptance evidence, not authority.

@@ -45,6 +45,7 @@ const object = (v: unknown): v is ObjectValue =>
 function cloneEvent<T>(value: T): T {
   const event = mapParts(value, (part) => object(part) ? { ...part } : part);
   if (object(value) && typeof value.type === "string") {
+    if (object(event.harness)) event.harness = { ...event.harness };
     for (const path of Object.values(targets[value.type] ?? {})) {
       let container = event;
       for (const key of path.slice(0, -1)) {

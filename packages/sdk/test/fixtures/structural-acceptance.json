@@ -13,6 +13,10 @@
           "event": {
             "id": "evt_http_001",
             "source": "https://harness.example/runtime/42",
+            "harness": {
+              "name": "example-harness",
+              "version": "1.0.0"
+            },
             "type": "tool.before",
             "time": "2026-08-24T08:51:14Z",
             "session": {
@@ -54,6 +58,10 @@
           "event": {
             "id": "evt_http_001",
             "source": "https://harness.example/runtime/42",
+            "harness": {
+              "name": "example-harness",
+              "version": "1.0.0"
+            },
             "type": "tool.before",
             "time": "2026-08-24T08:51:14Z",
             "session": {
@@ -99,6 +107,10 @@
           "event": {
             "id": "evt_http_001",
             "source": "https://harness.example/runtime/42",
+            "harness": {
+              "name": "example-harness",
+              "version": "1.0.0"
+            },
             "type": "tool.before",
             "time": "2026-08-24T08:51:14Z",
             "session": {
@@ -146,6 +158,10 @@
           "event": {
             "id": "evt_http_001",
             "source": "https://harness.example/runtime/42",
+            "harness": {
+              "name": "example-harness",
+              "version": "1.0.0"
+            },
             "type": "tool.before",
             "time": "2026-08-24T08:51:14Z",
             "session": {
@@ -193,6 +209,10 @@
           "event": {
             "id": "evt_http_001",
             "source": "https://harness.example/runtime/42",
+            "harness": {
+              "name": "example-harness",
+              "version": "1.0.0"
+            },
             "type": "tool.before",
             "time": "2026-08-24T08:51:14Z",
             "session": {
@@ -240,6 +260,10 @@
           "event": {
             "id": "evt_http_001",
             "source": "https://harness.example/runtime/42",
+            "harness": {
+              "name": "example-harness",
+              "version": "1.0.0"
+            },
             "type": "tool.before",
             "time": "2026-08-24T08:51:14Z",
             "session": {
@@ -287,6 +311,10 @@
           "event": {
             "id": "evt_http_001",
             "source": "https://harness.example/runtime/42",
+            "harness": {
+              "name": "example-harness",
+              "version": "1.0.0"
+            },
             "type": "tool.before",
             "time": "2026-08-24T08:51:14Z",
             "session": {
@@ -334,6 +362,10 @@
           "event": {
             "id": "evt_http_001",
             "source": "https://harness.example/runtime/42",
+            "harness": {
+              "name": "example-harness",
+              "version": "1.0.0"
+            },
             "type": "tool.before",
             "time": "2026-08-24T08:51:14Z",
             "session": {
@@ -379,6 +411,10 @@
           "event": {
             "id": "evt_http_001",
             "source": "https://harness.example/runtime/42",
+            "harness": {
+              "name": "example-harness",
+              "version": "1.0.0"
+            },
             "type": "tool.before",
             "time": "2026-08-24T08:51:14Z",
             "session": {
@@ -423,6 +459,10 @@
           "event": {
             "id": "evt_http_001",
             "source": "https://harness.example/runtime/42",
+            "harness": {
+              "name": "example-harness",
+              "version": "1.0.0"
+            },
             "type": "tool.before",
             "time": "2026-08-24T08:51:14Z",
             "session": {
@@ -467,6 +507,10 @@
           "event": {
             "id": "evt_http_001",
             "source": "https://harness.example/runtime/42",
+            "harness": {
+              "name": "example-harness",
+              "version": "1.0.0"
+            },
             "type": "tool.before",
             "time": "2026-08-24T08:51:14Z",
             "session": {
@@ -508,6 +552,10 @@
           "event": {
             "id": "evt_http_001",
             "source": "https://harness.example/runtime/42",
+            "harness": {
+              "name": "example-harness",
+              "version": "1.0.0"
+            },
             "type": "tool.before",
             "time": "2026-08-24T08:51:14Z",
             "session": {
@@ -569,6 +617,10 @@
           "event": {
             "id": "evt_http_001",
             "source": "https://harness.example/runtime/42",
+            "harness": {
+              "name": "example-harness",
+              "version": "1.0.0"
+            },
             "type": "tool.before",
             "time": "2026-08-24T08:51:14Z",
             "session": {
@@ -617,6 +669,10 @@
           "event": {
             "id": "evt_http_001",
             "source": "https://harness.example/runtime/42",
+            "harness": {
+              "name": "example-harness",
+              "version": "1.0.0"
+            },
             "type": "tool.before",
             "time": "2026-08-24T08:51:14Z",
             "session": {

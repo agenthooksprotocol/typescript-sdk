@@ -10,7 +10,7 @@ import {
 } from "agenthooksprotocol/client";
 
 const options: HooksOptions = {
-  source: "urn:test:harness",
+  source: "urn:test:harness", harness: { name: 'test', version: '1' },
   capabilities: {
     toolBefore: {intercept: {deny: true}, observe: true},
     userMessageInbound: {observe: true},
@@ -77,7 +77,6 @@ void hooks.dispatch("model.request.before", {
 });
 void hooks.dispatch("session.start", {
   session: { id: "session-1" },
-  harness: { name: "consumer", version: "1" },
   permissionMode: "default",
   trigger: "startup",
   items: [],
@@ -99,7 +98,7 @@ void hooks.dispatch("tool.before", minimalTool, {
 
 declare const manifest: HostCapabilities;
 const staticOptions: HooksOptions = {
-  source: "urn:test:harness",
+  source: "urn:test:harness", harness: { name: 'test', version: '1' },
   capabilities: manifest,
 };
 void staticOptions;

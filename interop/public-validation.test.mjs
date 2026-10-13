@@ -11,6 +11,7 @@ test("public notification and registration validators retain canonical strictnes
     params: {
       protocolVersion: "draft",
       event: {
+        harness: { name: "test", version: "1" },
         type: "tool.before",
         id: "event",
         source: "urn:fixture:validation",

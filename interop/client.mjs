@@ -115,6 +115,7 @@ try {
     }
     /** @type {import("agenthooksprotocol/client").HooksOptions} */
     const options = {
+      harness: rows[0].request.params.event.harness,
       source: rows[0].request.params.event.source,
       capabilities,
       auth: provider,

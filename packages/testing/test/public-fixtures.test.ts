@@ -39,6 +39,7 @@ for (const mode of ["no-effect", "deny"] as const) {
         ],
       },
       {
+        harness: { name: "test", version: "1" },
         source: "urn:testing:public-fixture",
         capabilities: { toolBefore: { intercept: { deny: true } } },
         auth: auth(),

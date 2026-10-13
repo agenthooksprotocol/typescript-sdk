@@ -27,7 +27,7 @@ function intercept(id = "é🪝") {
       capabilities: { effects: ["deny"] },
       event: {
         id,
-        source: "urn:test",
+        source: "urn:test", harness: { name: 'test', version: '1' },
         time: "2026-01-01T00:00:00Z",
         type: "tool.before",
         call: { id: "call" },

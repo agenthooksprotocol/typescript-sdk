@@ -205,6 +205,7 @@ export async function runCompaction(
       })),
     },
     {
+      harness: { name: "test", version: "1" },
       source: "urn:ahp:compaction-host",
       capabilities: {
         contextCompactBefore: {
