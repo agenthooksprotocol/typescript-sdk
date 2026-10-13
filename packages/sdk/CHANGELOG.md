@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.7.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.6.0...agenthooksprotocol-v0.7.0) (2026-10-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* report harness identity on every event ([#35](https://github.com/agenthooksprotocol/typescript-sdk/issues/35))
+
+### Features
+
+* report harness identity on every event ([#35](https://github.com/agenthooksprotocol/typescript-sdk/issues/35)) ([9ea9f24](https://github.com/agenthooksprotocol/typescript-sdk/commit/9ea9f248c43cd942cb24fb8151a235cc40923c9c))
+
 ## [0.6.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.5.0...agenthooksprotocol-v0.6.0) (2026-10-13)
 
 
