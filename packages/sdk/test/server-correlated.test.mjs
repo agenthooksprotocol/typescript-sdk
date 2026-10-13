@@ -8,7 +8,7 @@ import { serveStdio } from 'agenthooksprotocol/server/stdio';
 const require = createRequire(import.meta.url);
 const message = () => ({ jsonrpc: '2.0', id: 'correlated', method: 'hooks/intercept', params: {
   protocolVersion: 'draft', capabilities: { effects: ['allow', 'message'] },
-  event: { id: 'correlated', source: 'urn:test:server', time: '2026-01-01T00:00:00Z', type: 'tool.before', path: 'native', call: { id: 'call' }, tool: { name: 'read', origin: 'native', input: {} } },
+  event: { id: 'correlated', source: 'urn:test:server', harness: { name: 'test', version: '1' }, time: '2026-01-01T00:00:00Z', type: 'tool.before', path: 'native', call: { id: 'call' }, tool: { name: 'read', origin: 'native', input: {} } },
 } });
 const request = value => new Request('https://backend.test/hooks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) });
 

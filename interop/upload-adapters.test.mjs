@@ -127,6 +127,7 @@ for (const name of ["compaction", "elicitation"])
                 ],
               },
               {
+                harness: { name: "test", version: "1" },
                 source: "urn:test",
                 capabilities: { contextCompactBefore: { intercept: { deny: true } } },
                 auth: auth({

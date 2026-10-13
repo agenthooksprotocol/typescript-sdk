@@ -100,6 +100,7 @@ export type {
   FileChangedInput,
   FormAnswerValue,
   FormAnswers,
+  Harness,
   HookFailureEvent,
   HookFailureHostCapabilities,
   HookFailureInput,

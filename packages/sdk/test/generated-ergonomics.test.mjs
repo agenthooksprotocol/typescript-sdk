@@ -39,7 +39,7 @@ function hooks(
       ],
     },
     {
-      source: "urn:test:ergonomic",
+      source: "urn:test:ergonomic", harness: { name: 'test', version: '1' },
       capabilities,
       fetch,
     },
@@ -257,7 +257,7 @@ test("named source binding prepares receiver references from descriptors without
       ],
     },
     {
-      source: "urn:test:source-binding",
+      source: "urn:test:source-binding", harness: { name: 'test', version: '1' },
       capabilities: { toolBefore: { intercept: { deny: true } } },
       fetch: async (url, init) => {
         if (url.endsWith("/upload")) {
@@ -346,7 +346,7 @@ for (const mode of ["metadata", "omit"])
         ],
       },
       {
-        source: "urn:test:source-unused",
+        source: "urn:test:source-unused", harness: { name: 'test', version: '1' },
         capabilities: { toolBefore: { observe: true } },
         fetch: async () => new Response(null, { status: 204 }),
       },

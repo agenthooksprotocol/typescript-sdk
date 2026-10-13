@@ -40,6 +40,7 @@ for (const selection of ["body", "metadata", "omit"] as const) {
           ],
         },
         {
+          harness: { name: "test", version: "1" },
           source: "urn:test:content",
           fetch: async (input, init) => {
             const request = new Request(input, init);
@@ -441,6 +442,7 @@ for (const selection of ["body", "metadata", "omit"] as const) {
       id: "test.inline", transport: { type: "http", url: "https://receiver.test/hooks" },
       subscriptions: [{ mode: "observe", events: ["user.message.inbound"], content: { default: selection } }],
     }] }, {
+      harness: { name: "test", version: "1" },
       source: "urn:test:inline",
       capabilities: { userMessageInbound: { observe: true } },
       fetch: async (input, init) => {

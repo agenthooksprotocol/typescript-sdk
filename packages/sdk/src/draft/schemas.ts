@@ -1730,7 +1730,7 @@ export const schemas = [
         allOf: [
           {
             type: "object",
-            required: ["id", "source", "time", "type"],
+            required: ["id", "source", "time", "harness", "type"],
             properties: {
               id: {
                 type: "string",
@@ -1805,6 +1805,9 @@ export const schemas = [
                 description:
                   "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
               },
+              harness: {
+                $ref: "common.schema.json#/$defs/harness",
+              },
             },
           },
           {
@@ -1816,7 +1819,7 @@ export const schemas = [
         allOf: [
           {
             type: "object",
-            required: ["id", "source", "time", "type"],
+            required: ["id", "source", "time", "harness", "type"],
             properties: {
               id: {
                 type: "string",
@@ -1891,6 +1894,9 @@ export const schemas = [
                 description:
                   "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
               },
+              harness: {
+                $ref: "common.schema.json#/$defs/harness",
+              },
             },
           },
           {
@@ -1953,7 +1959,7 @@ export const schemas = [
         allOf: [
           {
             type: "object",
-            required: ["id", "source", "time", "type"],
+            required: ["id", "source", "time", "harness", "type"],
             properties: {
               id: {
                 type: "string",
@@ -2028,6 +2034,9 @@ export const schemas = [
                 description:
                   "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
               },
+              harness: {
+                $ref: "common.schema.json#/$defs/harness",
+              },
             },
           },
           {
@@ -2039,7 +2048,7 @@ export const schemas = [
         allOf: [
           {
             type: "object",
-            required: ["id", "source", "time", "type"],
+            required: ["id", "source", "time", "harness", "type"],
             properties: {
               id: {
                 type: "string",
@@ -2114,6 +2123,9 @@ export const schemas = [
                 description:
                   "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
               },
+              harness: {
+                $ref: "common.schema.json#/$defs/harness",
+              },
             },
           },
           {
@@ -2125,7 +2137,7 @@ export const schemas = [
         allOf: [
           {
             type: "object",
-            required: ["id", "source", "time", "type"],
+            required: ["id", "source", "time", "harness", "type"],
             properties: {
               id: {
                 type: "string",
@@ -2200,6 +2212,9 @@ export const schemas = [
                 description:
                   "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
               },
+              harness: {
+                $ref: "common.schema.json#/$defs/harness",
+              },
             },
           },
           {
@@ -2211,7 +2226,7 @@ export const schemas = [
         allOf: [
           {
             type: "object",
-            required: ["id", "source", "time", "type"],
+            required: ["id", "source", "time", "harness", "type"],
             properties: {
               id: {
                 type: "string",
@@ -2286,6 +2301,9 @@ export const schemas = [
                 description:
                   "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
               },
+              harness: {
+                $ref: "common.schema.json#/$defs/harness",
+              },
             },
           },
           {
@@ -2297,7 +2315,7 @@ export const schemas = [
         allOf: [
           {
             type: "object",
-            required: ["id", "source", "time", "type"],
+            required: ["id", "source", "time", "harness", "type"],
             properties: {
               id: {
                 type: "string",
@@ -2372,6 +2390,9 @@ export const schemas = [
                 description:
                   "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
               },
+              harness: {
+                $ref: "common.schema.json#/$defs/harness",
+              },
             },
           },
           {
@@ -2392,7 +2413,7 @@ export const schemas = [
         allOf: [
           {
             type: "object",
-            required: ["id", "source", "time", "type"],
+            required: ["id", "source", "time", "harness", "type"],
             properties: {
               id: {
                 type: "string",
@@ -2460,6 +2481,9 @@ export const schemas = [
                 type: "boolean",
                 description:
                   "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
+              },
+              harness: {
+                $ref: "common.schema.json#/$defs/harness",
               },
             },
           },
@@ -2667,6 +2691,21 @@ export const schemas = [
         },
         description:
           "Host-supplied counters. Omitted means unknown, not zero; SDKs do not infer values.",
+      },
+      harness: {
+        type: "object",
+        required: ["name", "version"],
+        properties: {
+          name: {
+            type: "string",
+            minLength: 1,
+          },
+          version: {
+            type: "string",
+            minLength: 1,
+          },
+        },
+        additionalProperties: false,
       },
     },
   },
@@ -4569,7 +4608,16 @@ export const schemas = [
       },
       "turn.start": {
         type: "object",
-        required: ["id", "source", "type", "time", "turn", "trigger", "items"],
+        required: [
+          "id",
+          "source",
+          "type",
+          "time",
+          "harness",
+          "turn",
+          "trigger",
+          "items",
+        ],
         properties: {
           id: {
             type: "string",
@@ -4652,6 +4700,9 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
       },
       "turn.finish.before": {
@@ -4661,6 +4712,7 @@ export const schemas = [
           "source",
           "type",
           "time",
+          "harness",
           "turn",
           "outcome",
           "continuationCount",
@@ -4767,6 +4819,9 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
       },
       "turn.end": {
@@ -4776,6 +4831,7 @@ export const schemas = [
           "source",
           "type",
           "time",
+          "harness",
           "turn",
           "outcome",
           "continuationCount",
@@ -4885,6 +4941,9 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
         allOf: [
           {
@@ -4915,6 +4974,7 @@ export const schemas = [
           "source",
           "type",
           "time",
+          "harness",
           "turn",
           "item",
           "delta",
@@ -5017,6 +5077,9 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
       },
       "model.request.before": {
@@ -5026,6 +5089,7 @@ export const schemas = [
           "source",
           "type",
           "time",
+          "harness",
           "model",
           "attempt",
           "params",
@@ -5115,6 +5179,9 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
         allOf: [
           {
@@ -5147,6 +5214,7 @@ export const schemas = [
           "source",
           "type",
           "time",
+          "harness",
           "model",
           "attempt",
           "execution",
@@ -5248,6 +5316,9 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
         allOf: [
           {
@@ -5321,6 +5392,7 @@ export const schemas = [
           "source",
           "type",
           "time",
+          "harness",
           "model",
           "attempt",
           "execution",
@@ -5435,6 +5507,9 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
         allOf: [
           {
@@ -5455,6 +5530,7 @@ export const schemas = [
           "source",
           "type",
           "time",
+          "harness",
           "current",
           "proposed",
           "reason",
@@ -5563,6 +5639,9 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
         allOf: [
           {
@@ -5583,6 +5662,7 @@ export const schemas = [
           "source",
           "type",
           "time",
+          "harness",
           "previous",
           "current",
           "reason",
@@ -5672,6 +5752,9 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
         allOf: [
           {
@@ -5692,6 +5775,7 @@ export const schemas = [
           "source",
           "type",
           "time",
+          "harness",
           "call",
           "tool",
           "path",
@@ -5811,6 +5895,9 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
         allOf: [
           {
@@ -5840,6 +5927,7 @@ export const schemas = [
           "source",
           "type",
           "time",
+          "harness",
           "call",
           "tool",
           "path",
@@ -5953,6 +6041,9 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
       },
       "tool.progress": {
@@ -5962,6 +6053,7 @@ export const schemas = [
           "source",
           "type",
           "time",
+          "harness",
           "call",
           "tool",
           "path",
@@ -6075,6 +6167,9 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
         allOf: [
           {
@@ -6093,7 +6188,7 @@ export const schemas = [
       },
       "tool.batch.after": {
         type: "object",
-        required: ["id", "source", "type", "time", "batch", "calls"],
+        required: ["id", "source", "type", "time", "harness", "batch", "calls"],
         properties: {
           id: {
             type: "string",
@@ -6254,11 +6349,22 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
       },
       "context.compact.before": {
         type: "object",
-        required: ["id", "source", "type", "time", "trigger", "items"],
+        required: [
+          "id",
+          "source",
+          "type",
+          "time",
+          "harness",
+          "trigger",
+          "items",
+        ],
         properties: {
           id: {
             type: "string",
@@ -6345,6 +6451,9 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
         allOf: [
           {
@@ -6384,6 +6493,7 @@ export const schemas = [
           "source",
           "type",
           "time",
+          "harness",
           "summary",
           "removed",
           "execution",
@@ -6490,6 +6600,9 @@ export const schemas = [
             type: "boolean",
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
+          },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
           },
         },
         allOf: [
@@ -10401,7 +10514,16 @@ export const schemas = [
     $comment: "Mutable AHP draft. Tool fields apply only to tool events.",
     "x-requirements": ["AHP-CORE-003", "AHP-CORE-004"],
     type: "object",
-    required: ["id", "source", "type", "time", "session", "outcome", "reason"],
+    required: [
+      "id",
+      "source",
+      "type",
+      "time",
+      "harness",
+      "session",
+      "outcome",
+      "reason",
+    ],
     properties: {
       id: {
         type: "string",
@@ -10489,6 +10611,9 @@ export const schemas = [
         type: "boolean",
         description:
           "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
+      },
+      harness: {
+        $ref: "common.schema.json#/$defs/harness",
       },
     },
     not: {
@@ -10608,19 +10733,7 @@ export const schemas = [
         minLength: 1,
       },
       harness: {
-        type: "object",
-        required: ["name", "version"],
-        properties: {
-          name: {
-            type: "string",
-            minLength: 1,
-          },
-          version: {
-            type: "string",
-            minLength: 1,
-          },
-        },
-        additionalProperties: false,
+        $ref: "common.schema.json#/$defs/harness",
       },
       manifest: {
         $ref: "capabilities-response.schema.json#/allOf/1/properties/result/properties/manifest",
@@ -10683,7 +10796,7 @@ export const schemas = [
     $defs: {
       "task.change.before": {
         type: "object",
-        required: ["id", "source", "time", "type", "task"],
+        required: ["id", "source", "time", "harness", "type", "task"],
         properties: {
           id: {
             type: "string",
@@ -10786,13 +10899,16 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
         description:
           "Open event envelope for extension metadata; nested protocol payload keys are closed, task state keys remain harness-defined.",
       },
       "task.change.after": {
         type: "object",
-        required: ["id", "source", "time", "type", "task"],
+        required: ["id", "source", "time", "harness", "type", "task"],
         properties: {
           id: {
             type: "string",
@@ -10895,13 +11011,16 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
         description:
           "Open event envelope for extension metadata; nested protocol payload keys are closed, task state keys remain harness-defined.",
       },
       "workspace.change.before": {
         type: "object",
-        required: ["id", "source", "time", "type", "workspace"],
+        required: ["id", "source", "time", "harness", "type", "workspace"],
         properties: {
           id: {
             type: "string",
@@ -10995,13 +11114,16 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
         description:
           "Open event envelope for extension metadata; nested protocol payload keys are closed, task state keys remain harness-defined.",
       },
       "workspace.change.after": {
         type: "object",
-        required: ["id", "source", "time", "type", "workspace"],
+        required: ["id", "source", "time", "harness", "type", "workspace"],
         properties: {
           id: {
             type: "string",
@@ -11095,13 +11217,16 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
         description:
           "Open event envelope for extension metadata; nested protocol payload keys are closed, task state keys remain harness-defined.",
       },
       "file.changed": {
         type: "object",
-        required: ["id", "source", "time", "type", "changes"],
+        required: ["id", "source", "time", "harness", "type", "changes"],
         properties: {
           id: {
             type: "string",
@@ -11207,6 +11332,9 @@ export const schemas = [
             description:
               "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
           },
+          harness: {
+            $ref: "common.schema.json#/$defs/harness",
+          },
         },
         description:
           "Open event envelope for extension metadata; nested protocol payload keys are closed, task state keys remain harness-defined.",
@@ -11245,6 +11373,7 @@ export const schemas = [
       "source",
       "type",
       "time",
+      "harness",
       "outcome",
       "execution",
       "call",
@@ -11372,6 +11501,9 @@ export const schemas = [
         description:
           "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
       },
+      harness: {
+        $ref: "common.schema.json#/$defs/harness",
+      },
     },
     allOf: [
       {
@@ -11480,7 +11612,16 @@ export const schemas = [
       "Mutable AHP draft. Unknown object fields remain permitted by the protocol.",
     "x-requirements": ["AHP-TB-001", "AHP-CORE-003", "AHP-CORE-004"],
     type: "object",
-    required: ["id", "source", "type", "time", "call", "tool", "path"],
+    required: [
+      "id",
+      "source",
+      "type",
+      "time",
+      "harness",
+      "call",
+      "tool",
+      "path",
+    ],
     properties: {
       id: {
         type: "string",
@@ -11580,6 +11721,9 @@ export const schemas = [
         type: "boolean",
         description:
           "True when this object identity was synthesized by the adapter; identity remains stable for its lifetime.",
+      },
+      harness: {
+        $ref: "common.schema.json#/$defs/harness",
       },
     },
     allOf: [

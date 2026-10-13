@@ -54,6 +54,7 @@ const config = (url, subscriptions = [sub()], extra = {}) => ({
   ],
 });
 const options = (extra) => ({
+  harness: { name: "test", version: "1" },
   source: "urn:test:harness",
   capabilities: {
     toolBefore: {

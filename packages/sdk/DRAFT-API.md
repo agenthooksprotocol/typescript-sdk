@@ -131,6 +131,9 @@ the effective local owners and must be closed separately. Observations finish
 before a boundary returns. Their delivery evidence is identified by
 `diagnostics[].phase === "observation"`.
 
+`HooksOptions.harness` supplies the required `{ name, version }` identity for every
+event. Hooks validates and copies it at construction; named inputs omit it.
+
 Generic `Hooks.dispatch` intentionally accepts canonical occurrence-shaped input
 for catalogue-driven harnesses. Named methods accept generated host facts and
 perform schema-owned projection. Both return the same typed settlement and reject

@@ -10,7 +10,7 @@ const { composeResponse } = await import(
 
 const { Attachment } = await import(require.resolve("agenthooksprotocol/client"));
 
-const envelope = { id: "e", source: "urn:test", time: "2026-01-01T00:00:00Z" };
+const envelope = { harness: { name: "test", version: "1" }, id: "e", source: "urn:test", time: "2026-01-01T00:00:00Z" };
 const tool = () => ({
   ...envelope,
   type: "tool.before",

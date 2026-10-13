@@ -11,6 +11,7 @@ const text = (id, value, extra = {}) => ({
   id, kind: "text", mediaType: "text/plain", selection: "body", text: value, ...extra,
 });
 const event = (id, items) => ({
+  harness: { name: "test", version: "1" },
   id, source: "urn:ahp:catalogue-test", type: "model.request.before",
   time: "2026-09-15T12:00:00Z", model: { id: "example", provider: "example" },
   attempt: { id: "example", number: 1 }, params: {}, items,

@@ -105,6 +105,7 @@ export async function uploadBytes(
         ],
       },
       {
+        harness: { name: "test", version: "1" },
         source: "urn:ahp:interop:upload",
         capabilities: { toolBefore: { intercept: { deny: true } } },
         auth: auth({ resolveEnvironmentVariable: (name) => env[name] }),

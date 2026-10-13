@@ -7,7 +7,7 @@ function client(reply) {
   return new Hooks({ protocolVersion: 'draft', hooks: [{
     id: 'test.compaction', transport: { type: 'http', url: 'https://backend.test/hooks' },
     subscriptions: [{ mode: 'intercept', events: ['context.compact.before', 'context.compact.after'], timeoutMs: 1000, failurePolicy: 'fail-open', content: { default: 'body' } }],
-  }] }, { source: 'urn:test:compaction', capabilities: {
+  }] }, { source: 'urn:test:compaction', harness: { name: 'test', version: '1' }, capabilities: {
     contextCompactBefore: {intercept: {returnResult: true}},
     contextCompactAfter: { intercept: { modifySummary: "replace" } },
   }, fetch: async (_url, init) => {

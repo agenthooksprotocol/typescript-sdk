@@ -162,6 +162,7 @@ export async function runAtomicInterop(): Promise<AtomicRow[]> {
           })),
         },
         {
+          harness: { name: "test", version: "1" },
           source: "urn:ahp:interop",
           capabilities: {
             toolBefore: { intercept: { deny: true, allow: true, ask: true, message: true, returnResult: true, modifyInput: "replace-and-merge" } },

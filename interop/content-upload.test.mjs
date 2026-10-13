@@ -64,6 +64,7 @@ test(
           protocolVersion: "draft",
           capabilities: { effects: [] },
           event: {
+            harness: { name: "test", version: "1" },
             id,
             source: "urn:ahp:test",
             type: "tool.before",
@@ -176,6 +177,7 @@ test(
           protocolVersion: "draft",
           capabilities: { effects: [] },
           event: {
+            harness: { name: "test", version: "1" },
             id,
             source: "urn:ahp:test",
             type: "tool.before",

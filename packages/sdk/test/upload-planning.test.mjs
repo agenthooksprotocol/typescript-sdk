@@ -12,7 +12,7 @@ const backend = (i, subscriptions = [subscription()]) => ({ id: `test.planning.b
   transport: { type: 'http', url: `https://backend${i}.test/hooks` }, subscriptions });
 function client(t, backends, fetch, options = {}) {
   const hooks = new Hooks({ protocolVersion: 'draft', hooks: backends }, {
-    source: 'urn:test:upload-planning', capabilities: { turnStart: {intercept: {deny: true}, observe: true} }, fetch, ...options,
+    source: 'urn:test:upload-planning', harness: { name: 'test', version: '1' }, capabilities: { turnStart: {intercept: {deny: true}, observe: true} }, fetch, ...options,
   });
   t.after(() => hooks.close());
   return hooks;

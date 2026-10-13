@@ -22,7 +22,7 @@ function client({ effects = () => [], fetchHook, maxContentBytes } = {}) {
       failurePolicy: "fail-open", content: { default: "body" },
       upload: { endpoint: "https://test.example/upload", timeoutMs: 1000, maxBytes: 4096 } }],
   }] }, {
-    source: "urn:test:lifetime", maxContentBytes,
+    source: "urn:test:lifetime", harness: { name: 'test', version: '1' }, maxContentBytes,
     capabilities: {
       userElicitationRequest: { intercept: { returnResult: true, deny: true, elicitation: { form: true } } },
       userElicitationResult: { intercept: { modifyContent: "replace", elicitation: { form: true } } },

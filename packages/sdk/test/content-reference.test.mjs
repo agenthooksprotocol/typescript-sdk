@@ -57,7 +57,7 @@ test("scoped storage resolves ref-only handles independently of wire metadata", 
 
 test("both request envelopes share Event decoding and reject receipt metadata in events", () => {
   const event = {
-    id: "event", source: "urn:test", time: "2026-01-01T00:00:00Z",
+    id: "event", source: "urn:test", harness: { name: 'test', version: '1' }, time: "2026-01-01T00:00:00Z",
     type: "user.message.inbound", message: { channel: "chat", sender: "user", messages: [{ id: "message", role: "user", parts: [item] }] },
   };
   for (const [method, schema, parse, extra] of [
@@ -84,8 +84,8 @@ test("both request envelopes share Event decoding and reject receipt metadata in
 
 
 test("standalone subset codecs preserve existing subset-relative unknown variants", () => {
-  const tool = { id: "tool", source: "urn:test", time: "2026-01-01T00:00:00Z", type: "tool.before", call: { id: "call" }, path: "native", tool: { name: "read", origin: "native", input: {} } };
-  const user = { id: "user", source: "urn:test", time: "2026-01-01T00:00:00Z", type: "user.message.inbound", message: { channel: "chat", sender: "user", messages: [{ id: "message", role: "user", parts: [item] }] } };
+  const tool = { id: "tool", source: "urn:test", harness: { name: 'test', version: '1' }, time: "2026-01-01T00:00:00Z", type: "tool.before", call: { id: "call" }, path: "native", tool: { name: "read", origin: "native", input: {} } };
+  const user = { id: "user", source: "urn:test", harness: { name: 'test', version: '1' }, time: "2026-01-01T00:00:00Z", type: "user.message.inbound", message: { channel: "chat", sender: "user", messages: [{ id: "message", role: "user", parts: [item] }] } };
   for (const event of [tool, user]) assert.equal(draftCodecs.parseEvent(event).ok, true);
   assert.equal(draftCodecs.parseExecutionEvent(tool).ok, true);
   assert.equal(draftCodecs.parseInteractionEvent(user).ok, true);
@@ -95,7 +95,7 @@ test("standalone subset codecs preserve existing subset-relative unknown variant
 
 
 test("intercept rejects known observe-only events but observe accepts shared Event", () => {
-  const event = { id: "file", source: "urn:test", time: "2026-01-01T00:00:00Z", type: "file.changed", changes: [{ path: "file.txt", operation: "update", agentCaused: true, before: { ...item, id: "before", body: { ref: "before" } }, after: { ...item, id: "after", body: { ref: "after" } } }] };
+  const event = { id: "file", source: "urn:test", harness: { name: 'test', version: '1' }, time: "2026-01-01T00:00:00Z", type: "file.changed", changes: [{ path: "file.txt", operation: "update", agentCaused: true, before: { ...item, id: "before", body: { ref: "before" } }, after: { ...item, id: "after", body: { ref: "after" } } }] };
   assert.equal(draftCodecs.parseEvent(event).ok, true);
   const request = { jsonrpc: "2.0", id: "file", method: "hooks/intercept", params: { protocolVersion: "draft", capabilities: { effects: [] }, event } };
   assert.equal(draftCodecs.parseInterceptRequest(request).ok, false);

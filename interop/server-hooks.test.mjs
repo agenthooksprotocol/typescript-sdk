@@ -29,6 +29,7 @@ const intercept = () => ({
     protocolVersion: "draft",
     capabilities: capabilities(),
     event: {
+      harness: { name: "test", version: "1" },
       id: "e",
       source: "urn:test",
       time: "2026-01-01T00:00:00Z",

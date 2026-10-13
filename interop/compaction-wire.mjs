@@ -175,6 +175,7 @@ async function exchange(plan, sub, name, snapshot) {
       ],
     },
     {
+      harness: { name: "test", version: "1" },
       source: "urn:ahp:compaction-host",
       capabilities: snapshot.boundary === "before"
         ? { contextCompactBefore: { intercept: { modifyInstructions: "replace", message: true, returnResult: true, deny: true } } }

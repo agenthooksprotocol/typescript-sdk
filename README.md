@@ -83,6 +83,7 @@ const capabilities = {
 } satisfies HostCapabilities;
 const hooks = new Hooks(config, {
   source: "urn:example:agent",
+  harness: { name: "example-agent", version: "1.0.0" },
   capabilities,
 });
 

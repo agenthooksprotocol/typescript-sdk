@@ -1,6 +1,7 @@
 import type {
   HostEventInputs,
   HostCapabilities,
+  Harness,
   OwnedAttachment,
   EventType,
   Permission,
@@ -49,7 +50,7 @@ export type HarnessEvent<K extends EventType = EventType> =
 /** Passing an Attachment transfers its invocation ownership to the SDK.
  * Keep host execution data separately; canonical effects carry accepted rewrites. */
 export type BoundaryInput<K extends EventType> = K extends EventType
-  ? Omit<HarnessEvent<K>, "type" | "source" | "id" | "time" | "manifest"> & {
+  ? Omit<HarnessEvent<K>, "type" | "source" | "harness" | "id" | "time" | "manifest"> & {
       id?: string;
       time?: string;
     }
@@ -63,6 +64,8 @@ export type EventInput<K extends EventType> = DirectHostValue<HostEventInputs<At
 /** Explicit delivery authority for one event. Effects remain separately granted. */
 export interface HooksOptions {
   source: string;
+  /** Required emitting harness identity, copied for all events. */
+  harness: Harness;
   /** Typed event declarations. Omitted events and facilities grant nothing. */
   capabilities: HostCapabilities;
   /** Static non-event advertisements. Event grants always come from capabilities.

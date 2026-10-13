@@ -295,6 +295,7 @@ export async function runInterop(): Promise<{
                 ],
               },
               {
+                harness: event.harness,
                 source: event.source,
                 capabilities: {
                   toolBefore: { intercept: { deny: true } },

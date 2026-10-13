@@ -11,7 +11,7 @@ function client(type, capabilities, reply, count = 1) {
   return new Hooks({ protocolVersion: 'draft', hooks: Array.from({ length: count }, (_, index) => ({
     id: `test.typed.backend${index}`, transport: { type: 'http', url: `https://backend${index}.test/hooks` },
     subscriptions: [{ mode: 'intercept', events: [type], timeoutMs: 1000, failurePolicy: 'fail-open', content: { default: 'body' } }],
-  })) }, { source: 'urn:test:typed', capabilities: { [type.replace(/\.([a-z])/g, (_, letter) => letter.toUpperCase())]: capabilities }, fetch: async (url, init) => {
+  })) }, { source: 'urn:test:typed', harness: { name: 'test', version: '1' }, capabilities: { [type.replace(/\.([a-z])/g, (_, letter) => letter.toUpperCase())]: capabilities }, fetch: async (url, init) => {
     const wire = JSON.parse(init.body);
     return Response.json({ jsonrpc: '2.0', id: wire.id, result: { protocolVersion: 'draft', ...reply(wire, String(url)) } });
   } });
@@ -92,7 +92,7 @@ test('invalid later response rolls back all its edits while retaining earlier ac
   await hooks.close();
 });
 for (const reply of [{}, { effects: [] }]) test(`backend helper accepts neutral ${Object.hasOwn(reply, 'effects') ? 'empty' : 'absent'} effects`, async () => {
-  const request = { jsonrpc: '2.0', id: 'event', method: 'hooks/intercept', params: { protocolVersion: 'draft', capabilities: { effects: [] }, event: { id: 'event', source: 'urn:test:backend', time: '2026-01-01T00:00:00Z', type: 'tool.before', call: { id: 'call' }, path: 'native', tool: { name: 'read', origin: 'native', input: {} } } } };
+  const request = { jsonrpc: '2.0', id: 'event', method: 'hooks/intercept', params: { protocolVersion: 'draft', capabilities: { effects: [] }, event: { id: 'event', source: 'urn:test:backend', harness: { name: 'test', version: '1' }, time: '2026-01-01T00:00:00Z', type: 'tool.before', call: { id: 'call' }, path: 'native', tool: { name: 'read', origin: 'native', input: {} } } } };
   const response = await backendHooks.handle(new Request('https://backend.test/hooks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request) }), { intercept: { toolBefore: () => reply } });
   const wire = await response.json();
   assert.equal(wire.result.protocolVersion, 'draft');

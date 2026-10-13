@@ -45,6 +45,7 @@ function setup(responses, failurePolicy = "fail-open") {
       })),
     },
     {
+      harness: { name: "test", version: "1" },
       source: "urn:test:final-state",
       capabilities: {
         toolBefore: {
@@ -264,6 +265,7 @@ test("final-state projection does not append continuation instructions twice", a
       ],
     },
     {
+      harness: { name: "test", version: "1" },
       source: "urn:test:final-state",
       capabilities: {
         turnFinishBefore: {

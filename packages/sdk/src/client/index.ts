@@ -26,6 +26,7 @@ export type { BackendTransportOptions, StdioDiagnostic } from "./transport.js";
 // Canonical schema models are intentional advanced APIs. Host projection and
 // upload/composition coordination remain implementation details.
 export type {
+  Harness,
   JsonPrimitive,
   JsonValue,
   AdditionalProperties,

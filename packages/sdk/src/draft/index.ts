@@ -97,6 +97,7 @@ export type {
   ElicitResultState,
   Event,
   EventInputs,
+  Harness,
   EventResponses,
   EventType,
   ExecutionEvent,

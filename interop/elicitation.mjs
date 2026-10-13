@@ -81,10 +81,12 @@ const elicitationHostCapabilities = {
  * @param {string} source
  * @param {import("agenthooksprotocol/client").HostCapabilities} capabilities
  * @param {string} token
+ * @param {import("agenthooksprotocol/client").HooksOptions["harness"]} harness
  * @param {string} [uploadToken]
  * @returns {import("agenthooksprotocol/client").HooksOptions}
  */
-const clientOptions = (source, capabilities, token, uploadToken) => ({
+const clientOptions = (source, capabilities, token, harness, uploadToken) => ({
+  harness,
   source,
   capabilities,
   auth: auth({
@@ -187,6 +189,7 @@ if (process.argv[2] === "client") {
           event.source,
           elicitationHostCapabilities,
           plan.token,
+          event.harness,
           plan.uploadToken,
         ),
         fetch: async (input, init) => {
@@ -365,6 +368,7 @@ if (process.argv[2] === "client") {
           c.request.params.event.source,
           elicitationHostCapabilities,
           token,
+          c.request.params.event.harness,
           uploadToken,
         ),
       );
@@ -429,6 +433,7 @@ if (process.argv[2] === "client") {
                 "urn:fixture:elicitation",
                 elicitationHostCapabilities,
                 token,
+                { name: "test", version: "1" },
               ),
             );
             try {

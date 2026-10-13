@@ -12,7 +12,7 @@ import { addCanonicalSchemas } from "../json.js";
 
 let registry: Ajv2020 | undefined;
 /** Validate against the checked-in canonical schema without coercion. */
-export function validateWire(name: string, value: unknown): string[] {
+export function validateWire(name: string, value: unknown, fragment = ""): string[] {
   if (!registry) {
     registry = new Ajv2020({
       allErrors: true,
@@ -24,7 +24,7 @@ export function validateWire(name: string, value: unknown): string[] {
     addCanonicalSchemas(registry);
   }
   const validate = registry.getSchema(
-    `https://agenthooksprotocol.org/schemas/draft/${name}.schema.json`,
+    `https://agenthooksprotocol.org/schemas/draft/${name}.schema.json${fragment === "" ? "" : `#${fragment}`}`,
   );
   if (!validate) return ["Unknown protocol schema"];
   if (validate(value)) return [];

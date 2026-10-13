@@ -36,6 +36,7 @@ export async function runConformance(
     },
     {
       source: "urn:agenthooksprotocol:conformance:runner",
+      harness: { name: "ahp-conformance", version: "0.0.0-private" },
       capabilities: { toolBefore: { intercept: { deny: true } } },
     },
   );

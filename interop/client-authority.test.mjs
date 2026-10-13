@@ -66,6 +66,7 @@ for (const [name, capabilities] of [
   test(`observation requires explicit authority: ${name}`, async () => {
     let deliveries = 0;
     const client = new Hooks(registration([subscription("observe")]), {
+      harness: { name: "test", version: "1" },
       source: "urn:test:authority",
       capabilities,
       fetch: async () => {
@@ -88,6 +89,7 @@ for (const [name, capabilities] of [
 test("explicit observe-only declaration delivers no interception or effect grants", async () => {
   const messages = [];
   const client = new Hooks(registration([subscription("observe")]), {
+    harness: { name: "test", version: "1" },
     source: "urn:test:authority",
     capabilities: {
       toolBefore: {
@@ -121,6 +123,7 @@ for (const observe of [false, true]) {
     const client = new Hooks(
       registration([subscription("intercept"), subscription("intercept")]),
       {
+        harness: { name: "test", version: "1" },
         source: "urn:test:authority",
         capabilities: {
           toolBefore: observe
@@ -162,6 +165,7 @@ for (const observe of [false, true]) {
 test("wildcard subscriptions intersect explicit modes without broadening them", async () => {
   let deliveries = 0;
   const client = new Hooks(registration([subscription("observe", ["*"])]), {
+    harness: { name: "test", version: "1" },
     source: "urn:test:authority",
     capabilities: {
       toolBefore: {

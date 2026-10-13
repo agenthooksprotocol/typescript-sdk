@@ -128,6 +128,7 @@ test(
         ],
       },
       {
+        harness: { name: "test", version: "1" },
         source: "urn:test:harness",
         capabilities: {
           toolBefore: {

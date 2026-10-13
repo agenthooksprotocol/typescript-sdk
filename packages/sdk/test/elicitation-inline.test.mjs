@@ -21,7 +21,7 @@ const request = {
   params: {
     capabilities: { effects: ["deny"] },
     event: {
-      id: "request", type: "user.elicitation.request", source: "test",
+      id: "request", type: "user.elicitation.request", source: "test", harness: { name: 'test', version: '1' },
       session: { id: "session" }, elicitation: requestMeta,
     },
   },
@@ -41,7 +41,7 @@ test("exchange validation accepts the canonical inline-only signature", () => {
     params: {
       event: {
         id: "result", parentEventId: "request", type: "user.elicitation.result",
-        source: "test", session: { id: "session" },
+        source: "test", harness: { name: 'test', version: '1' }, session: { id: "session" },
         elicitation: {
           mode: "form", server: "mcp:test", action: "decline",
           result: { kind: "text", mediaType: "text/plain", selection: "body", text: '{"action":"decline"}' },

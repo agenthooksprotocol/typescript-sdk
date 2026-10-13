@@ -157,6 +157,7 @@ test("HTTP authorization is independent of JSON-RPC correlation and event identi
         ],
       },
       {
+        harness: { name: "test", version: "1" },
         source: "urn:interop:upload",
         capabilities: { userMessageInbound: { intercept: { deny: true } } },
         auth: clientAuth("bearer", origin),

@@ -94,6 +94,7 @@ async function receiver(
       })),
     },
     {
+      harness: { name: "test", version: "1" },
       source,
       capabilities,
       auth: auth({
@@ -493,6 +494,7 @@ test("chain refreshes receiver evidence after a fast final interception", async 
         a: {
           params: {
             event: {
+              harness: { name: "test", version: "1" },
               ...toolInput,
               id: "fast-chain",
               type: "tool.before",

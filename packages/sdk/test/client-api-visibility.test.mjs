@@ -27,7 +27,7 @@ test('metadata field checks reject malformed advertisements without interpreting
     { limits: { maxUploadBytes: -1 } }, { limits: { maxTimeoutMs: 1.5 } },
     { limits: null }, { gaps: [{ path: 'missing-reason' }] },
   ]) {
-    const hooks = new client.Hooks(aliasConfig, { source: 'urn:test:bad-metadata', manifestMetadata,
+    const hooks = new client.Hooks(aliasConfig, { source: 'urn:test:bad-metadata', harness: { name: 'test', version: '1' }, manifestMetadata,
       capabilities: { toolBefore: { intercept: { deny: true } } } });
     try {
       await assert.rejects(hooks.initialized, { name: 'ConfigurationError' });
@@ -46,9 +46,9 @@ test('manifest metadata preserves owned advertisements and opaque extension data
   };
   const expected = structuredClone(manifestMetadata);
   const received = [];
-  const input = { session: { id: 'metadata-session' }, trigger: 'startup', harness: { name: 'test', version: '1' }, permissionMode: 'default', items: [] };
+  const input = { session: { id: 'metadata-session' }, trigger: 'startup', permissionMode: 'default', items: [] };
   const config = { protocolVersion: 'draft', hooks: [{ id: 'metadata.backend', transport: { type: 'http', url: 'https://backend.test/hooks' }, subscriptions: [{ mode: 'intercept', events: ['session.start'], timeoutMs: 1000, failurePolicy: 'fail-open', content: { default: 'metadata' }, scope: 'project' }] }] };
-  const hooks = new client.Hooks(config, { source: 'urn:test:metadata', manifestMetadata,
+  const hooks = new client.Hooks(config, { source: 'urn:test:metadata', harness: { name: 'test', version: '1' }, manifestMetadata,
     capabilities: { sessionStart: { intercept: { message: true } } },
     fetch: async (url, init) => {
       assert.equal(String(url), 'https://backend.test/hooks');
@@ -75,7 +75,7 @@ test('manifest metadata preserves owned advertisements and opaque extension data
 
 test('untyped metadata event overrides reject before preparation or grants', async () => {
   let deliveries = 0;
-  const hooks = new client.Hooks(aliasConfig, { source: 'urn:test:metadata-override', capabilities: {},
+  const hooks = new client.Hooks(aliasConfig, { source: 'urn:test:metadata-override', harness: { name: 'test', version: '1' }, capabilities: {},
     manifestMetadata: { events: [{ event: 'tool.before', modes: ['intercept', 'observe'], capabilities: { effects: ['deny'] } }] },
     fetch: async () => { deliveries++; throw new Error('override delivered'); } });
   try {
@@ -92,7 +92,7 @@ const aliasInput = { callId: 'alias', name: 'read', path: 'native', origin: 'nat
 test('typed aliases are detached before initialized waits and fixed for dispatch', async () => {
   const declarations = { toolBefore: { intercept: { deny: true } } };
   const requests = [];
-  const options = { source: 'urn:test:alias', capabilities: declarations, fetch: async (_url, init) => {
+  const options = { source: 'urn:test:alias', harness: { name: 'test', version: '1' }, capabilities: declarations, fetch: async (_url, init) => {
     const request = JSON.parse(init.body); requests.push(request);
     return Response.json({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: 'draft', effects: [] } });
   } };
@@ -127,7 +127,7 @@ test('mutated typed aliases reject atomically before preparation or backend admi
     let preparations = 0, deliveries = 0;
     const prepare = client.ContentManager.prototype.prepare;
     client.ContentManager.prototype.prepare = function () { preparations++; throw new Error('invalid declaration prepared'); };
-    const hooks = new client.Hooks(aliasConfig, { source: 'urn:test:invalid-alias', capabilities,
+    const hooks = new client.Hooks(aliasConfig, { source: 'urn:test:invalid-alias', harness: { name: 'test', version: '1' }, capabilities,
       fetch: async () => { deliveries++; throw new Error('invalid declaration delivered'); } });
     try {
       await assert.rejects(hooks.initialized);
@@ -183,7 +183,7 @@ test('packed client declarations compile with inference and no skipLibCheck', { 
 
 test('consumer outcome exposes a single typed representation for each settled fact', async () => {
   const hooks = new client.Hooks({ protocolVersion: 'draft', hooks: [{ id: 'outcome.backend', transport: { type: 'http', url: 'https://backend.test/hooks' }, subscriptions: [{ mode: 'intercept', events: ['tool.before'], timeoutMs: 1000, failurePolicy: 'fail-open', content: { default: 'metadata' } }] }] }, {
-    source: 'urn:test:outcome', capabilities: { toolBefore: { intercept: { deny: true } } },
+    source: 'urn:test:outcome', harness: { name: 'test', version: '1' }, capabilities: { toolBefore: { intercept: { deny: true } } },
     fetch: async (_url, init) => Response.json({ jsonrpc: '2.0', id: JSON.parse(init.body).id, result: { protocolVersion: 'draft', effects: [] } }),
   });
   try {

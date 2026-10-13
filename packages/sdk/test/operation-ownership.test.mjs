@@ -33,7 +33,7 @@ function client({
       ],
     },
     {
-      source: "urn:test:operation",
+      source: "urn:test:operation", harness: { name: 'test', version: '1' },
       capabilities: {
         sessionEnd: {observe: true},
         toolBefore: {intercept: {allow: true, modifyInput: "replace"}, observe: true},
@@ -404,7 +404,7 @@ test(
         ],
       },
       {
-        source: "urn:test:reaping",
+        source: "urn:test:reaping", harness: { name: 'test', version: '1' },
         capabilities: { toolBefore: {intercept: {deny: true}} },
       },
     );

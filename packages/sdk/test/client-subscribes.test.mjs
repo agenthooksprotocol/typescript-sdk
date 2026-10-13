@@ -17,7 +17,7 @@ function client(subscriptions, options = {}) {
     id: 'interest.backend',
     transport: { type: 'stdio', command: 'must-not-start-subscription-lookup', lifecycle: 'per_event' },
     subscriptions,
-  }] : [] }, { source: 'urn:test:interest', capabilities, ...options });
+  }] : [] }, { source: 'urn:test:interest', harness: { name: 'test', version: '1' }, capabilities, ...options });
 }
 
 for (const [name, subscriptions, event, expected] of [
@@ -69,7 +69,7 @@ test('subscribes performs no preparation, transport, authentication, or mutation
 });
 
 test('invalid configuration is not partially exposed as subscription interest', async () => {
-  const hooks = new Hooks({ protocolVersion: 'draft', hooks: [] }, { source: '', capabilities });
+  const hooks = new Hooks({ protocolVersion: 'draft', hooks: [] }, { source: '', harness: { name: 'test', version: '1' }, capabilities });
   assert.equal(hooks.subscribes('future.event'), false);
   await assert.rejects(hooks.initialized, { name: 'ConfigurationError' });
   await hooks.close();

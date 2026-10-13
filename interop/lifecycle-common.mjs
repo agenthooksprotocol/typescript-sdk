@@ -48,7 +48,7 @@ export async function control(endpoint, path, value) {
 
 /** Build the public consumer boundary with checked registration and options.
  * @param {{transport: import("agenthooksprotocol/client").Registration["hooks"][number]["transport"],
- * source: string, event: import("agenthooksprotocol/client").EventType,
+ * source: string, harness: import("agenthooksprotocol/client").HooksOptions["harness"], event: import("agenthooksprotocol/client").EventType,
  * mode: "intercept" | "observe",
  * content?: import("agenthooksprotocol/client").ContentSelection,
  * bodySelected: boolean, upload?: import("agenthooksprotocol/client").ContentUpload,
@@ -83,6 +83,7 @@ export function lifecycleHooks(options) {
       ],
     },
     {
+      harness: options.harness,
       source: options.source,
       capabilities:
         options.mode === "intercept"

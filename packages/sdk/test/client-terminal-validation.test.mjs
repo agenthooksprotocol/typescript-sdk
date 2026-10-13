@@ -39,7 +39,7 @@ async function dispatch(
       ],
     },
     {
-      source: "urn:test:terminals",
+      source: "urn:test:terminals", harness: { name: 'test', version: '1' },
       capabilities: {
         [type.replace(/\.([a-z])/g, (_, letter) => letter.toUpperCase())]: { intercept: {
           returnResult: true, deny: true, message: true,

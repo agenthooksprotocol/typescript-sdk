@@ -12,6 +12,12 @@ type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B 
 type Assert<T extends true> = T;
 type MessageIdentity = Assert<Equal<GeneratedMessage, ClientMessage>>;
 type DraftMessageIdentity = Assert<Equal<GeneratedMessage, DraftMessage>>;
+type HarnessIdentity = Assert<Equal<import("agenthooksprotocol/client").Harness, import("agenthooksprotocol/generated").Harness>>;
+type DraftHarnessIdentity = Assert<Equal<import("agenthooksprotocol/draft").Harness, import("agenthooksprotocol/generated").Harness>>;
+type HostInputsWithHarness = {
+  [K in import("agenthooksprotocol/client").EventType]: "harness" extends keyof import("agenthooksprotocol/client").EventInput<K> ? K : never;
+}[import("agenthooksprotocol/client").EventType];
+type ConstructorOwnedHarness = Assert<Equal<HostInputsWithHarness, never>>;
 type NoEffectResult = NonNullable<InterceptNoEffectResponse['result']>;
 type NoEffectArray = Assert<Equal<NoEffectResult['effects'], GeneratedEffect[] | undefined>>;
 const noEffectResponse: InterceptNoEffectResponse = { jsonrpc: '2.0', id: 'none', result: { protocolVersion: 'draft' } };
@@ -180,7 +186,9 @@ const metadata: NonNullable<import('agenthooksprotocol/client').HooksOptions['ma
 };
 // @ts-expect-error Metadata cannot advertise event grants or observation interest.
 metadata.events = [{ event: 'tool.before', modes: ['intercept'], capabilities: { effects: ['deny'] } }];
-new Hooks({}, { source: 'urn:test:metadata', capabilities: {}, manifestMetadata: metadata });
+new Hooks({}, { source: 'urn:test:metadata', harness: { name: 'test', version: '1' }, capabilities: {}, manifestMetadata: metadata });
+// @ts-expect-error Harness identity is required at construction.
+new Hooks({}, { source: 'urn:test:metadata', capabilities: {} });
 
 // @ts-expect-error Generic capability builders are not a client API.
 import { CapabilityBuilder, capabilities } from 'agenthooksprotocol/client';

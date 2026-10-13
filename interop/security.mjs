@@ -290,6 +290,7 @@ export async function send(endpoint, path, payload, config, token) {
         ],
       },
       {
+        harness: event.harness,
         source: event.source,
         capabilities: securityHostCapabilities(payload),
         fetch: fixtureFetch(config, new URL(path, endpoint).href),

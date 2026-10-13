@@ -385,6 +385,7 @@ for (const [transport, mode, authenticatedUpload] of [
             ],
           },
           {
+            harness: { name: "test", version: "1" },
             source: "urn:typescript:wire",
             auth: provider,
             ...(transportFetch ? { fetch: transportFetch } : {}),

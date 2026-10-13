@@ -99,6 +99,7 @@ test("public sender never inherits event Authorization when upload auth is omitt
         ],
       },
       {
+        harness: { name: "test", version: "1" },
         source: "urn:typescript:isolation",
         capabilities: { toolBefore: { intercept: { deny: true } } },
         auth: auth({

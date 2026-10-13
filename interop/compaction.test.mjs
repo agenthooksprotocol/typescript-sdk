@@ -269,6 +269,7 @@ test(
       ]);
       assert.equal(descriptor.sha256, sha256);
       const event = {
+        harness: { name: "test", version: "1" },
         id: "same-correlation",
         source: "urn:ahp:compaction-test",
         time: "2026-09-15T12:00:00Z",
