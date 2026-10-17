@@ -153,6 +153,62 @@ caller-supplied fetch adapter. The adapter owns network policy and authenticatio
 close the transport to release its processes and pending requests. Transport
 handling validates envelopes, not application contracts or boundary admission.
 
+## HTTP registration headers
+
+HTTP backends can set endpoint-scoped event headers in `transport.headers`:
+
+```json
+{
+  "type": "http",
+  "url": "https://policy.example/hooks",
+  "headers": {
+    "X-Tenant": "engineering",
+    "X-Api-Key": { "valueEnv": "POLICY_API_KEY" },
+    "X-Gateway-Token": { "valueRef": "secrets/policy-gateway" }
+  }
+}
+```
+
+Use literals only for non-secret metadata. Environment sources read the harness
+process environment, not a stdio child's environment. Supply `headerResolver` in
+`HooksOptions` (or `BackendTransportOptions`) for a harness-owned secret store:
+
+```ts
+const headerResolver: HeaderResolver = async (source, context) => {
+  context.signal.throwIfAborted();
+  return "valueEnv" in source
+    ? process.env[source.valueEnv]
+    : vault.read(source.valueRef, {
+        backendId: context.backendId,
+        url: context.url,
+        signal: context.signal,
+      });
+};
+```
+
+Import `HeaderResolver` from `agenthooksprotocol/client`. The resolver receives the
+exact event endpoint, backend identity, `purpose: "event"`, and an abort signal
+carrying the dispatch deadline. When supplied, it handles both source kinds.
+Without a resolver, `valueRef` fails closed. Resolution occurs once per event
+dispatch; an existing safe authentication retry reuses those values, and the next
+dispatch resolves again. Missing, empty, failed or invalid source values prevent
+the event POST. Errors never include configured values or resolver exceptions.
+
+Names must be ASCII HTTP tokens with no case-insensitive duplicates. Values must
+be printable ASCII; empty literal metadata is allowed. Authentication, framing,
+browser/security and protocol headers are reserved, including `Authorization`,
+`Cookie`, `Host`, `Content-Type`, `Accept`, `Proxy-*`, `Sec-*` and `AHP-*`.
+Authentication alone supplies `Authorization`. Custom headers have an aggregate
+16 KiB limit (names, values and field delimiters); overflow fails rather than
+truncating. Invalid static headers fail initialization before network I/O.
+
+Headers apply only to interception and observation POSTs at that backend's exact
+URL. They never become defaults on the HTTP adapter, and do not reach discovery,
+token exchange, content uploads, capabilities requests or other backends.
+Redirects remain disabled. Custom fetch adapters must preserve the supplied
+headers, cancellation and redirect policy; they must not inject conflicting auth
+or framing headers. Header configuration does not disable OAuth discovery.
+
 ## Structural decoding and effect-family queries
 
 Use `draftCodecs.parseInterceptRequest(input)` (and the other generated `parse*`

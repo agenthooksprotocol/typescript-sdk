@@ -72,6 +72,9 @@ export interface HooksOptions {
    * Opaque extension data is not content and is never traversed for attachments. */
   manifestMetadata?: Omit<StaticCapabilityManifest, "events"> & { events?: never };
   auth?: DeliveryAuthProvider;
+  /** Header sources are separate from bearer authentication. Defaults to host env
+   * lookup; valueRef requires this harness-owned resolver. */
+  headerResolver?: import("./headers.js").HeaderResolver;
   /** Trusted HTTP network adapter (for example, host-managed TLS). The SDK still
    * owns protocol/authentication and cancellation. Scope transport credentials
    * to their exact destination; upload requests must not inherit event TLS identity.

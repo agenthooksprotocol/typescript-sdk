@@ -339,3 +339,5 @@ export {
   Permission, state, effects, events, capabilityCount,
   effectNames, supports,
 } from "../draft/public.js";
+
+export type { HeaderSource, HeaderResolutionContext, HeaderResolver } from "./headers.js";

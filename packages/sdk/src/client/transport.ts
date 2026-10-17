@@ -9,6 +9,8 @@ import { HookOperationalError } from "../errors.js";
 import { NdjsonDecoder } from "../framing.js";
 import { parseJson, stringifyJson } from "../json.js";
 
+import { resolveHeaders, validateHeaders, type HeaderResolver } from "./headers.js";
+
 type Fetcher = (url: string, init: RequestInit) => Promise<Response>;
 type Pending = {
   message: any;
@@ -29,6 +31,8 @@ export interface BackendTransportOptions {
   /** Start stdio backends with the full host environment instead of the minimal
    * base environment. Registration `env` entries still apply on top. Default false. */
   inheritEnvironment?: boolean;
+  /** Resolve registration header sources within the event operation budget. */
+  headerResolver?: HeaderResolver | undefined;
 }
 
 // Smallest practical base environment for stdio backends (transports/stdio.md).
@@ -144,6 +148,8 @@ export class BackendTransport {
   readonly #backendId: string;
   readonly #transport: StdioTransport | HttpTransport;
   readonly #fetcher: Fetcher;
+  readonly #headers: ReturnType<typeof validateHeaders>;
+  readonly #headerResolver: HeaderResolver | undefined;
   readonly #inheritEnvironment: boolean;
   readonly #controllers = new Set<AbortController>();
   readonly #processes = new Set<ProcessState>();
@@ -170,8 +176,11 @@ export class BackendTransport {
         "Unsupported stdio lifecycle",
       );
     }
+    this.#headers = transport.type === "http" ? validateHeaders(transport.headers) : [];
+    this.#headerResolver = options.headerResolver;
     this.#backendId = backend.id;
-    this.#transport = transport as StdioTransport | HttpTransport;
+    // Freeze the selected HTTP destination independently of caller mutation.
+    this.#transport = (transport.type === "http" ? { ...transport } : transport) as StdioTransport | HttpTransport;
     this.#fetcher = fetcher;
     this.#inheritEnvironment = options.inheritEnvironment === true;
   }
@@ -233,12 +242,16 @@ export class BackendTransport {
     signal: AbortSignal,
   ): Promise<unknown> {
     const transport = this.#transport as HttpTransport;
+    const event = message.method === "hooks/intercept" || message.method === "hooks/observe";
+    const headers = await resolveHeaders(event ? this.#headers : [], this.#headerResolver, {
+      backendId: this.#backendId, url: transport.url, purpose: "event", signal,
+    });
+    signal.throwIfAborted();
+    headers.set("Content-Type", "application/json");
+    headers.set("Accept", "application/json");
     const response = await this.#fetcher(transport.url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
+      headers,
       body: stringifyJson(message),
       redirect: "error",
       signal,
