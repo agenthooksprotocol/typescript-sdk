@@ -86,6 +86,10 @@ test("custom event headers never enter OAuth discovery, issuer metadata or token
       clientId: "client",
       flow: "client_credentials",
     }),
+    resolveCredentialReference() {
+      resolutions++;
+      return "event-only";
+    },
     fetch: async (url, init = {}) => {
       requests.push(String(url));
       assert.equal(new Headers(init.headers).has("x-key"), false);
@@ -113,10 +117,6 @@ test("custom event headers never enter OAuth discovery, issuer metadata or token
     },
     {
       auth: provider,
-      headerResolver: () => {
-        resolutions++;
-        return "event-only";
-      },
     },
   );
   try {
@@ -134,7 +134,7 @@ test("custom event headers never enter OAuth discovery, issuer metadata or token
   }
 });
 
-test("same-origin uploads and another backend do not inherit event headers", async () => {
+test("backend uploads share configured headers without leaking to another backend", async () => {
   const seen = [];
   const h = new Hooks(
     {
@@ -154,7 +154,7 @@ test("same-origin uploads and another backend do not inherit event headers", asy
             failurePolicy: "fail-closed",
             content: { default: "body" },
             upload: {
-              endpoint: "https://example.com/upload",
+              endpoint: `https://example.com/upload-${i}`,
               maxBytes: 1024,
               timeoutMs: 1000,
             },
@@ -169,7 +169,7 @@ test("same-origin uploads and another backend do not inherit event headers", asy
       auth: { credential: () => undefined, challenge: () => false },
       fetch: async (url, init) => {
         seen.push([url, new Headers(init.headers).get("x-key")]);
-        if (url.endsWith("/upload"))
+        if (url.includes("/upload-"))
           return Response.json(
             {
               ref: "https://example.com/receipt",
@@ -204,9 +204,9 @@ test("same-origin uploads and another backend do not inherit event headers", asy
       result.diagnostics.filter((d) => d.phase !== "observation"),
       [],
     );
-    assert.equal(seen.filter(([url]) => url.endsWith("/upload")).length, 2);
+    assert.equal(seen.filter(([url]) => url.includes("/upload-")).length, 2);
     for (const [url, value] of seen)
-      assert.equal(value, url.endsWith("/event-0") ? "event-zero-only" : null);
+      assert.equal(value, url.endsWith("-0") ? "event-zero-only" : null);
     await result.content?.close();
   } finally {
     await h.close();
@@ -219,7 +219,7 @@ const input = () => ({
   tool: { name: "test", origin: "native", input: {} },
 });
 
-test("literal and environment registration headers reach actual event POSTs, not redirects", async () => {
+test("literal and environment headers reach event POSTs with unchanged redirect behavior", async () => {
   const received = [];
   const server = createServer((req, res) => {
     received.push({ path: req.url, headers: req.headers, method: req.method });
@@ -239,6 +239,7 @@ test("literal and environment registration headers reach actual event POSTs, not
     const t = transport(
       {
         "X-Tenant": "team",
+        "X-Latin": "caf\u00e9",
         "X-Key": { valueEnv: "AHP_HEADERS_TEST" },
         "X-Empty": "",
       },
@@ -251,18 +252,21 @@ test("literal and environment registration headers reach actual event POSTs, not
     await t.notify({ ...message, method: "hooks/observe" });
     assert.equal(received[0].method, "POST");
     assert.equal(received[0].headers["x-tenant"], "team");
+    assert.equal(received[0].headers["x-latin"], "caf\u00e9");
     assert.equal(received[0].headers["x-empty"], "");
     assert.equal(received[0].headers["x-key"], "first-secret");
     assert.equal(received[1].headers["x-key"], "rotated-secret");
-    await assert.rejects(
-      transport({ "X-Key": "secret" }, fetch, {}, `${url}/redirect`).notify({
-        ...message,
-        method: "hooks/observe",
-      }),
-    );
+    for (const configured of [undefined, { "X-Key": "secret" }]) {
+      await assert.rejects(
+        transport(configured, fetch, {}, `${url}/redirect`).notify({
+          ...message,
+          method: "hooks/observe",
+        }),
+      );
+    }
     assert.deepEqual(
       received.map((r) => r.path),
-      ["/events", "/events", "/redirect"],
+      ["/events", "/events", "/redirect", "/redirect"],
     );
     await t.close();
   } finally {
@@ -271,80 +275,260 @@ test("literal and environment registration headers reach actual event POSTs, not
   }
 });
 
-test("invalid names, reserved headers, duplicate names and invalid values fail before I/O", () => {
-  const reserved = [
-    "Authorization",
-    "Proxy-X",
-    "Cookie",
-    "Set-Cookie",
-    "Host",
-    "Content-Type",
-    "Accept",
-    "Content-Length",
-    "Content-Encoding",
-    "Connection",
-    "Keep-Alive",
-    "Transfer-Encoding",
-    "TE",
-    "Trailer",
-    "Upgrade",
-    "Expect",
-    "Origin",
-    "Referer",
-    "Sec-X",
-    "AHP-X",
-  ];
-  const invalid = [
+for (const source of [
+  "Bearer abc123",
+  { valueRef: "authorization" },
+  { valueEnv: "HEADER_AUTH" },
+]) {
+  test(`explicit Authorization suppresses credential acquisition and 401 retry (${JSON.stringify(source)})`, async () => {
+    let calls = 0;
+    const h = hooks(
+      {
+        Authorization: { valueRef: "losing-source-never-resolved" },
+        AUTHORIZATION: source,
+        "Content-Type": "custom/type",
+        Cookie: "literal-secret",
+      },
+      async (_url, init) => {
+        calls++;
+        const headers = new Headers(init.headers);
+        assert.equal(headers.get("authorization"), "Bearer abc123");
+        assert.equal(headers.get("content-type"), "custom/type");
+        assert.equal(headers.get("cookie"), "literal-secret");
+        return new Response(null, { status: 401 });
+      },
+      {
+        auth: auth({
+          resolveCredentialReference: (reference) => {
+            assert.equal(reference, "authorization");
+            return "Bearer abc123";
+          },
+          resolveEnvironmentVariable: () => "Bearer abc123",
+          credential() {
+            assert.fail("explicit Authorization must suppress acquisition");
+          },
+          challenge() {
+            assert.fail("explicit Authorization must suppress challenge");
+          },
+          fetch() {
+            assert.fail(
+              "explicit Authorization must suppress discovery/token I/O",
+            );
+          },
+        }),
+      },
+    );
+    try {
+      await h.dispatch("tool.before", input());
+      assert.equal(calls, 1);
+    } finally {
+      await h.close();
+    }
+  });
+}
+
+test("missing explicit Authorization fails rather than falling back to auth", async () => {
+  const h = hooks(
+    { Authorization: { valueRef: "missing" } },
+    () => assert.fail("unexpected network request"),
+    {
+      auth: {
+        resolveCredentialReference: () => undefined,
+        credential() {
+          assert.fail("no fallback");
+        },
+        challenge() {
+          assert.fail("no challenge");
+        },
+      },
+    },
+  );
+  try {
+    const result = await h.dispatch("tool.before", input());
+    assert.ok(result.diagnostics.length > 0);
+  } finally {
+    await h.close();
+  }
+});
+
+for (const uploadStatus of [201, 401]) {
+  test(`actual upload headers override defaults/auth and suppress OAuth (${uploadStatus})`, async () => {
+    const received = [];
+    const contexts = [];
+    const server = createServer(async (req, res) => {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = Buffer.concat(chunks);
+      received.push({ path: req.url, headers: req.headers });
+      if (req.url === "/upload" && uploadStatus === 201) {
+        res.writeHead(201, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ref: "urn:test:uploaded",
+            size: body.length,
+            sha256: createHash("sha256").update(body).digest("hex"),
+          }),
+        );
+      } else {
+        res.writeHead(401);
+        res.end();
+      }
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const h = new Hooks(
+      {
+        protocolVersion: "draft",
+        hooks: [
+          {
+            id: "test.upload",
+            authentication: { type: "bearer", tokenRef: "must-not-resolve" },
+            transport: {
+              type: "http",
+              url: `${base}/events`,
+              headers: {
+                Authorization: { valueRef: "configured-auth" },
+                Cookie: "session=literal",
+                "X-Api-Key": "literal-api-key",
+                "Content-Type": "application/custom",
+              },
+            },
+            subscriptions: [
+              {
+                mode: "intercept",
+                events: ["turn.start"],
+                timeoutMs: 10000,
+                failurePolicy: "fail-closed",
+                content: { default: "body" },
+                upload: {
+                  endpoint: `${base}/upload`,
+                  maxBytes: 1024,
+                  timeoutMs: 10000,
+                  auth: { type: "bearer", tokenRef: "upload-must-not-resolve" },
+                },
+              },
+            ],
+          },
+        ],
+      },
+      {
+        source: "urn:test:headers",
+        harness: { name: "test", version: "1" },
+        capabilities: { turnStart: { intercept: { deny: true } } },
+        auth: auth({
+          resolveCredentialReference(reference, context) {
+            assert.equal(reference, "configured-auth");
+            contexts.push(context);
+            return "Bearer abc123";
+          },
+          credential() {
+            assert.fail("no credential acquisition for upload or event");
+          },
+          challenge() {
+            assert.fail("no challenge for explicit Authorization");
+          },
+          fetch() {
+            assert.fail("no discovery or token requests");
+          },
+        }),
+      },
+    );
+    try {
+      const result = await h.turnStart({
+        turn: { id: "turn" },
+        trigger: "user",
+        items: [
+          {
+            role: "user",
+            parts: [
+              {
+                kind: "attachment",
+                mediaType: "application/octet-stream",
+                selection: "body",
+                body: Attachment.bytes(new Uint8Array([1, 2, 3])),
+              },
+            ],
+          },
+        ],
+      });
+      assert.ok(received.some((r) => r.path === "/upload"));
+      assert.equal(received.filter((r) => r.path === "/upload").length, 1);
+      assert.equal(
+        received.filter((r) => r.path === "/events").length,
+        uploadStatus === 201 ? 1 : 0,
+      );
+      for (const { headers } of received) {
+        assert.equal(headers.authorization, "Bearer abc123");
+        assert.equal(headers.cookie, "session=literal");
+        assert.equal(headers["x-api-key"], "literal-api-key");
+        assert.equal(headers["content-type"], "application/custom");
+      }
+      assert.equal(contexts[0].purpose, "upload");
+      assert.equal(contexts[0].url, `${base}/upload`);
+      assert.equal(contexts[0].backendId, "test.upload");
+      assert.ok(contexts[0].signal instanceof AbortSignal);
+      await result.content?.close();
+    } finally {
+      await h.close();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+}
+
+test("native HTTP rejects invalid syntax and injection without extra policy", async () => {
+  for (const headers of [
     null,
     [],
-    { "X-Key": "a", "x-key": "a" },
-    ...["", "bad name", "é", "x:\n"].map((n) => ({ [n]: "secret" })),
-    ...reserved.flatMap((n) => [
-      { [n]: "secret" },
-      { [n.toUpperCase()]: "secret" },
-    ]),
-    ...[
-      null,
-      [],
-      1,
-      true,
-      "\r",
-      "\n",
-      "\t",
-      "\0",
-      "\x7f",
-      "é",
-      {},
-      { valueRef: "" },
-      { valueEnv: "" },
-      { valueEnv: "BAD-NAME" },
-      { valueEnv: "A", valueRef: "B" },
-    ].map((v) => ({ "X-Key": v })),
-    { "X-Key": "a".repeat(16384) },
-  ];
-  for (const headers of invalid)
+    { "bad name": "value" },
+    { "X-Key": "bad\r\nvalue" },
+    { "X-Key": "bad\0value" },
+    { "X-Key": [] },
+    { "X-Key": { valueRef: "" } },
+    { "X-Key": { valueEnv: "A", valueRef: "B" } },
+  ])
     assert.throws(
       () => transport(headers),
       /Invalid HTTP registration headers/,
     );
+  const seen = [];
+  const t = transport(
+    {
+      Authorization: "Bearer abc123",
+      Cookie: "session=secret",
+      Origin: "https://example.com",
+      "Content-Type": "custom/type",
+      "X-Key": "literal-api-key",
+      "x-key": "last",
+      "X-Latin": "caf\u00e9",
+      "X-Tab": "a\tb",
+      "AHP-Version": "custom",
+      "X-Large": "x".repeat(17000),
+    },
+    async (_url, init) => {
+      seen.push(new Headers(init.headers));
+      return reply(init);
+    },
+  );
+  await t.request(message);
+  assert.equal(seen[0].get("authorization"), "Bearer abc123");
+  assert.equal(seen[0].get("cookie"), "session=secret");
+  assert.equal(seen[0].get("content-type"), "custom/type");
+  assert.equal(seen[0].get("x-key"), "last");
+  assert.equal(seen[0].get("x-latin"), "caf\u00e9");
+  assert.equal(seen[0].get("x-tab"), "a\tb");
+  assert.equal(seen[0].get("x-large").length, 17000);
+  await t.close();
 });
 
 test("missing, invalid, and failed secret lookups fail closed without disclosing values", async () => {
-  for (const value of [
-    undefined,
-    "",
-    "secret\nvalue",
-    "secret\tvalue",
-    "é",
-    42,
-  ]) {
+  for (const value of [undefined, "", "secret\nvalue", 42]) {
     let calls = 0;
     const t = transport(
       { "X-Key": { valueRef: "vault-key" } },
       async () => {
         calls++;
       },
-      { headerResolver: () => value },
+      { auth: { resolveCredentialReference: () => value } },
     );
     await assert.rejects(
       t.request(message),
@@ -364,8 +548,10 @@ test("missing, invalid, and failed secret lookups fail closed without disclosing
   );
   await assert.rejects(
     transport({ "X-Key": { valueRef: "vault-key" } }, undefined, {
-      headerResolver() {
-        throw new Error("TOP SECRET");
+      auth: {
+        resolveCredentialReference() {
+          throw new Error("TOP SECRET");
+        },
       },
     }).request(message),
     (error) => !error.message.includes("TOP SECRET"),
@@ -382,12 +568,14 @@ test("resolver context is endpoint-scoped and cancellation prevents late sends",
       calls++;
     },
     {
-      headerResolver(source, ctx) {
-        assert.deepEqual(source, { valueRef: "vault-key" });
-        context = ctx;
-        return new Promise((resolve) => {
-          finish = resolve;
-        });
+      auth: {
+        resolveCredentialReference(source, ctx) {
+          assert.equal(source, "vault-key");
+          context = ctx;
+          return new Promise((resolve) => {
+            finish = resolve;
+          });
+        },
       },
     },
   );
@@ -422,10 +610,11 @@ test("caller mutation cannot retarget configured headers or replace source refer
       return reply(init);
     },
     {
-      headerResolver(source) {
-        assert.equal(source.valueRef, "original");
-        source.valueRef = "resolver-mutation";
-        return "resolved";
+      auth: {
+        resolveCredentialReference(source) {
+          assert.equal(source, "original");
+          return "resolved";
+        },
       },
     },
   );
@@ -446,14 +635,16 @@ test("recognized source extensions remain inert and never reach the resolver", a
     { "X-Key": { valueRef: "key", future: "opaque" } },
     undefined,
     {
-      headerResolver(source) {
-        sources.push(source);
-        return "resolved";
+      auth: {
+        resolveCredentialReference(source) {
+          sources.push(source);
+          return "resolved";
+        },
       },
     },
   );
   await t.request(message);
-  assert.deepEqual(sources, [{ valueRef: "key" }]);
+  assert.deepEqual(sources, ["key"]);
   await t.close();
 });
 
@@ -483,8 +674,8 @@ test("Hooks resolves once per dispatch, preserves auth retries and rotates next 
       return calls === 1 ? new Response(null, { status: 401 }) : reply(init);
     },
     {
-      headerResolver: () => `secret-${++resolutions}`,
       auth: {
+        resolveCredentialReference: () => `secret-${++resolutions}`,
         credential: () => ({ type: "bearer", token: "auth-only" }),
         challenge: () => true,
       },
@@ -507,7 +698,7 @@ test("Hooks resolves once per dispatch, preserves auth retries and rotates next 
 });
 
 test("Hooks rejects invalid static headers on initialization and bounds resolution by dispatch deadline", async () => {
-  const invalid = hooks({ Authorization: "secret" }, () =>
+  const invalid = hooks({ "bad name": "secret" }, () =>
     assert.fail("unexpected I/O"),
   );
   await assert.rejects(invalid.initialized);
@@ -517,7 +708,11 @@ test("Hooks rejects invalid static headers on initialization and bounds resoluti
     () => assert.fail("unexpected I/O"),
     {
       timeoutMs: 50,
-      headerResolver: () => new Promise(() => {}),
+      auth: {
+        credential: () => undefined,
+        challenge() {},
+        resolveCredentialReference: () => new Promise(() => {}),
+      },
     },
   );
   try {

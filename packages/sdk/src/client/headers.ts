@@ -1,43 +1,16 @@
+import { validateHeaderName, validateHeaderValue } from "node:http";
 import { HookOperationalError } from "../errors.js";
+import { auth, type AuthContext, type AuthProvider } from "./auth.js";
 
-export type HeaderSource = { valueEnv: string } | { valueRef: string };
-export interface HeaderResolutionContext {
-  backendId: string;
-  url: string;
-  purpose: "event";
-  /** Carries cancellation and the enclosing operation deadline. */
-  signal: AbortSignal;
-}
-/** Harness-owned secret lookup. Never include sources or values in diagnostics. */
-export type HeaderResolver = (
-  source: HeaderSource,
-  context: HeaderResolutionContext,
-) => string | undefined | Promise<string | undefined>;
-
+type HeaderSource = { valueEnv: string } | { valueRef: string };
 type HeaderEntry = readonly [string, string | HeaderSource];
-const reserved = new Set([
-  "authorization",
-  "cookie",
-  "set-cookie",
-  "host",
-  "content-type",
-  "accept",
-  "content-length",
-  "content-encoding",
-  "connection",
-  "keep-alive",
-  "transfer-encoding",
-  "te",
-  "trailer",
-  "upgrade",
-  "expect",
-  "origin",
-  "referer",
-]);
-const printable = (value: unknown): value is string =>
-  typeof value === "string" && !/[^\x20-\x7e]/.test(value);
-// Bound custom headers independently of the underlying HTTP adapter.
-const MAX_HEADER_BYTES = 16 * 1024;
+export type HeaderSecrets = Partial<
+  Pick<
+    AuthProvider,
+    "resolveEnvironmentVariable" | "resolveCredentialReference"
+  >
+>;
+
 function invalid(): never {
   throw new HookOperationalError(
     "INVALID_CONFIG",
@@ -50,26 +23,24 @@ function failed(): never {
     "HTTP registration header resolution failed",
   );
 }
+function validate(name: string, value: string): void {
+  validateHeaderName(name);
+  validateHeaderValue(name, value);
+  new Headers({ [name]: value });
+}
 export function validateHeaders(input: unknown): readonly HeaderEntry[] {
   if (input === undefined) return [];
   if (!input || typeof input !== "object" || Array.isArray(input)) invalid();
-  const seen = new Set<string>();
-  let bytes = 0;
-  return Object.entries(input).map(([name, value]): HeaderEntry => {
-    const lower = name.toLowerCase();
-    if (
-      !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) ||
-      seen.has(lower) ||
-      reserved.has(lower) ||
-      /^(proxy-|sec-|ahp-)/.test(lower)
-    )
+  const entries = new Map<string, HeaderEntry>();
+  for (const [name, value] of Object.entries(input)) {
+    try {
+      validate(name, typeof value === "string" ? value : "");
+    } catch {
       invalid();
-    seen.add(lower);
-    bytes += name.length + 4;
-    if (typeof value === "string") {
-      if (!printable(value)) invalid();
-      bytes += value.length;
-    } else {
+    }
+    let source: string | HeaderSource;
+    if (typeof value === "string") source = value;
+    else {
       if (!value || typeof value !== "object" || Array.isArray(value))
         invalid();
       const keys = Object.keys(value).filter(
@@ -77,7 +48,6 @@ export function validateHeaders(input: unknown): readonly HeaderEntry[] {
       );
       if (
         keys.length !== 1 ||
-        !["valueEnv", "valueRef"].includes(keys[0]!) ||
         typeof value[keys[0]!] !== "string" ||
         value[keys[0]!].length === 0
       )
@@ -87,47 +57,47 @@ export function validateHeaders(input: unknown): readonly HeaderEntry[] {
         !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value.valueEnv)
       )
         invalid();
-    }
-    if (bytes > MAX_HEADER_BYTES) invalid();
-    return [
-      name,
-      typeof value === "string"
-        ? value
-        : Object.hasOwn(value, "valueEnv")
+      source =
+        keys[0] === "valueEnv"
           ? { valueEnv: value.valueEnv }
-          : { valueRef: value.valueRef },
-    ];
-  });
+          : { valueRef: value.valueRef };
+    }
+    // Configuration iteration order is authoritative, including casing aliases.
+    entries.set(name.toLowerCase(), [name, source]);
+  }
+  return [...entries.values()];
 }
-
 export async function resolveHeaders(
   entries: readonly HeaderEntry[],
-  resolver: HeaderResolver | undefined,
-  context: HeaderResolutionContext,
+  secrets: HeaderSecrets | undefined,
+  context: AuthContext & { signal: AbortSignal },
 ): Promise<Headers> {
   const headers = new Headers();
-  let bytes = 0;
   for (const [name, source] of entries) {
     context.signal.throwIfAborted();
     let value: unknown = source;
-    if (typeof source !== "string") {
-      try {
-        value = resolver
-          ? await resolver({ ...source }, context)
-          : "valueEnv" in source
-            ? process.env[source.valueEnv]
-            : undefined;
-      } catch {
-        context.signal.throwIfAborted();
-        failed();
+    try {
+      if (typeof source !== "string") {
+        value =
+          "valueEnv" in source
+            ? await (
+                secrets?.resolveEnvironmentVariable ??
+                auth.resolveEnvironmentVariable
+              ).call(secrets ?? auth, source.valueEnv, context)
+            : await (
+                secrets?.resolveCredentialReference ??
+                auth.resolveCredentialReference
+              ).call(secrets ?? auth, source.valueRef, context);
+        if (value === "") failed();
       }
       context.signal.throwIfAborted();
-      if (value === "") failed();
+      if (typeof value !== "string") failed();
+      validate(name, value);
+      headers.set(name, value);
+    } catch {
+      context.signal.throwIfAborted();
+      failed();
     }
-    if (!printable(value)) failed();
-    bytes += name.length + value.length + 4;
-    if (bytes > MAX_HEADER_BYTES) failed();
-    headers.set(name, value);
   }
   return headers;
 }

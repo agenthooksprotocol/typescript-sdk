@@ -3284,7 +3284,7 @@ export const schemas = [
       auth: {
         $ref: "registration.schema.json#/$defs/authentication",
         description:
-          "Independent endpoint binding. Omission uses standard OAuth protected-resource discovery; never inherit event credentials.",
+          "Independent endpoint binding. Omission uses standard OAuth protected-resource discovery unless backend transport.headers configures Authorization. Backend headers apply to uploads; event authentication credentials are not inherited implicitly.",
       },
       timeoutMs: {
         type: "integer",
@@ -10069,7 +10069,7 @@ export const schemas = [
           headers: {
             type: "object",
             description:
-              "Endpoint-scoped event headers. Runtime validation and isolation are required by AHP-REG-003; schema acceptance alone is insufficient.",
+              "Backend event and upload headers, merged last case-insensitively. Runtime precedence, native HTTP validation, and OAuth suppression are defined by AHP-REG-003.",
             propertyNames: {
               pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
             },
@@ -10081,7 +10081,7 @@ export const schemas = [
       },
       authentication: {
         description:
-          "Explicit endpoint-bound client identity preset. Omission on HTTP enables standard OAuth protected-resource discovery, not anonymous-only delivery. Runtime trust policy and discovery are defined in spec/draft/capability-auth.md.",
+          "Explicit endpoint-bound client identity preset. Omission on HTTP enables standard OAuth protected-resource discovery unless transport.headers explicitly configures Authorization. Runtime trust policy and discovery are defined in spec/draft/capability-auth.md.",
         anyOf: [
           {
             type: "object",
@@ -10513,7 +10513,9 @@ export const schemas = [
         anyOf: [
           {
             type: "string",
-            pattern: "^[ -~]*$",
+            not: {
+              pattern: "[\\r\\n\\u0000]",
+            },
           },
           {
             $ref: "#/$defs/httpHeaderSource",

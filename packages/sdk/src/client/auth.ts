@@ -57,6 +57,9 @@ export interface AuthChallengeContext extends DeliveryAuthContext {
  * Credentials and attempt identities must not be included in diagnostics.
  */
 export interface DeliveryAuthProvider {
+  /** Optional shared secret resolvers for configured delivery headers. */
+  resolveEnvironmentVariable?: AuthProvider["resolveEnvironmentVariable"];
+  resolveCredentialReference?: AuthProvider["resolveCredentialReference"];
   /** Undefined means no credential; configured authentication must fail closed. */
   credential(
     context: DeliveryAuthContext,

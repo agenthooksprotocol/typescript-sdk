@@ -155,59 +155,64 @@ handling validates envelopes, not application contracts or boundary admission.
 
 ## HTTP registration headers
 
-HTTP backends can set endpoint-scoped event headers in `transport.headers`:
+HTTP backends can set headers in `transport.headers`. The configuration applies to
+that backend's event POSTs and content uploads, not other backends or OAuth
+metadata/token endpoints:
 
 ```json
 {
   "type": "http",
   "url": "https://policy.example/hooks",
   "headers": {
-    "X-Tenant": "engineering",
+    "Authorization": "Bearer abc123",
+    "Cookie": "session=example",
     "X-Api-Key": { "valueEnv": "POLICY_API_KEY" },
     "X-Gateway-Token": { "valueRef": "secrets/policy-gateway" }
   }
 }
 ```
 
-Use literals only for non-secret metadata. Environment sources read the harness
-process environment, not a stdio child's environment. Supply `headerResolver` in
-`HooksOptions` (or `BackendTransportOptions`) for a harness-owned secret store:
+All valid HTTP field names are supported, including `Authorization`, `Cookie`,
+`Origin`, `Content-Type` and protocol headers. Literal credentials are supported.
+Names and values are validated with Node's HTTP validators and the fetch
+`Headers` API: injection is rejected, while supported non-ASCII values are
+accepted. Native HTTP limits still apply; the SDK adds no custom header-size cap.
+
+Case-insensitive duplicate names use the **last property in configuration
+iteration order**. Each request starts with transport defaults and authentication
+headers, then applies the configured values last, case-insensitively. Configured
+`Authorization`, in any casing and from any source, suppresses credential
+acquisition, OAuth discovery, challenge handling and authentication retries for
+both events and uploads, even when authentication is also configured. A missing
+or invalid explicit authorization source fails the delivery; it never falls back
+to another identity.
+
+Header sources reuse the authentication provider's existing secret resolvers:
 
 ```ts
-const headerResolver: HeaderResolver = async (source, context) => {
-  context.signal.throwIfAborted();
-  return "valueEnv" in source
-    ? process.env[source.valueEnv]
-    : vault.read(source.valueRef, {
-        backendId: context.backendId,
-        url: context.url,
-        signal: context.signal,
-      });
-};
+const provider = auth({
+  resolveEnvironmentVariable: name => process.env[name],
+  resolveCredentialReference: (reference, context) => vault.read(reference, {
+    backendId: context.backendId,
+    url: context.url,
+    signal: context.signal,
+  }),
+});
+const hooks = new Hooks(registration, { ...options, auth: provider });
 ```
 
-Import `HeaderResolver` from `agenthooksprotocol/client`. The resolver receives the
-exact event endpoint, backend identity, `purpose: "event"`, and an abort signal
-carrying the dispatch deadline. When supplied, it handles both source kinds.
-Without a resolver, `valueRef` fails closed. Resolution occurs once per event
-dispatch; an existing safe authentication retry reuses those values, and the next
-dispatch resolves again. Missing, empty, failed or invalid source values prevent
-the event POST. Errors never include configured values or resolver exceptions.
+The resolver context identifies the backend, actual destination, delivery purpose
+(`event` or `upload`) and the cancellation signal carrying its deadline. Sources
+resolve once per delivery operation and are reused by existing authentication
+retries; subsequent operations resolve again for rotation. Environment defaults
+read the harness environment, not a stdio child's environment. Missing, empty or
+failed source values fail closed; diagnostics omit values and resolver exceptions.
+`BackendTransportOptions.auth` accepts the same secret resolver methods for
+standalone transports; its fetch adapter continues to own authentication.
 
-Names must be ASCII HTTP tokens with no case-insensitive duplicates. Values must
-be printable ASCII; empty literal metadata is allowed. Authentication, framing,
-browser/security and protocol headers are reserved, including `Authorization`,
-`Cookie`, `Host`, `Content-Type`, `Accept`, `Proxy-*`, `Sec-*` and `AHP-*`.
-Authentication alone supplies `Authorization`. Custom headers have an aggregate
-16 KiB limit (names, values and field delimiters); overflow fails rather than
-truncating. Invalid static headers fail initialization before network I/O.
-
-Headers apply only to interception and observation POSTs at that backend's exact
-URL. They never become defaults on the HTTP adapter, and do not reach discovery,
-token exchange, content uploads, capabilities requests or other backends.
-Redirects remain disabled. Custom fetch adapters must preserve the supplied
-headers, cancellation and redirect policy; they must not inject conflicting auth
-or framing headers. Header configuration does not disable OAuth discovery.
+Registration headers do not change existing redirect behavior. These SDK
+transports already use `redirect: "error"`, with or without configured headers.
+No global HTTP-client defaults are changed.
 
 ## Structural decoding and effect-family queries
 

@@ -125,3 +125,8 @@ declare module "node:stream/promises" {
     options: { signal?: AbortSignal },
   ): Promise<void>;
 }
+
+declare module "node:http" {
+  export function validateHeaderName(name: string): void;
+  export function validateHeaderValue(name: string, value: string): void;
+}
