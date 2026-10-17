@@ -103,6 +103,7 @@ test('typed aliases are detached before initialized waits and fixed for dispatch
     declarations.sessionEnd = { observe: true };
     options.capabilities = { sessionEnd: { observe: true } };
     assert.equal(hooks.subscribes('tool.before'), true);
+    assert.equal(hooks.intercepts('tool.before'), true);
     assert.equal(hooks.subscribes('session.end'), false);
     await hooks.initialized;
     delete declarations.toolBefore;
@@ -111,6 +112,7 @@ test('typed aliases are detached before initialized waits and fixed for dispatch
     assert.equal(requests[0].method, 'hooks/intercept');
     assert.deepEqual(requests[0].params.capabilities.effects, ['deny']);
     assert.equal(hooks.subscribes('tool.before'), true);
+    assert.equal(hooks.intercepts('tool.before'), true);
     assert.equal(hooks.subscribes('session.end'), false);
   } finally { await hooks.close(); }
 });
@@ -132,6 +134,7 @@ test('mutated typed aliases reject atomically before preparation or backend admi
     try {
       await assert.rejects(hooks.initialized);
       assert.equal(hooks.subscribes('tool.before'), false);
+      assert.equal(hooks.intercepts('tool.before'), false);
       await assert.rejects(hooks.toolBefore(aliasInput));
       assert.equal(preparations, 0);
       assert.equal(deliveries, 0);

@@ -163,6 +163,13 @@ if (hooks.subscribes("tool.before")) {
 }
 ```
 
+`hooks.intercepts(event)` is `subscribes` restricted to intercept subscriptions.
+Use it to decide whether to withhold streamed output until interceptors settle.
+
+```ts
+const withhold = hooks.intercepts("model.response.after");
+```
+
 ### Operation and resource ownership
 
 Awaiting a boundary also waits for its selected, bounded observation deliveries.

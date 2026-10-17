@@ -74,3 +74,60 @@ test('invalid configuration is not partially exposed as subscription interest', 
   await assert.rejects(hooks.initialized, { name: 'ConfigurationError' });
   await hooks.close();
 });
+
+const interceptCapabilities = {
+  toolBefore: { intercept: { deny: true }, observe: true },
+  modelResponseAfter: { intercept: { message: true }, observe: true },
+  toolAfter: { observe: true },
+};
+for (const [name, subscriptions, event, expected] of [
+  ['no subscribers', [], 'tool.before', false],
+  ['exact intercept', [subscription(['tool.before'])], 'tool.before', true],
+  ['observe only', [subscription(['tool.before'], 'observe')], 'tool.before', false],
+  ['observe wildcard only', [subscription(['*'], 'observe')], 'model.response.after', false],
+  ['intercept and observe', [subscription(['tool.before']), subscription(['tool.before'], 'observe')], 'tool.before', true],
+  ['global wildcard', [subscription(['*'])], 'model.response.after', true],
+  ['family wildcard', [subscription(['model.*'])], 'model.response.after', true],
+  ['other family', [subscription(['model.*'])], 'tool.before', false],
+  ['host grants only observation', [subscription(['*'])], 'tool.after', false],
+  ['unconfigured catalogue event', [subscription(['*'])], 'session.start', false],
+  ['unknown event at the untyped JavaScript boundary', [subscription(['*'])], 'future.event', false],
+  ['filtered match is conservative', [subscription(['tool.before'], 'intercept', { filters: { paths: ['other'], toolKinds: ['other'] } })], 'tool.before', true],
+]) {
+  test(`intercepts: ${name}`, async () => {
+    const hooks = client(subscriptions, { capabilities: interceptCapabilities });
+    try {
+      assert.equal(hooks.intercepts(event), expected);
+      if (subscriptions.length === 0) {
+        await assert.rejects(hooks.initialized, { name: "ConfigurationError" });
+      } else await hooks.initialized;
+      assert.equal(hooks.intercepts(event), expected);
+    } finally { await hooks.close(); }
+  });
+}
+
+test('intercepts performs no preparation, transport, authentication, or mutation', async () => {
+  let preparation = 0, network = 0, credentials = 0;
+  const original = ContentManager.prototype.prepare;
+  ContentManager.prototype.prepare = function () { preparation++; throw Error('preparation forbidden'); };
+  const hooks = client([subscription(['*'])], {
+    capabilities: interceptCapabilities,
+    fetch: async () => { network++; throw Error('network forbidden'); },
+    auth: { credential: async () => { credentials++; throw Error('auth forbidden'); } },
+  });
+  try {
+    for (let index = 0; index < 3; index++) {
+      assert.equal(hooks.intercepts('model.response.after'), true);
+      assert.equal(hooks.intercepts('tool.after'), false);
+      assert.equal(hooks.intercepts('future.event'), false);
+    }
+    assert.deepEqual([preparation, network, credentials], [0, 0, 0]);
+  } finally { ContentManager.prototype.prepare = original; await hooks.close(); }
+});
+
+test('invalid configuration is not partially exposed as interception interest', async () => {
+  const hooks = new Hooks({ protocolVersion: 'draft', hooks: [] }, { source: '', harness: { name: 'test', version: '1' }, capabilities: interceptCapabilities });
+  assert.equal(hooks.intercepts('tool.before'), false);
+  await assert.rejects(hooks.initialized, { name: 'ConfigurationError' });
+  await hooks.close();
+});
