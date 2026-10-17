@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.7.0...agenthooksprotocol-v0.8.0) (2026-10-17)
+
+
+### Features
+
+* support configured HTTP headers for events and uploads ([#38](https://github.com/agenthooksprotocol/typescript-sdk/issues/38)) ([3f8e955](https://github.com/agenthooksprotocol/typescript-sdk/commit/3f8e955a7dd8b3e32590aef4de2d3ba21c76dda5))
+
 ## [0.7.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.6.0...agenthooksprotocol-v0.7.0) (2026-10-13)
 
 
