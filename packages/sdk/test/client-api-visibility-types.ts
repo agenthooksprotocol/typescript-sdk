@@ -176,6 +176,15 @@ declare const arbitraryEventName: string;
 hooks.subscribes(arbitraryEventName);
 for (const name of Object.values(events)) hooks.subscribes(name);
 void [staticInterest, unknownInterest];
+const staticInterception: boolean = hooks.intercepts('model.response.after');
+// @ts-expect-error Interception interest requires a generated canonical event name.
+const unknownInterception: boolean = hooks.intercepts('future.event');
+// @ts-expect-error Arbitrary strings are not canonical event identifiers.
+hooks.intercepts(arbitraryEventName);
+for (const name of Object.values(events)) hooks.intercepts(name);
+void [staticInterception, unknownInterception];
+// @ts-expect-error Selector matching stays internal to the client.
+hooks.selects('tool.before', ['intercept']);
 
 import type { HostCapabilities } from 'agenthooksprotocol/client';
 const metadata: NonNullable<import('agenthooksprotocol/client').HooksOptions['manifestMetadata']> = {
@@ -226,6 +235,7 @@ const canonicalNames = [
 ] as const satisfies readonly EventType[];
 for (const type of canonicalNames) {
   hooks.subscribes(type);
+  hooks.intercepts(type);
   responseForRequest(type, {});
   const observation = { id: 'occurrence', source: 'urn:test:source', type } satisfies reference.ObservationEvent;
   void observation;

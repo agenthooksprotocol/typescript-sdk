@@ -177,9 +177,21 @@ export class Hooks {
   /** Static subscription interest, not permission or a delivery guarantee.
    * Filters requiring occurrence data are deliberately not evaluated. */
   subscribes(event: EventType): boolean {
+    return this.selects(event, ["intercept", "observe"]);
+  }
+
+  /** Static interception interest, not permission or an interception guarantee.
+   * Observe-mode subscriptions never count; filters requiring occurrence data
+   * are deliberately not evaluated. */
+  intercepts(event: EventType): boolean {
+    return this.selects(event, ["intercept"]);
+  }
+
+  private selects(event: EventType, modes: readonly Subscription["mode"][]): boolean {
     if (!this.configured) return false;
     const advertised = this.manifest.events.find(entry => entry.event === event);
     return advertised !== undefined && this.routes.some(route =>
+      modes.includes(route.subscription.mode) &&
       advertised.modes.includes(route.subscription.mode) &&
       route.subscription.events.some(selector => matches(selector, event)));
   }
