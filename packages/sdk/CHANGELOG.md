@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.8.0...agenthooksprotocol-v0.9.0) (2026-10-17)
+
+
+### Features
+
+* add intercepts static lookup ([#40](https://github.com/agenthooksprotocol/typescript-sdk/issues/40)) ([6e4c804](https://github.com/agenthooksprotocol/typescript-sdk/commit/6e4c804810ca39ce4a075cec73023f19b22c63e0))
+
 ## [0.8.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.7.0...agenthooksprotocol-v0.8.0) (2026-10-17)
 
 
