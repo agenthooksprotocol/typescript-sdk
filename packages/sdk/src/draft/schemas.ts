@@ -3284,7 +3284,7 @@ export const schemas = [
       auth: {
         $ref: "registration.schema.json#/$defs/authentication",
         description:
-          "Independent endpoint binding. Omission uses standard OAuth protected-resource discovery; never inherit event credentials.",
+          "Independent endpoint binding. Omission uses standard OAuth protected-resource discovery unless backend transport.headers configures Authorization. Backend headers apply to uploads; event authentication credentials are not inherited implicitly.",
       },
       timeoutMs: {
         type: "integer",
@@ -10066,11 +10066,22 @@ export const schemas = [
             format: "uri",
             pattern: "^https?://",
           },
+          headers: {
+            type: "object",
+            description:
+              "Backend event and upload headers, merged last case-insensitively. Runtime precedence, native HTTP validation, and OAuth suppression are defined by AHP-REG-003.",
+            propertyNames: {
+              pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+            },
+            additionalProperties: {
+              $ref: "#/$defs/httpHeaderValue",
+            },
+          },
         },
       },
       authentication: {
         description:
-          "Explicit endpoint-bound client identity preset. Omission on HTTP enables standard OAuth protected-resource discovery, not anonymous-only delivery. Runtime trust policy and discovery are defined in spec/draft/capability-auth.md.",
+          "Explicit endpoint-bound client identity preset. Omission on HTTP enables standard OAuth protected-resource discovery unless transport.headers explicitly configures Authorization. Runtime trust policy and discovery are defined in spec/draft/capability-auth.md.",
         anyOf: [
           {
             type: "object",
@@ -10476,6 +10487,40 @@ export const schemas = [
             minimum: 1,
           },
         },
+      },
+      httpHeaderSource: {
+        type: "object",
+        properties: {
+          valueEnv: {
+            type: "string",
+            pattern: "^[A-Za-z_][A-Za-z0-9_]*$",
+          },
+          valueRef: {
+            type: "string",
+            minLength: 1,
+          },
+        },
+        oneOf: [
+          {
+            required: ["valueEnv"],
+          },
+          {
+            required: ["valueRef"],
+          },
+        ],
+      },
+      httpHeaderValue: {
+        anyOf: [
+          {
+            type: "string",
+            not: {
+              pattern: "[\r\n\u0000]",
+            },
+          },
+          {
+            $ref: "#/$defs/httpHeaderSource",
+          },
+        ],
       },
     },
   },

@@ -28,6 +28,7 @@ import {
   validateInterceptResponse,
 } from "../draft/index.js";
 import { isPartPath, localParts, mapParts } from "./content-paths.js";
+import { resolveHeaders, validateHeaders } from "./headers.js";
 import { BackendTransport } from "./transport.js";
 import { Attachment, ContentManager, UploadLimiter, createSharedContentManager } from "./content.js";
 import { composeResponseAsync, normalizeEffects, type ComposedEffect } from "./composition.js";
@@ -128,6 +129,7 @@ export class Hooks {
   private readonly pending = new Set<Promise<unknown>>();
   private readonly provider;
   private readonly uploadLimiter: UploadLimiter;
+  private readonly deliveryHeaders = new Map<string, ReturnType<typeof validateHeaders>>();
   private readonly authContexts = new Map<string, any>();
   private manifest!: StaticCapabilityManifest;
   private configured = false;
@@ -297,7 +299,12 @@ export class Hooks {
     }
     if (issues.length) throw new ConfigurationError(issues);
     for (const backend of registration.hooks) {
-      const transport = new BackendTransport(backend, (url, init) =>
+      this.deliveryHeaders.set(backend.id, backend.transport.type === "http"
+        ? validateHeaders(backend.transport.headers) : []);
+      // Hooks resolves headers at the shared event/upload delivery boundary.
+      const transportBackend = structuredClone(backend);
+      if (transportBackend.transport.type === "http") delete transportBackend.transport.headers;
+      const transport = new BackendTransport(transportBackend, (url, init) =>
         this.fetchAuthenticated(
           url,
           init,
@@ -305,7 +312,9 @@ export class Hooks {
           "event",
           backend.id,
         ),
-        { inheritEnvironment: this.options.inheritEnvironment === true },
+        {
+          inheritEnvironment: this.options.inheritEnvironment === true,
+        },
       );
       backend.subscriptions.forEach((subscription, index) =>
         this.routes.push({
@@ -349,15 +358,20 @@ export class Hooks {
     }
     // Challenge state belongs to this delivery attempt, never another caller.
     context = { ...context };
+    const entries = this.deliveryHeaders.get(backendId) ?? [];
+    const configured = entries.length > 0
+      ? await raceAbort(resolveHeaders(entries, this.provider, { ...context, signal }), signal)
+      : new Headers();
+    const explicitAuthorization = configured.has("authorization");
     for (let attempt = 0; attempt < 2; attempt++) {
-      const credential = await raceAbort(
+      const credential = explicitAuthorization ? undefined : await raceAbort(
         Promise.resolve(
           this.provider.credential({ ...context, signal }),
         ),
         signal,
       );
       if (
-        !credential &&
+        !explicitAuthorization && !credential &&
         (authentication !== undefined || context.challenged === true)
       )
         throw new Error("Authentication credential required");
@@ -373,6 +387,7 @@ export class Hooks {
           throw new Error("Invalid authentication credential");
         headers.set("authorization", `Bearer ${credential.token}`);
       }
+      configured.forEach((value, name) => headers.set(name, value));
       const response = await raceAbort(
         (this.options.fetch ?? fetch)(url, {
           ...init,
@@ -388,7 +403,7 @@ export class Hooks {
         }),
         signal,
       );
-      if (response.status === 401) {
+      if (response.status === 401 && !explicitAuthorization) {
         try {
           await raceAbort(
             Promise.resolve(
@@ -406,7 +421,7 @@ export class Hooks {
           throw error;
         }
       }
-      if (response.status !== 401 || attempt === 1) {
+      if (explicitAuthorization || response.status !== 401 || attempt === 1) {
         delete context.challenge;
         delete context.challenged;
         return response;

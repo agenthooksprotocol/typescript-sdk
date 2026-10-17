@@ -153,6 +153,67 @@ caller-supplied fetch adapter. The adapter owns network policy and authenticatio
 close the transport to release its processes and pending requests. Transport
 handling validates envelopes, not application contracts or boundary admission.
 
+## HTTP registration headers
+
+HTTP backends can set headers in `transport.headers`. The configuration applies to
+that backend's event POSTs and content uploads, not other backends or OAuth
+metadata/token endpoints:
+
+```json
+{
+  "type": "http",
+  "url": "https://policy.example/hooks",
+  "headers": {
+    "Authorization": "Bearer abc123",
+    "Cookie": "session=example",
+    "X-Api-Key": { "valueEnv": "POLICY_API_KEY" },
+    "X-Gateway-Token": { "valueRef": "secrets/policy-gateway" }
+  }
+}
+```
+
+All valid HTTP field names are supported, including `Authorization`, `Cookie`,
+`Origin`, `Content-Type` and protocol headers. Literal credentials are supported.
+Names and values are validated with Node's HTTP validators and the fetch
+`Headers` API: injection is rejected, while supported non-ASCII values are
+accepted. Native HTTP limits still apply; the SDK adds no custom header-size cap.
+
+Case-insensitive duplicate names use the **last property in configuration
+iteration order**. Each request starts with transport defaults and authentication
+headers, then applies the configured values last, case-insensitively. Configured
+`Authorization`, in any casing and from any source, suppresses credential
+acquisition, OAuth discovery, challenge handling and authentication retries for
+both events and uploads, even when authentication is also configured. A missing
+or invalid explicit authorization source fails the delivery; it never falls back
+to another identity.
+
+Header sources reuse the authentication provider's existing secret resolvers:
+
+```ts
+const provider = auth({
+  resolveEnvironmentVariable: name => process.env[name],
+  resolveCredentialReference: (reference, context) => vault.read(reference, {
+    backendId: context.backendId,
+    url: context.url,
+    signal: context.signal,
+  }),
+});
+const hooks = new Hooks(registration, { ...options, auth: provider });
+```
+
+The resolver context identifies the backend, actual destination, delivery purpose
+(`event` or `upload`) and the cancellation signal carrying its deadline. Sources
+resolve once per delivery operation and are reused by existing authentication
+retries; subsequent operations resolve again for rotation. Environment defaults
+read the harness environment, not a stdio child's environment. Missing, empty or
+failed source values fail closed; diagnostics omit values and resolver exceptions.
+`BackendTransportOptions.auth` accepts the same secret resolver methods for
+standalone transports; its fetch adapter continues to own authentication.
+
+Registration headers do not change existing redirect behavior. These SDK
+transports already use `redirect: "error"`, with or without configured headers.
+No global HTTP-client defaults are changed.
+
 ## Structural decoding and effect-family queries
 
 Use `draftCodecs.parseInterceptRequest(input)` (and the other generated `parse*`
