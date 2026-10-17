@@ -243,9 +243,12 @@ export class BackendTransport {
   ): Promise<unknown> {
     const transport = this.#transport as HttpTransport;
     const event = message.method === "hooks/intercept" || message.method === "hooks/observe";
-    const headers = await resolveHeaders(event ? this.#headers : [], this.#headerResolver, {
-      backendId: this.#backendId, url: transport.url, purpose: "event", signal,
-    });
+    // Preserve the existing eager fetch path when no event headers apply.
+    const headers = event && this.#headers.length > 0
+      ? await resolveHeaders(this.#headers, this.#headerResolver, {
+          backendId: this.#backendId, url: transport.url, purpose: "event", signal,
+        })
+      : new Headers();
     signal.throwIfAborted();
     headers.set("Content-Type", "application/json");
     headers.set("Accept", "application/json");
