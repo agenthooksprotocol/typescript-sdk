@@ -10514,7 +10514,7 @@ export const schemas = [
           {
             type: "string",
             not: {
-              pattern: "[\\r\\n\\u0000]",
+              pattern: "[\r\n\u0000]",
             },
           },
           {
