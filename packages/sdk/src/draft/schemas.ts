@@ -10066,6 +10066,17 @@ export const schemas = [
             format: "uri",
             pattern: "^https?://",
           },
+          headers: {
+            type: "object",
+            description:
+              "Endpoint-scoped event headers. Runtime validation and isolation are required by AHP-REG-003; schema acceptance alone is insufficient.",
+            propertyNames: {
+              pattern: "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+            },
+            additionalProperties: {
+              $ref: "#/$defs/httpHeaderValue",
+            },
+          },
         },
       },
       authentication: {
@@ -10476,6 +10487,38 @@ export const schemas = [
             minimum: 1,
           },
         },
+      },
+      httpHeaderSource: {
+        type: "object",
+        properties: {
+          valueEnv: {
+            type: "string",
+            pattern: "^[A-Za-z_][A-Za-z0-9_]*$",
+          },
+          valueRef: {
+            type: "string",
+            minLength: 1,
+          },
+        },
+        oneOf: [
+          {
+            required: ["valueEnv"],
+          },
+          {
+            required: ["valueRef"],
+          },
+        ],
+      },
+      httpHeaderValue: {
+        anyOf: [
+          {
+            type: "string",
+            pattern: "^[ -~]*$",
+          },
+          {
+            $ref: "#/$defs/httpHeaderSource",
+          },
+        ],
       },
     },
   },

@@ -106,6 +106,8 @@ export type {
   FormAnswerValue,
   FormAnswers,
   HookFailureEvent,
+  HttpHeaderSource,
+  HttpHeaderValue,
   HttpTransport,
   InjectEffect,
   InteractionEvent,

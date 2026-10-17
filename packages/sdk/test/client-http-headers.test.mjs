@@ -319,7 +319,6 @@ test("invalid names, reserved headers, duplicate names and invalid values fail b
       { valueEnv: "" },
       { valueEnv: "BAD-NAME" },
       { valueEnv: "A", valueRef: "B" },
-      { valueRef: "A", extra: true },
     ].map((v) => ({ "X-Key": v })),
     { "X-Key": "a".repeat(16384) },
   ];
@@ -438,6 +437,23 @@ test("caller mutation cannot retarget configured headers or replace source refer
     "https://example.com/original",
     "https://example.com/original",
   ]);
+  await t.close();
+});
+
+test("recognized source extensions remain inert and never reach the resolver", async () => {
+  let sources = [];
+  const t = transport(
+    { "X-Key": { valueRef: "key", future: "opaque" } },
+    undefined,
+    {
+      headerResolver(source) {
+        sources.push(source);
+        return "resolved";
+      },
+    },
+  );
+  await t.request(message);
+  assert.deepEqual(sources, [{ valueRef: "key" }]);
   await t.close();
 });
 

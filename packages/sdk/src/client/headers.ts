@@ -72,7 +72,9 @@ export function validateHeaders(input: unknown): readonly HeaderEntry[] {
     } else {
       if (!value || typeof value !== "object" || Array.isArray(value))
         invalid();
-      const keys = Object.keys(value);
+      const keys = Object.keys(value).filter(
+        (key) => key === "valueEnv" || key === "valueRef",
+      );
       if (
         keys.length !== 1 ||
         !["valueEnv", "valueRef"].includes(keys[0]!) ||
@@ -89,7 +91,11 @@ export function validateHeaders(input: unknown): readonly HeaderEntry[] {
     if (bytes > MAX_HEADER_BYTES) invalid();
     return [
       name,
-      typeof value === "string" ? value : ({ ...value } as HeaderSource),
+      typeof value === "string"
+        ? value
+        : Object.hasOwn(value, "valueEnv")
+          ? { valueEnv: value.valueEnv }
+          : { valueRef: value.valueRef },
     ];
   });
 }

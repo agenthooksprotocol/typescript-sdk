@@ -140,6 +140,8 @@ export type {
   HostEventInputs,
   HostMessage,
   HostTextPart,
+  HttpHeaderSource,
+  HttpHeaderValue,
   HttpTransport,
   InitialState,
   InjectEffect,
