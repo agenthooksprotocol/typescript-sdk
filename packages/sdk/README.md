@@ -53,14 +53,8 @@ if (hooks.subscribes("tool.before")) {
 }
 ```
 
-Call `hooks.intercepts(event)` to check whether any subscription can intercept an
-event, for example to withhold streamed output until interception settles. It
-returns `true` only when the host grants intercept mode for the event and at
-least one intercept-mode subscription selects it with the same selector
-matching. Observe-mode subscriptions never count. Like `subscribes`, it does not
-evaluate payload filters and performs no delivery, authentication, uploads, or
-input preparation. A `true` result reports potential interception, not
-permission or a guarantee that a receiver will intercept.
+`hooks.intercepts(event)` is `subscribes` restricted to intercept subscriptions.
+Use it to decide whether to withhold streamed output until interceptors settle.
 
 ```ts
 const withhold = hooks.intercepts("model.response.after");

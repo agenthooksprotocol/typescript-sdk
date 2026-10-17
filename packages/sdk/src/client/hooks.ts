@@ -180,9 +180,8 @@ export class Hooks {
     return this.selects(event, ["intercept", "observe"]);
   }
 
-  /** Static interception interest, not permission or an interception guarantee.
-   * Observe-mode subscriptions never count; filters requiring occurrence data
-   * are deliberately not evaluated. */
+  /** Whether any intercept subscription the host granted selects `event`.
+   * Payload filters are not evaluated. */
   intercepts(event: EventType): boolean {
     return this.selects(event, ["intercept"]);
   }
