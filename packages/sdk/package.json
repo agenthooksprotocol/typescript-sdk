@@ -55,6 +55,7 @@
     "dist/src",
     "src",
     "README.md",
+    "CONFIGURATION.md",
     "LICENSE"
   ],
   "types": "./dist/src/index.d.ts",

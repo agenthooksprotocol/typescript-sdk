@@ -84,6 +84,8 @@ export interface HooksOptions {
   maxConcurrentUploads?: number;
   /** Best-effort observation budget, bounded by the operation signal. */
   observationTimeoutMs?: number;
+  /** Initialization configuration discovery budget per backend; default 5000 ms. */
+  configurationTimeoutMs?: number;
   /** Start stdio backends with the full host environment rather than the minimal
    * base environment (PATH, HOME, locale, temp dirs, ...). Registration `env`
    * entries apply on top either way. Default false. */

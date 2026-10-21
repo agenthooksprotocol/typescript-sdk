@@ -19,3 +19,7 @@ export { effectNames, supports } from "../draft/public.js";
 export type { EffectName } from "../draft/types.js";
 
 export { effect } from "./effect.js";
+
+// Shared declarations for explicit client configuration and backend defaults.
+export { content, duration, events, subscription } from "../draft/public.js";
+export type { Configuration, Duration, FailurePolicy, Subscription, SubscriptionEvent, InterceptEvent, ObserveEvent, InterceptOptions, ObserveOptions } from "../draft/types.js";

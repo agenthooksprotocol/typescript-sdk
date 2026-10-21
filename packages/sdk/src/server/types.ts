@@ -1,3 +1,4 @@
+import type { Configuration } from "../draft/raw.js";
 import type { Capabilities, CapabilitiesRequest, CapabilitiesResponse, Event, EventResponses, EventType, InterceptRequest, ObserveNotification, ResponseFor, events } from '../draft/raw.js';
 
 type EventNames = typeof events;
@@ -52,6 +53,7 @@ export type ServerInterceptHandlers = AtLeastOne<{
       : never;
 }>;
 export type ServerHandlers = AtLeastOne<{
+  readonly configuration?: Configuration;
   readonly intercept?: ServerInterceptHandlers;
   readonly observe?: ServerObserveHandlers;
   readonly capabilities?: (context: { readonly request: CapabilitiesRequest; readonly signal: AbortSignal }) => Awaitable<CapabilitiesReply>;

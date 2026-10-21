@@ -626,7 +626,14 @@ export const schemas = [
               },
             },
             not: {
-              required: ["effects"],
+              anyOf: [
+                {
+                  required: ["configuration"],
+                },
+                {
+                  required: ["effects"],
+                },
+              ],
             },
           },
         },
@@ -2706,6 +2713,100 @@ export const schemas = [
           },
         },
         additionalProperties: false,
+      },
+    },
+  },
+  {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    $id: "https://agenthooksprotocol.org/schemas/draft/configuration-request.schema.json",
+    title: "AHP Configuration Request (Draft)",
+    allOf: [
+      {
+        $ref: "common.schema.json#/$defs/request",
+      },
+      {
+        type: "object",
+        required: ["method", "params"],
+        properties: {
+          method: {
+            const: "hooks/configuration",
+          },
+          params: {
+            type: "object",
+            required: ["protocolVersion"],
+            properties: {
+              protocolVersion: {
+                $ref: "common.schema.json#/$defs/protocolVersion",
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+    ],
+    $comment: "Mutable AHP draft. ",
+  },
+  {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    $id: "https://agenthooksprotocol.org/schemas/draft/configuration-response.schema.json",
+    title: "AHP Configuration Response (Draft)",
+    allOf: [
+      {
+        $ref: "common.schema.json#/$defs/successResponse",
+      },
+      {
+        type: "object",
+        required: ["result"],
+        properties: {
+          result: {
+            type: "object",
+            required: ["protocolVersion", "configuration"],
+            properties: {
+              protocolVersion: {
+                $ref: "common.schema.json#/$defs/protocolVersion",
+              },
+              configuration: {
+                $ref: "configuration.schema.json",
+              },
+            },
+            not: {
+              anyOf: [
+                {
+                  required: ["manifest"],
+                },
+                {
+                  required: ["effects"],
+                },
+              ],
+            },
+          },
+        },
+      },
+    ],
+    $comment: "Mutable AHP draft. ",
+  },
+  {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    $id: "https://agenthooksprotocol.org/schemas/draft/configuration.schema.json",
+    title: "AHP Configuration (Draft)",
+    $comment:
+      "Mutable AHP draft. Shared subscription configuration. This is not a backend connection or authentication configuration.",
+    type: "object",
+    required: ["subscriptions"],
+    properties: {
+      subscriptions: {
+        type: "array",
+        minItems: 1,
+        items: {
+          oneOf: [
+            {
+              $ref: "registration.schema.json#/$defs/interceptSubscription",
+            },
+            {
+              $ref: "registration.schema.json#/$defs/observeSubscription",
+            },
+          ],
+        },
       },
     },
   },
@@ -7001,6 +7102,16 @@ export const schemas = [
                 $ref: "extensions.schema.json",
               },
             },
+            not: {
+              anyOf: [
+                {
+                  required: ["manifest"],
+                },
+                {
+                  required: ["configuration"],
+                },
+              ],
+            },
           },
         },
       },
@@ -7041,6 +7152,16 @@ export const schemas = [
               extensions: {
                 $ref: "extensions.schema.json",
               },
+            },
+            not: {
+              anyOf: [
+                {
+                  required: ["manifest"],
+                },
+                {
+                  required: ["configuration"],
+                },
+              ],
             },
           },
         },
@@ -7931,7 +8052,14 @@ export const schemas = [
               },
             },
             not: {
-              required: ["manifest"],
+              anyOf: [
+                {
+                  required: ["manifest"],
+                },
+                {
+                  required: ["configuration"],
+                },
+              ],
             },
           },
         },
@@ -7983,7 +8111,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -8035,7 +8170,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -8124,7 +8266,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -8210,7 +8359,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -8302,7 +8458,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -8385,7 +8548,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -8440,7 +8610,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -8540,7 +8717,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -8629,7 +8813,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -8720,7 +8911,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -8775,7 +8973,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -8864,7 +9069,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -8947,7 +9159,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -8999,7 +9218,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -9054,7 +9280,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -9134,7 +9367,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -9217,7 +9457,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -9300,7 +9547,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -9383,7 +9637,14 @@ export const schemas = [
                   },
                 },
                 not: {
-                  required: ["manifest"],
+                  anyOf: [
+                    {
+                      required: ["manifest"],
+                    },
+                    {
+                      required: ["configuration"],
+                    },
+                  ],
                 },
               },
             },
@@ -10393,7 +10654,7 @@ export const schemas = [
       },
       backend: {
         type: "object",
-        required: ["id", "transport", "subscriptions"],
+        required: ["id", "transport"],
         properties: {
           id: {
             $ref: "#/$defs/reverseDns",
@@ -10549,6 +10810,12 @@ export const schemas = [
       },
       {
         $ref: "capabilities-response.schema.json",
+      },
+      {
+        $ref: "configuration-request.schema.json",
+      },
+      {
+        $ref: "configuration-response.schema.json",
       },
     ],
   },

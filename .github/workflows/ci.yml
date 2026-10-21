@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: agenthooksprotocol/agent-hooks-protocol
-          ref: 6327cb47b15eba7a2ec4bd6c9a32cb19eeabfd3d
+          ref: 1edc46302e85926e0170c5c50f488703f961e1af
           path: agent-hooks-protocol
       - uses: actions/setup-node@v5
         with:

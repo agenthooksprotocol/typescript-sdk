@@ -5,6 +5,7 @@ import {
   events,
   Permission,
   responseForRequest,
+  PROTOCOL_VERSION,
 } from "../draft/raw.js";
 import type { BoundaryContracts, Codec } from "./contracts.js";
 import { decodeSettledEvent, decodeSettledState, SettlementDecodeError } from "./settlement.js";
@@ -35,7 +36,7 @@ import { composeResponseAsync, normalizeEffects, type ComposedEffect } from "./c
 import { runtimeInteger } from "../runtime-integer.js";
 import { admitContracts, decodeContract, encodeContract, freezeContractValue, type ToolBeforeInput, type ToolBeforeResult } from "./contracts.js";
 import { auth } from "./auth.js";
-import { validateWire } from "./validation.js";
+import { isEventType, validateWire } from "./validation.js";
 import {
   ConfigurationError,
   type BoundaryInput,
@@ -122,6 +123,8 @@ type ElicitationLifetime = {
 /** Configuration-driven, harness-facing AHP client. No host operation is executed. */
 export class Hooks {
   readonly initialized: Promise<void>;
+  /** Sanitized registration outcomes; available after initialized settles. */
+  readonly initializationDiagnostics: { backendId: string; code: "CONFIGURATION_UNAVAILABLE" | "NO_APPLICABLE_SUBSCRIPTIONS" }[] = [];
   private readonly lifetime = new AbortController();
   private readonly options: HooksOptions;
   private readonly routes: Route[] = [];
@@ -160,13 +163,15 @@ export class Hooks {
       }),
     };
     this.provider = options.auth ?? auth();
-    // No credentials or processes are acquired until a matching boundary needs them.
-    // Resolve static routing synchronously so interest can be queried before
-    // preparing host input. Configuration failures retain the Promise contract.
+    // Explicit subscriptions retain synchronous routing and lazy transport setup.
+    // Omitted subscriptions discover defaults during initialized, before dispatch.
+    // Configuration failures retain the Promise contract.
     try {
-      this.initialize(config);
-      this.configured = true;
-      this.initialized = Promise.resolve();
+      const discovery = this.initialize(config);
+      this.configured = discovery === undefined;
+      this.initialized = discovery === undefined ? Promise.resolve() : discovery.then(() => {
+        this.configured = true;
+      });
     } catch (error) {
       this.initialized = Promise.reject(error);
     }
@@ -195,18 +200,18 @@ export class Hooks {
       route.subscription.events.some(selector => matches(selector, event)));
   }
 
-  private initialize(config: unknown): void {
+  private initialize(config: unknown): Promise<void> | void {
     const issues = validateWire("registration", config).map((path) => ({
       path,
       code: "INVALID_REGISTRATION",
     }));
-    for (const key of ["maxContentBytes", "observationTimeoutMs", "maxConcurrentUploads"] as const) {
+    for (const key of ["maxContentBytes", "observationTimeoutMs", "maxConcurrentUploads", "configurationTimeoutMs"] as const) {
       const value = this.options[key];
       if (
         value !== undefined &&
         (!Number.isSafeInteger(value) ||
           value <= 0 ||
-          (key === "observationTimeoutMs" && value > 2147483647))
+          ((key === "observationTimeoutMs" || key === "configurationTimeoutMs") && value > 2147483647))
       )
         issues.push({ path: key, code: "INVALID_LIMIT" });
     }
@@ -276,7 +281,7 @@ export class Hooks {
       }
       if (!["stdio", "http"].includes(backend.transport.type))
         issues.push({ path: backend.id, code: "UNSUPPORTED_TRANSPORT" });
-      for (const [index, raw] of backend.subscriptions.entries()) {
+      for (const [index, raw] of (backend.subscriptions ?? []).entries()) {
         const s = raw as Subscription;
         if (s.scope === "managed" && s.disableable !== false)
           issues.push({
@@ -309,6 +314,8 @@ export class Hooks {
       }
     }
     if (issues.length) throw new ConfigurationError(issues);
+    const groups: Route[][] = [];
+    const discoveries: Promise<void>[] = [];
     for (const backend of registration.hooks) {
       this.deliveryHeaders.set(backend.id, backend.transport.type === "http"
         ? validateHeaders(backend.transport.headers) : []);
@@ -327,14 +334,52 @@ export class Hooks {
           inheritEnvironment: this.options.inheritEnvironment === true,
         },
       );
-      backend.subscriptions.forEach((subscription, index) =>
-        this.routes.push({
-          backend,
-          subscription: subscription as Subscription,
-          index,
-          transport,
-        }),
-      );
+      const group: Route[] = [];
+      groups.push(group);
+      const add = (subscriptions: readonly Subscription[]) => {
+        subscriptions.forEach((subscription, index) => group.push({ backend, subscription, index, transport }));
+      };
+      if (backend.subscriptions !== undefined) {
+        add(backend.subscriptions as Subscription[]);
+      } else {
+        discoveries.push(this.discoverConfiguration(backend, transport).then(add));
+      }
+    }
+    const install = () => { this.routes.push(...groups.flat()); };
+    if (discoveries.length) return Promise.all(discoveries).then(install);
+    install();
+  }
+
+  private async discoverConfiguration(backend: Backend, transport: BackendTransport): Promise<Subscription[]> {
+    const budget = deadlineAfter(this.options.configurationTimeoutMs ?? 5000, this.lifetime.signal);
+    let retained = false;
+    try {
+      const response = await transport.request({
+        jsonrpc: "2.0", id: randomUUID(), method: "hooks/configuration",
+        params: { protocolVersion: PROTOCOL_VERSION },
+      }, budget.signal);
+      budget.check();
+      if (validateWire("configuration-response", response).length) throw new Error("Invalid configuration response");
+      const configuration = (response as { result: { configuration: { subscriptions: Subscription[] } } }).result.configuration;
+      const subscriptions = configuration.subscriptions.flatMap(subscription => {
+        const selected = this.manifest.events.filter(event =>
+          isEventType(event.event) && event.modes.includes(subscription.mode) &&
+          subscription.events.some(selector => matches(selector, event.event as EventType)));
+        return selected.length ? [{ ...subscription, events: selected.map(event => event.event) } as Subscription] : [];
+      });
+      if (!subscriptions.length) {
+        this.initializationDiagnostics.push({ backendId: backend.id, code: "NO_APPLICABLE_SUBSCRIPTIONS" });
+        return [];
+      }
+      retained = true;
+      return subscriptions;
+    } catch (error) {
+      if (this.lifetime.signal.aborted) throw error;
+      this.initializationDiagnostics.push({ backendId: backend.id, code: "CONFIGURATION_UNAVAILABLE" });
+      return [];
+    } finally {
+      budget.dispose();
+      if (!retained) await transport.close();
     }
   }
 
