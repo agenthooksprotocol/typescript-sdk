@@ -5740,6 +5740,18 @@ export const events = {
   userMessageOutbound: "user.message.outbound",
   workspaceChangeAfter: "workspace.change.after",
   workspaceChangeBefore: "workspace.change.before",
+  all: "*" as const,
+  config: { all: "config.*" },
+  context: { all: "context.*" },
+  file: { all: "file.*" },
+  hook: { all: "hook.*" },
+  model: { all: "model.*" },
+  session: { all: "session.*" },
+  task: { all: "task.*" },
+  tool: { all: "tool.*" },
+  turn: { all: "turn.*" },
+  user: { all: "user.*" },
+  workspace: { all: "workspace.*" },
 } as const;
 
 /** Out-of-band source binding produced by canonical host-input projection. */

@@ -1,5 +1,6 @@
 import type {
   HostEventInputs,
+  Configuration,
   HostCapabilities,
   Harness,
   OwnedAttachment,
@@ -86,6 +87,15 @@ export interface HooksOptions {
   observationTimeoutMs?: number;
   /** Initialization configuration discovery budget per backend; default 5000 ms. */
   configurationTimeoutMs?: number;
+  /** Explicitly authorize discovered uploads, including destinations, credential
+   * bindings and forwarding configured backend headers. Receives a detached,
+   * validated complete configuration. Missing/false/throw skips the backend.
+   * The discovery budget also bounds this callback. Explicit local subscriptions
+   * never invoke it. Mutation of the supplied copy cannot change admitted config. */
+  authorizeDiscoveredConfiguration?: (
+    configuration: Configuration,
+    context: { readonly backendId: string; readonly signal: AbortSignal },
+  ) => boolean | Promise<boolean>;
   /** Start stdio backends with the full host environment rather than the minimal
    * base environment (PATH, HOME, locale, temp dirs, ...). Registration `env`
    * entries apply on top either way. Default false. */

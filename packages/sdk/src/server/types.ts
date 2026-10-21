@@ -1,7 +1,10 @@
 import type { Configuration } from "../draft/raw.js";
 import type { Capabilities, CapabilitiesRequest, CapabilitiesResponse, Event, EventResponses, EventType, InterceptRequest, ObserveNotification, ResponseFor, events } from '../draft/raw.js';
 
-type EventNames = typeof events;
+// Wildcard authoring helpers are selectors, never actual event handlers.
+type EventNames = {
+  [K in keyof typeof events as typeof events[K] extends EventType ? K : never]: typeof events[K];
+};
 type InterceptEvent = keyof EventResponses;
 type Awaitable<T> = T | Promise<T>;
 type CapabilityReplyFields = {

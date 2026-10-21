@@ -3,7 +3,8 @@ import { events, type EventType } from "../draft/raw.js";
 /** Admit an external event name against the generated catalogue. Unknown names
  * remain raw evidence, not authority for a contextual response. */
 export function isEventType(value: unknown): value is EventType {
-  return Object.values(events).some(event => event === value);
+  return Object.values(events).some(event =>
+    typeof event === "string" && !event.includes("*") && event === value);
 }
 
 import { Ajv2020 } from "ajv/dist/2020.js";

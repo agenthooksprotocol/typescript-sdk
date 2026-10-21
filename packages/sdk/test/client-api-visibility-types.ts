@@ -174,14 +174,19 @@ const unknownInterest: boolean = hooks.subscribes('future.event');
 declare const arbitraryEventName: string;
 // @ts-expect-error Arbitrary strings are not canonical event identifiers.
 hooks.subscribes(arbitraryEventName);
-for (const name of Object.values(events)) hooks.subscribes(name);
+const concreteEvents = Object.values(events).filter(
+  (name): name is import('agenthooksprotocol/client').EventType => typeof name === 'string' && !name.includes('*'),
+);
+for (const name of concreteEvents) hooks.subscribes(name);
+// @ts-expect-error Wildcards are subscription selectors, not occurrence event types.
+hooks.subscribes(events.all);
 void [staticInterest, unknownInterest];
 const staticInterception: boolean = hooks.intercepts('model.response.after');
 // @ts-expect-error Interception interest requires a generated canonical event name.
 const unknownInterception: boolean = hooks.intercepts('future.event');
 // @ts-expect-error Arbitrary strings are not canonical event identifiers.
 hooks.intercepts(arbitraryEventName);
-for (const name of Object.values(events)) hooks.intercepts(name);
+for (const name of concreteEvents) hooks.intercepts(name);
 void [staticInterception, unknownInterception];
 // @ts-expect-error Selector matching stays internal to the client.
 hooks.selects('tool.before', ['intercept']);

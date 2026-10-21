@@ -13,6 +13,7 @@ import { HookOperationalError } from "../errors.js";
 import { randomUUID } from "node:crypto";
 import type {
   Authentication,
+  Configuration,
   Backend,
   Capabilities,
   Effect,
@@ -96,7 +97,9 @@ type Route = {
   index: number;
   transport: BackendTransport;
 };
-const eventTypes: readonly EventType[] = Object.values(events);
+const eventTypes: readonly EventType[] = Object.values(events).filter(
+  (event): event is EventType => typeof event === "string" && !event.includes("*"),
+);
 const matches = (selector: string, type: EventType) =>
   selector === "*" ||
   selector === type ||
@@ -124,7 +127,7 @@ type ElicitationLifetime = {
 export class Hooks {
   readonly initialized: Promise<void>;
   /** Sanitized registration outcomes; available after initialized settles. */
-  readonly initializationDiagnostics: { backendId: string; code: "CONFIGURATION_UNAVAILABLE" | "NO_APPLICABLE_SUBSCRIPTIONS" }[] = [];
+  readonly initializationDiagnostics: { backendId: string; code: "CONFIGURATION_UNAVAILABLE" | "NO_APPLICABLE_SUBSCRIPTIONS" | "CONFIGURATION_NOT_AUTHORIZED" }[] = [];
   private readonly lifetime = new AbortController();
   private readonly options: HooksOptions;
   private readonly routes: Route[] = [];
@@ -360,8 +363,21 @@ export class Hooks {
       }, budget.signal);
       budget.check();
       if (validateWire("configuration-response", response).length) throw new Error("Invalid configuration response");
-      const configuration = (response as { result: { configuration: { subscriptions: Subscription[] } } }).result.configuration;
-      const subscriptions = configuration.subscriptions.flatMap(subscription => {
+      const configuration = (response as { result: { configuration: Configuration } }).result.configuration;
+      if (configuration.subscriptions.some(subscription => subscription.upload !== undefined)) {
+        const authorize = this.options.authorizeDiscoveredConfiguration;
+        const approved = authorize === undefined ? false : await raceAbort(
+          Promise.resolve().then(() => authorize(structuredClone(configuration), {
+            backendId: backend.id, signal: budget.signal,
+          })), budget.signal,
+        );
+        budget.check();
+        if (approved !== true) {
+          this.initializationDiagnostics.push({ backendId: backend.id, code: "CONFIGURATION_NOT_AUTHORIZED" });
+          return [];
+        }
+      }
+      const subscriptions = (configuration.subscriptions as Subscription[]).flatMap(subscription => {
         const selected = this.manifest.events.filter(event =>
           isEventType(event.event) && event.modes.includes(subscription.mode) &&
           subscription.events.some(selector => matches(selector, event.event as EventType)));

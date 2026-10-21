@@ -31,3 +31,11 @@ subscription.intercept({
   events: [events.sessionEnd], timeout: duration.milliseconds(750),
   failurePolicy: "fail-open", content: content.metadata(),
 });
+
+subscription.intercept({ events: [events.tool.all, events.all], timeout: duration.milliseconds(750),
+  failurePolicy: "fail-open", content: content.metadata() });
+const invalidObserver: ServerHandlers = { observe: {
+  // @ts-expect-error wildcard helpers are not concrete event handler keys
+  all: () => {},
+} };
+void invalidObserver;

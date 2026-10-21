@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { Readable, Writable } from "node:stream";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { Hooks } from "agenthooksprotocol/client";
+import { Hooks, Attachment, auth } from "agenthooksprotocol/client";
+import { createHash } from "node:crypto";
 import { hooks } from "agenthooksprotocol/server";
 import { serveStdio } from "agenthooksprotocol/server/stdio";
 import { content, duration, events, subscription } from "agenthooksprotocol";
@@ -250,4 +251,138 @@ test("HTTP discovery and interception cross the real client/server transport", a
     await client.close();
     await new Promise(resolve => server.close(resolve));
   }
+});
+
+
+const upload = (authentication) => ({ endpoint: "https://upload.test/media", timeoutMs: 1000, maxBytes: 100,
+  ...(authentication === undefined ? {} : { auth: authentication }),
+});
+for (const [kind, binding] of [
+  ["environment", { type: "bearer", tokenEnv: "PRIVATE_ENV" }],
+  ["reference", { type: "bearer", tokenRef: "private/secret" }],
+  ["oauth", { type: "oauth", issuer: "https://issuer.test", resource: "https://upload.test", clientId: "private", flow: "client_credentials", clientSecretRef: "private/oauth" }],
+  ["header-only", undefined],
+]) {
+  test(`unapproved discovered ${kind} upload cannot resolve secrets or forward event headers`, async () => {
+    const resolved = [];
+    const calls = [];
+    const cfg = registration();
+    cfg.hooks[0].transport.headers = { Authorization: { valueRef: "event-header" } };
+    const client = new Hooks(cfg, { ...options(async (url, init) => {
+      calls.push(String(url));
+      assert.equal(String(url), "https://backend.test/hooks");
+      assert.equal(new Headers(init.headers).get("authorization"), "Bearer event-only");
+      const message = JSON.parse(init.body);
+      return Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "draft",
+        configuration: { subscriptions: [{ ...selected(), upload: upload(binding) }] } } });
+    }), auth: auth({
+      resolveEnvironmentVariable(name) { resolved.push(name); throw Error("must not resolve environment"); },
+      resolveCredentialReference(name) { resolved.push(name); if (name === "event-header") return "Bearer event-only"; throw Error("must not resolve upload credentials"); },
+    }) });
+    try {
+      await client.initialized;
+      assert.equal(client.subscribes(events.toolBefore), false);
+      assert.deepEqual(calls, ["https://backend.test/hooks"]);
+      assert.deepEqual(resolved, ["event-header"]);
+      assert.equal(client.initializationDiagnostics[0].code, "CONFIGURATION_NOT_AUTHORIZED");
+    } finally { await client.close(); }
+  });
+}
+
+for (const decision of [false, "throw"]) {
+  test(`upload authorization ${decision} skips the complete backend`, async () => {
+    const cfg = { subscriptions: [{ ...selected(), upload: upload() }] };
+    const client = new Hooks(registration(), { ...options(async (_url, init) => {
+      const message = JSON.parse(init.body);
+      return Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "draft", configuration: cfg } });
+    }), authorizeDiscoveredConfiguration(configuration, context) {
+      assert.deepEqual(configuration, cfg);
+      assert.equal(context.backendId, "test.backend");
+      if (decision === "throw") throw Error("private denial reason");
+      return false;
+    } });
+    try {
+      await client.initialized;
+      assert.equal(client.intercepts(events.toolBefore), false);
+      assert.equal(client.initializationDiagnostics.length, 1);
+      assert.equal(JSON.stringify(client.initializationDiagnostics).includes("private"), false);
+    } finally { await client.close(); }
+  });
+}
+
+test("explicit approval authorizes the complete detached upload configuration without rewriting it", async () => {
+  const cfg = registration();
+  cfg.hooks[0].transport.headers = { Authorization: "Bearer approved-forwarding" };
+  const declaration = { subscriptions: [{ ...selected(), content: { default: "body" }, upload: upload() }] };
+  const calls = [];
+  const client = new Hooks(cfg, { ...options(async (url, init) => {
+    calls.push(String(url));
+    assert.equal(new Headers(init.headers).get("authorization"), "Bearer approved-forwarding");
+    if (String(url) === "https://upload.test/media") {
+      return Response.json({ ref: "uploaded:body", size: init.body.byteLength,
+        sha256: createHash("sha256").update(init.body).digest("hex") }, { status: 201 });
+    }
+    const message = JSON.parse(init.body);
+    return Response.json({ jsonrpc: "2.0", id: message.id, result: message.method === "hooks/configuration"
+      ? { protocolVersion: "draft", configuration: declaration } : { protocolVersion: "draft", effects: [] } });
+  }), authorizeDiscoveredConfiguration(configuration, context) {
+    assert.deepEqual(configuration, declaration);
+    assert.equal(context.backendId, "test.backend");
+    configuration.subscriptions[0].upload.endpoint = "https://mutation.test/not-authorized";
+    return true;
+  } });
+  try {
+    await client.initialized;
+    assert.equal(client.intercepts(events.toolBefore), true);
+    const result = await client.toolBefore({ ...input, items: [{ id: "body", kind: "attachment", selection: "body",
+      mediaType: "application/octet-stream", body: Attachment.bytes(new Uint8Array([1, 2, 3])) }] });
+    assert.deepEqual(result.diagnostics, []);
+    assert.deepEqual(calls, ["https://backend.test/hooks", "https://upload.test/media", "https://backend.test/hooks"]);
+  } finally { await client.close(); }
+});
+
+test("upload approval is bounded by the initialization deadline", async () => {
+  let signal;
+  const client = new Hooks(registration(), { ...options(async (_url, init) => {
+    const message = JSON.parse(init.body);
+    return Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "draft",
+      configuration: { subscriptions: [{ ...selected(), upload: upload() }] } } });
+  }), configurationTimeoutMs: 30,
+  authorizeDiscoveredConfiguration(_configuration, context) {
+    signal = context.signal;
+    return new Promise(() => {});
+  } });
+  try {
+    await client.initialized;
+    assert.equal(signal.aborted, true);
+    assert.equal(client.intercepts(events.toolBefore), false);
+    assert.equal(client.initializationDiagnostics[0].code, "CONFIGURATION_UNAVAILABLE");
+  } finally { await client.close(); }
+});
+
+test("explicit local upload configuration does not invoke discovery authorization", async () => {
+  const client = new Hooks(registration([{ ...selected(), upload: upload({ type: "bearer", tokenRef: "local" }) }]), {
+    ...options(async () => { throw Error("initialization must not fetch"); }),
+    authorizeDiscoveredConfiguration() { throw Error("must not authorize local configuration"); },
+  });
+  try {
+    await client.initialized;
+    assert.equal(client.intercepts(events.toolBefore), true);
+    assert.deepEqual(client.initializationDiagnostics, []);
+  } finally { await client.close(); }
+});
+
+test("wildcard helpers remain selectors rather than actual runtime events", async () => {
+  const { isEventType } = await import("../dist/src/client/validation.js");
+  assert.equal(isEventType(events.all), false);
+  assert.equal(isEventType(events.tool.all), false);
+  assert.equal(isEventType(events.tool), false);
+  assert.equal(isEventType(events.toolBefore), true);
+  const cfg = configuration();
+  cfg.subscriptions[0].events = [events.tool.all];
+  const client = new Hooks(registration(cfg.subscriptions), options());
+  try {
+    await client.initialized;
+    assert.equal(client.subscribes(events.toolBefore), true);
+  } finally { await client.close(); }
 });
