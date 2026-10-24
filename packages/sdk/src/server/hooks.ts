@@ -10,12 +10,13 @@ import {
   parseObserveNotification,
   responseForRequest,
   type EventResponses,
+  type ConfigurationRequest,
   type InterceptRequest,
 } from "../draft/raw.js";
 import { isEventType, validateWire } from "../client/validation.js";
 import { parseJson, stringifyJson } from "../json.js";
 
-import type { ServerHandlers } from "./types.js";
+import type { ConfigurationContext, ConfigurationHandler, ServerHandlers } from "./types.js";
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -71,6 +72,28 @@ function configurationFor(handlers: ServerHandlers): unknown {
     }
   }
   return configurations.get(handlers);
+}
+
+/** Dynamic results are detached per request, never stored in the static cache. */
+async function invokeConfiguration(handler: ConfigurationHandler, context: ConfigurationContext): Promise<unknown> {
+  const signal = context.signal;
+  let cancel: (() => void) | undefined;
+  try {
+    signal.throwIfAborted();
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      cancel = () => reject(backendInternal);
+      signal.addEventListener("abort", cancel, { once: true });
+    });
+    const result = await Promise.race([invoke(() => handler(context)), cancelled]);
+    signal.throwIfAborted();
+    const snapshot = structuredClone(result);
+    if (validateWire("configuration", snapshot).length) throw backendInternal;
+    return snapshot;
+  } catch {
+    throw backendInternal;
+  } finally {
+    if (cancel) signal.removeEventListener("abort", cancel);
+  }
 }
 
 /** Run application code; any throw or rejection is a backend failure. */
@@ -190,7 +213,12 @@ async function handle(request: Request, handlers: ServerHandlers): Promise<Respo
     if (raw.method === "hooks/configuration") {
       if (validateWire("configuration-request", raw).length)
         return error(id, -32602, "Invalid params", notification, notification ? 400 : 200);
-      const configuration = configurationFor(handlers);
+      const configuration = typeof handlers.configuration === "function"
+        ? await invokeConfiguration(handlers.configuration, {
+            request: structuredClone(raw) as ConfigurationRequest,
+            signal: request.signal,
+          })
+        : configurationFor(handlers);
       if (configuration === undefined) throw methodNotFound;
       return json({ jsonrpc: "2.0", id, result: { protocolVersion: PROTOCOL_VERSION, configuration } });
     }
