@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.9.0...agenthooksprotocol-v0.10.0) (2026-10-24)
+
+
+### Features
+
+* add server-driven subscription configuration ([#42](https://github.com/agenthooksprotocol/typescript-sdk/issues/42)) ([35cbb05](https://github.com/agenthooksprotocol/typescript-sdk/commit/35cbb05055f436e09c5d83b5165a467ae0e7963c))
+
 ## [0.9.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.8.0...agenthooksprotocol-v0.9.0) (2026-10-17)
 
 
