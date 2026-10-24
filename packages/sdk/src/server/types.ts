@@ -1,4 +1,4 @@
-import type { Configuration } from "../draft/raw.js";
+import type { Configuration, ConfigurationRequest } from "../draft/raw.js";
 import type { Capabilities, CapabilitiesRequest, CapabilitiesResponse, Event, EventResponses, EventType, InterceptRequest, ObserveNotification, ResponseFor, events } from '../draft/raw.js';
 
 // Wildcard authoring helpers are selectors, never actual event handlers.
@@ -16,6 +16,14 @@ type CapabilitiesReply = CapabilityReplyFields & {
   readonly [extension: string]: unknown;
 };
 type AtLeastOne<T> = { [K in keyof T]-?: Required<Pick<T, K>> & Partial<Omit<T, K>> }[keyof T];
+
+/** Validated discovery context. Applications own authentication outside the SDK;
+ * request metadata is not an authenticated principal. Honor signal for owned I/O. */
+export interface ConfigurationContext {
+  readonly request: ConfigurationRequest;
+  readonly signal: AbortSignal;
+}
+export type ConfigurationHandler = (context: ConfigurationContext) => Awaitable<Configuration>;
 
 /** Application context. Dynamic request grants still govern response admission. */
 export interface InterceptContext<K extends InterceptEvent> {
@@ -56,7 +64,7 @@ export type ServerInterceptHandlers = AtLeastOne<{
       : never;
 }>;
 export type ServerHandlers = AtLeastOne<{
-  readonly configuration?: Configuration;
+  readonly configuration?: Configuration | ConfigurationHandler;
   readonly intercept?: ServerInterceptHandlers;
   readonly observe?: ServerObserveHandlers;
   readonly capabilities?: (context: { readonly request: CapabilitiesRequest; readonly signal: AbortSignal }) => Awaitable<CapabilitiesReply>;
