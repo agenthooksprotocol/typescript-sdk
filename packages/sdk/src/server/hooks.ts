@@ -58,6 +58,21 @@ const unsupportedEvent = new Failure(-32002, "Unsupported event");
 const backendInternal = new Failure(-32004, "Backend internal error");
 const internalError = new Failure(-32603, "Internal error");
 
+// Static declarations are snapshotted on first use by either server transport.
+const configurations = new WeakMap<ServerHandlers, unknown>();
+function configurationFor(handlers: ServerHandlers): unknown {
+  if (!configurations.has(handlers)) {
+    try {
+      const snapshot = handlers.configuration === undefined ? undefined : structuredClone(handlers.configuration);
+      if (snapshot !== undefined && validateWire("configuration", snapshot).length) throw backendInternal;
+      configurations.set(handlers, snapshot);
+    } catch {
+      throw backendInternal;
+    }
+  }
+  return configurations.get(handlers);
+}
+
 /** Run application code; any throw or rejection is a backend failure. */
 async function invoke(callback: () => unknown): Promise<unknown> {
   try {
@@ -145,7 +160,7 @@ async function handle(request: Request, handlers: ServerHandlers): Promise<Respo
   const notification = !Object.hasOwn(raw, "id");
   const id = notification ? null : raw.id;
   if (
-    !["hooks/intercept", "hooks/observe", "hooks/capabilities"].includes(
+    !["hooks/intercept", "hooks/observe", "hooks/capabilities", "hooks/configuration"].includes(
       raw.method,
     )
   ) {
@@ -172,6 +187,13 @@ async function handle(request: Request, handlers: ServerHandlers): Promise<Respo
     );
   }
   try {
+    if (raw.method === "hooks/configuration") {
+      if (validateWire("configuration-request", raw).length)
+        return error(id, -32602, "Invalid params", notification, notification ? 400 : 200);
+      const configuration = configurationFor(handlers);
+      if (configuration === undefined) throw methodNotFound;
+      return json({ jsonrpc: "2.0", id, result: { protocolVersion: PROTOCOL_VERSION, configuration } });
+    }
     // Validation and snapshots can exhaust the stack on deeply nested external JSON.
     const decoded =
       raw.method === "hooks/intercept"

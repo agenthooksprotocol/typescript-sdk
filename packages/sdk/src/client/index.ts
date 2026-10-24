@@ -341,3 +341,7 @@ export {
   Permission, state, effects, events, capabilityCount,
   effectNames, supports,
 } from "../draft/public.js";
+
+// Shared declarations for explicit client configuration and backend defaults.
+export { content, duration, subscription } from "../draft/public.js";
+export type { Configuration, Duration, FailurePolicy, Subscription, SubscriptionEvent, InterceptEvent, ObserveEvent, InterceptOptions, ObserveOptions } from "../draft/types.js";
