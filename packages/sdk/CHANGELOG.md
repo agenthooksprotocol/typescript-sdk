@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.10.0...agenthooksprotocol-v0.10.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* support dynamic configuration handlers ([#44](https://github.com/agenthooksprotocol/typescript-sdk/issues/44)) ([4f1d777](https://github.com/agenthooksprotocol/typescript-sdk/commit/4f1d777916cfb937f34b383e2a7cd82c0ac45cfe))
+
 ## [0.10.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.9.0...agenthooksprotocol-v0.10.0) (2026-10-24)
 
 
