@@ -13,6 +13,7 @@ import { HookOperationalError } from "../errors.js";
 import { randomUUID } from "node:crypto";
 import type {
   Authentication,
+  ContentUpload,
   Configuration,
   Backend,
   Capabilities,
@@ -61,6 +62,11 @@ function ownedCapabilities(value: WireCapabilities): Capabilities {
 }
 /** Check supplied metadata fields only. Opaque extensions are not wire grants
  * or content, and must not be recursively interpreted as either. */
+/** Whether an upload binding references a secret only a registration may name. */
+function namesLocalSecret(binding: Authentication | undefined): boolean {
+  return binding !== undefined && ["tokenEnv", "tokenRef", "clientSecretRef"].some(key => Object.hasOwn(binding, key));
+}
+
 function validateManifestMetadata(metadata: NonNullable<HooksOptions["manifestMetadata"]>): void {
   const invalid = (field: string): never => { throw new ConfigurationError([
     { path: `manifestMetadata.${field}`, code: "INVALID_CAPABILITIES" },
@@ -127,7 +133,7 @@ type ElicitationLifetime = {
 export class Hooks {
   readonly initialized: Promise<void>;
   /** Sanitized registration outcomes; available after initialized settles. */
-  readonly initializationDiagnostics: { backendId: string; code: "CONFIGURATION_UNAVAILABLE" | "NO_APPLICABLE_SUBSCRIPTIONS" | "CONFIGURATION_NOT_AUTHORIZED" }[] = [];
+  readonly initializationDiagnostics: { backendId: string; code: "CONFIGURATION_UNAVAILABLE" | "NO_APPLICABLE_SUBSCRIPTIONS" | "CONFIGURATION_LOCAL_SECRET" }[] = [];
   private readonly lifetime = new AbortController();
   private readonly options: HooksOptions;
   private readonly routes: Route[] = [];
@@ -364,18 +370,10 @@ export class Hooks {
       budget.check();
       if (validateWire("configuration-response", response).length) throw new Error("Invalid configuration response");
       const configuration = (response as { result: { configuration: Configuration } }).result.configuration;
-      if (configuration.subscriptions.some(subscription => subscription.upload !== undefined)) {
-        const authorize = this.options.authorizeDiscoveredConfiguration;
-        const approved = authorize === undefined ? false : await raceAbort(
-          Promise.resolve().then(() => authorize(structuredClone(configuration), {
-            backendId: backend.id, signal: budget.signal,
-          })), budget.signal,
-        );
-        budget.check();
-        if (approved !== true) {
-          this.initializationDiagnostics.push({ backendId: backend.id, code: "CONFIGURATION_NOT_AUTHORIZED" });
-          return [];
-        }
+      // A server may pick its upload destination, not which local secret is read.
+      if (configuration.subscriptions.some(subscription => namesLocalSecret((subscription.upload as ContentUpload | undefined)?.auth))) {
+        this.initializationDiagnostics.push({ backendId: backend.id, code: "CONFIGURATION_LOCAL_SECRET" });
+        return [];
       }
       const subscriptions = (configuration.subscriptions as Subscription[]).flatMap(subscription => {
         const selected = this.manifest.events.filter(event =>

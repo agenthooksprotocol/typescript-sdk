@@ -106,20 +106,8 @@ Await `initialized` before checking interest for discovery-configured backends. 
 
 Discovery does not change per-interception capabilities or authorize new effects. Transport URLs, credentials, and headers remain client configuration. Backend declarations do not provide a guarantee that the client will subscribe to every advertised event. Reinitializing the client is the supported mechanism for loading a new advertisement; there is no background refresh.
 
-## Authorizing discovered uploads
+## Discovered uploads
 
-A backend advertisement is not permission to resolve local upload secrets or forward configured headers to a new destination. **Any discovered subscription containing `upload` requires explicit client authorization**, even if the upload has no authentication binding. Without approval, the entire backend is skipped. Explicit local subscriptions retain their existing behavior.
+A discovered `upload` is admitted like any other discovered setting: the backend is already trusted with the content it receives, and your configured backend headers apply to its uploads as they do to explicit ones.
 
-Set `HooksOptions.authorizeDiscoveredConfiguration` to inspect the complete, validated advertisement and approve the upload endpoints, authentication bindings, and forwarding of your configured backend headers:
-
-```ts
-const discoveryOptions = {
-  authorizeDiscoveredConfiguration(configuration: Configuration) {
-    // Application policy checks the complete subscription list, upload
-    // destinations, credential bindings, and configured backend headers.
-    return approveBackendConfiguration(configuration);
-  },
-};
-```
-
-The callback also receives `{ backendId, signal }` as its second argument. It runs within the initialization discovery budget. A missing callback, rejection, exception, or timeout skips the backend without resolving upload credentials or sending upload requests. Only the literal result `true` grants authorization. The supplied configuration is detached: callback mutation cannot change the configuration that will be installed. The SDK does not remove uploads, strip credentials, or silently rewrite server settings.
+The exception is local secrets. A discovered `upload.auth` naming `tokenEnv`, `tokenRef`, or `clientSecretRef` skips the entire backend with `CONFIGURATION_LOCAL_SECRET`, before anything is resolved, because only a registration may name them. Explicit local subscriptions may use them as before.
