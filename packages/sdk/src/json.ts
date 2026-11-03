@@ -1,5 +1,6 @@
 import type { Ajv2020 } from "ajv/dist/2020.js";
 import { schemas } from "./draft/schemas.js";
+import { addCanonicalKeywords, canonicalSchema } from "./canonical-schema.js";
 import {
   encodeJsonRpcMessage,
   type JsonRpcMessage,
@@ -137,85 +138,10 @@ function parseLosslessNumber(token: string): number | bigint {
   return value;
 }
 
-/**
- * Validate integers natively instead of projecting bigint to Number. Projection can
- * silently round bounds, or change negative values and opaque extension payloads.
- * All other canonical keywords remain intact; numeric constraints retain exact
- * bigint comparisons. The raw object is never modified.
- */
+/** Register the canonical schemas over the lossless numeric keywords. */
 export function addCanonicalSchemas(registry: Ajv2020): void {
-  registry.addKeyword({
-    keyword: "losslessType",
-    schemaType: ["string", "array"],
-    validate: (expected: string | string[], value: unknown) => {
-      const types = Array.isArray(expected) ? expected : [expected];
-      return types.some((type) => {
-        switch (type) {
-          case "integer":
-            return typeof value === "bigint" ||
-              (typeof value === "number" && Number.isInteger(value));
-          case "number":
-            return typeof value === "bigint" ||
-              (typeof value === "number" && Number.isFinite(value));
-          case "null": return value === null;
-          case "array": return Array.isArray(value);
-          case "object":
-            return value !== null && typeof value === "object" && !Array.isArray(value);
-          default: return typeof value === type;
-        }
-      });
-    },
-  });
-  for (const keyword of ["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"] as const) {
-    registry.addKeyword({
-      keyword: `lossless_${keyword}`,
-      schemaType: "number",
-      validate: (bound: number, value: unknown) => {
-        if (typeof value !== "bigint") return true;
-        switch (keyword) {
-          case "minimum": return value >= bound;
-          case "maximum": return value <= bound;
-          case "exclusiveMinimum": return value > bound;
-          case "exclusiveMaximum": return value < bound;
-        }
-      },
-    });
-  }
-  registry.addKeyword({
-    keyword: "lossless_multipleOf",
-    schemaType: "number",
-    validate: (divisor: number, value: unknown) => {
-      if (typeof value !== "bigint") return true;
-      // A finite decimal divisor p/q divides an integer iff integer*q % p is zero.
-      const [mantissa, exponent = "0"] = divisor.toString().split("e");
-      const [whole, fraction = ""] = mantissa!.split(".");
-      const coefficient = BigInt(whole! + fraction);
-      const scale = fraction.length - Number(exponent);
-      return scale >= 0
-        ? (value * 10n ** BigInt(scale)) % coefficient === 0n
-        : value % (coefficient * 10n ** BigInt(-scale)) === 0n;
-    },
-  });
+  addCanonicalKeywords(registry);
   for (const schema of schemas) registry.addSchema(canonicalSchema(schema) as object);
 }
 
-export function canonicalSchema(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalSchema);
-  if (value === null || typeof value !== "object") return value;
-  const result: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value)) {
-    if (key === "type" && (child === "integer" || child === "number" ||
-        (Array.isArray(child) && (child.includes("integer") || child.includes("number"))))) {
-      result.losslessType = child;
-    } else {
-      // These keywords contain instance values, not child schemas.
-      result[key] = ["const", "enum", "default", "examples"].includes(key)
-        ? child
-        : canonicalSchema(child);
-      if (["minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf"].includes(key) && typeof child === "number") {
-        result[`lossless_${key}`] = child;
-      }
-    }
-  }
-  return result;
-}
+export { canonicalSchema };

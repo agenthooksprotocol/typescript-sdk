@@ -33,7 +33,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "node scripts/compile-validators.mjs && tsc -p tsconfig.json"
   },
   "dependencies": {
     "@sinclair/typebox": "0.34.49",

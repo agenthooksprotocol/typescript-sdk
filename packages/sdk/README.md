@@ -260,6 +260,30 @@ cycles, accessors, and non-JSON properties are rejected. Generated model aliases
 are static types; constructors and helpers do not claim runtime validation or
 authorization. Native untyped decoding is outside this contract.
 
+## Restricted runtimes
+
+The client runs where code generation is refused (`eval`, `new Function`) and
+Node is absent, such as a sandboxed plugin host. Canonical validators are
+precompiled at build time (`scripts/compile-validators.mjs`) into modules under
+512 KiB each; caller contracts fall back to TypeBox's interpreter when the
+runtime refuses generated code. A host without Node supplies its own I/O:
+
+```ts
+const hooks = new Hooks(config, {
+  source: "urn:example:sandboxed-agent",
+  harness: { name: "sandboxed-agent", version: "1.0.0" },
+  capabilities,
+  fetch: hostFetch,            // any WHATWG-compatible fetch
+  spawn: (request) => launch(request), // StdioProcess for stdio backends
+  environment: {},             // the base environment stdio backends draw from
+});
+```
+
+`spawn` receives `{ command, args, cwd?, env }`, with `env` already the complete
+environment the backend should see, and returns a `StdioProcess`
+(`write(data, end, callback)`, `onStdout`, `onError`, `onClose`, `kill`).
+The default launcher, `nodeSpawn`, uses `node:child_process`.
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).

@@ -1,6 +1,7 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { fullFormats } from 'ajv-formats/dist/formats.js';
-import type { Static, TSchema } from '@sinclair/typebox';
+import { FormatRegistry, type Static, type TSchema } from '@sinclair/typebox';
+import { Check } from '@sinclair/typebox/value';
 import { assertJsonValue } from '../validation.js';
 import type { BoundaryResult, EventInput } from './types.js';
 import type { Event, Candidate, InterceptRequest, ToolBeforeEvent } from '../draft/raw.js';
@@ -15,9 +16,7 @@ export interface Codec<T> {
 /** One runtime schema infers T and performs non-coercing declared validation.
  * An optional invariant runs on every complete staged value, never on patches. */
 export function contract<S extends TSchema>(schema: S, invariant?: (value: Static<S>) => void): Codec<Static<S>> {
-  const ajv = new Ajv2020({ strict: true, allErrors: true, ownProperties: true });
-  for (const [name, format] of Object.entries(fullFormats)) ajv.addFormat(name, format);
-  const validate = ajv.compile(JSON.parse(JSON.stringify(schema)));
+  const validate = compileContract(schema);
   return {
     decode(value) {
       assertJsonValue(value);
@@ -29,6 +28,32 @@ export function contract<S extends TSchema>(schema: S, invariant?: (value: Stati
     },
     encode(value) { return value; },
   };
+}
+
+/** Compile with Ajv where the runtime generates code; where it refuses (an
+ * isolate without `new Function`), interpret the TypeBox schema instead. */
+function compileContract(schema: TSchema): (value: unknown) => boolean {
+  try {
+    const ajv = new Ajv2020({ strict: true, allErrors: true, ownProperties: true });
+    for (const [name, format] of Object.entries(fullFormats)) ajv.addFormat(name, format);
+    return ajv.compile(JSON.parse(JSON.stringify(schema)));
+  } catch (error) {
+    if (!(error instanceof EvalError)) throw error;
+  }
+  registerFormats();
+  return (value) => Check(schema, value);
+}
+
+let formatsRegistered = false;
+function registerFormats(): void {
+  if (formatsRegistered) return;
+  formatsRegistered = true;
+  for (const [name, format] of Object.entries(fullFormats)) {
+    if (FormatRegistry.Has(name)) continue;
+    const check = typeof format === 'object' && !(format instanceof RegExp) ? format.validate : format;
+    if (check instanceof RegExp) FormatRegistry.Set(name, (value) => check.test(value));
+    else if (typeof check === 'function') FormatRegistry.Set(name, (value) => (check as (value: string) => boolean)(value));
+  }
 }
 
 function sameJson(a: unknown, b: unknown): boolean {

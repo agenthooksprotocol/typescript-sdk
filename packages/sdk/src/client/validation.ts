@@ -7,24 +7,11 @@ export function isEventType(value: unknown): value is EventType {
     typeof event === "string" && !event.includes("*") && event === value);
 }
 
-import { Ajv2020 } from "ajv/dist/2020.js";
-import { fullFormats } from "ajv-formats/dist/formats.js";
-import { addCanonicalSchemas } from "../json.js";
+import { schemaValidator } from "../schema-validators.js";
 
-let registry: Ajv2020 | undefined;
 /** Validate against the checked-in canonical schema without coercion. */
 export function validateWire(name: string, value: unknown, fragment = ""): string[] {
-  if (!registry) {
-    registry = new Ajv2020({
-      allErrors: true,
-      strict: false,
-      ownProperties: true,
-    });
-    registry.addFormat("uri", fullFormats.uri);
-    registry.addFormat("date-time", fullFormats["date-time"]);
-    addCanonicalSchemas(registry);
-  }
-  const validate = registry.getSchema(
+  const validate = schemaValidator(
     `https://agenthooksprotocol.org/schemas/draft/${name}.schema.json${fragment === "" ? "" : `#${fragment}`}`,
   );
   if (!validate) return ["Unknown protocol schema"];

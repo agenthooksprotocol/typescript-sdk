@@ -1,6 +1,6 @@
-import { Ajv2020 } from "ajv/dist/2020.js";
-import { fullFormats } from "ajv-formats/dist/formats.js";
-import { addCanonicalSchemas, canonicalSchema, parseJson, stringifyJson } from "../json.js";
+import { parseJson, stringifyJson } from "../json.js";
+import { satisfiesRequestedSchema } from "../form-answer.js";
+import { schemaValidator, validateSchema } from "../schema-validators.js";
 import { isEventType } from "./validation.js";
 import { Attachment } from "./content.js";
 import { mapParts } from "./content-paths.js";
@@ -74,21 +74,6 @@ function metadata(value: unknown): unknown {
   });
 }
 const base = "https://agenthooksprotocol.org/schemas/draft/";
-let registry: Ajv2020 | undefined;
-function validator() {
-  if (!registry) {
-    registry = new Ajv2020({
-      strict: false,
-      allErrors: true,
-      ownProperties: true,
-    });
-    registry.addFormat("uri", fullFormats.uri);
-    registry.addFormat("email", fullFormats.email);
-    registry.addFormat("date-time", fullFormats["date-time"]);
-    addCanonicalSchemas(registry);
-  }
-  return registry;
-}
 // Opaque JSON equality does not interpret nested keys as protocol containers.
 // Non-JSON host objects retain identity; native data is never traversed.
 function equalJson(a: unknown, b: unknown): boolean {
@@ -200,7 +185,7 @@ export interface CompositionOptions {
 function validateEffectiveEvent(event: ClientEvent): void {
   const eventSchema = event.type === "tool.before" ? "tool-before"
     : event.type === "tool.after" ? "tool-after" : "catalogue-event";
-  if (!validator().validate(`${base}${eventSchema}.schema.json`, metadata(event)))
+  if (!validateSchema(`${base}${eventSchema}.schema.json`, metadata(event)))
     throw new Error("Invalid effective event payload");
 }
 function compose(
@@ -213,8 +198,7 @@ function compose(
   previousState?: InterceptRequest["params"]["state"],
 ): CompositionResult {
   const decoded = decodeResponse(event, response);
-  const ajv = validator();
-  const boundary = ajv.getSchema(
+  const boundary = schemaValidator(
     `${base}capabilities.schema.json#/$defs/${event.type}`,
   );
   if (!boundary || !boundary(capabilities))
@@ -468,7 +452,6 @@ export async function composeResponseAsync(
     value.selection === "body" &&
     typeof value.text === "string" &&
     value.gap === undefined;
-  const ajv = validator();
   const readJson = async (item: unknown): Promise<ObjectValue> => {
     if (
       !object(item) ||
@@ -542,7 +525,7 @@ export async function composeResponseAsync(
       throw new Error("Unsupported elicitation mode");
     elicitationRequest = await readJson(requestMeta.request);
     if (
-      !ajv.validate(
+      !validateSchema(
         `${base}mcp-elicitation.schema.json#/$defs/request`,
         elicitationRequest,
       ) ||
@@ -562,12 +545,12 @@ export async function composeResponseAsync(
       (name, value: unknown) => {
         if (name === "form-answer") {
           const pair = value as { schema: ObjectValue; value: unknown };
-          // The pinned request schema restricts the vocabulary before compilation.
+          // The pinned request schema restricts the vocabulary before validation.
           // No defaults, coercion, or unknown-field stripping can change answers.
-          if (!ajv.compile(canonicalSchema(pair.schema) as object)(pair.value))
+          if (!satisfiesRequestedSchema(pair.schema, pair.value))
             throw new Error("Answer does not satisfy requestedSchema");
         } else if (
-          !ajv.validate(
+          !validateSchema(
             `${base}mcp-elicitation.schema.json#/$defs/result`,
             value,
           )

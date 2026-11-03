@@ -1,4 +1,3 @@
-import { validateHeaderName, validateHeaderValue } from "node:http";
 import { HookOperationalError } from "../errors.js";
 import { auth, type AuthContext, type AuthProvider } from "./auth.js";
 
@@ -23,9 +22,13 @@ function failed(): never {
     "HTTP registration header resolution failed",
   );
 }
+// RFC 9110 field-name token and field-value octets, as node:http validates them.
+const FIELD_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const FIELD_VALUE = /^[\t\x20-\x7e\x80-\xff]*$/;
 function validate(name: string, value: string): void {
-  validateHeaderName(name);
-  validateHeaderValue(name, value);
+  if (!FIELD_NAME.test(name)) throw new TypeError("Invalid HTTP header name");
+  if (typeof value !== "string" || !FIELD_VALUE.test(value))
+    throw new TypeError("Invalid HTTP header value");
   new Headers({ [name]: value });
 }
 export function validateHeaders(input: unknown): readonly HeaderEntry[] {
