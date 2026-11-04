@@ -257,67 +257,43 @@ test("HTTP discovery and interception cross the real client/server transport", a
 const upload = (authentication) => ({ endpoint: "https://upload.test/media", timeoutMs: 1000, maxBytes: 100,
   ...(authentication === undefined ? {} : { auth: authentication }),
 });
+const oauth = { type: "oauth", issuer: "https://issuer.test", resource: "https://upload.test", clientId: "private", flow: "client_credentials" };
+
 for (const [kind, binding] of [
-  ["environment", { type: "bearer", tokenEnv: "PRIVATE_ENV" }],
-  ["reference", { type: "bearer", tokenRef: "private/secret" }],
-  ["oauth", { type: "oauth", issuer: "https://issuer.test", resource: "https://upload.test", clientId: "private", flow: "client_credentials", clientSecretRef: "private/oauth" }],
-  ["header-only", undefined],
+  ["tokenEnv", { type: "bearer", tokenEnv: "PRIVATE_TOKEN" }],
+  ["tokenRef", { type: "bearer", tokenRef: "private/secret" }],
+  ["clientSecretRef", { ...oauth, clientSecretRef: "private/secret" }],
 ]) {
-  test(`unapproved discovered ${kind} upload cannot resolve secrets or forward event headers`, async () => {
+  test(`discovered upload naming ${kind} skips the backend before anything is resolved`, async () => {
     const resolved = [];
     const calls = [];
-    const cfg = registration();
-    cfg.hooks[0].transport.headers = { Authorization: { valueRef: "event-header" } };
-    const client = new Hooks(cfg, { ...options(async (url, init) => {
+    const client = new Hooks(registration(), { ...options(async (url, init) => {
       calls.push(String(url));
-      assert.equal(String(url), "https://backend.test/hooks");
-      assert.equal(new Headers(init.headers).get("authorization"), "Bearer event-only");
       const message = JSON.parse(init.body);
       return Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "draft",
         configuration: { subscriptions: [{ ...selected(), upload: upload(binding) }] } } });
     }), auth: auth({
       resolveEnvironmentVariable(name) { resolved.push(name); throw Error("must not resolve environment"); },
-      resolveCredentialReference(name) { resolved.push(name); if (name === "event-header") return "Bearer event-only"; throw Error("must not resolve upload credentials"); },
+      resolveCredentialReference(name) { resolved.push(name); throw Error("must not resolve reference"); },
     }) });
     try {
       await client.initialized;
       assert.equal(client.subscribes(events.toolBefore), false);
       assert.deepEqual(calls, ["https://backend.test/hooks"]);
-      assert.deepEqual(resolved, ["event-header"]);
-      assert.equal(client.initializationDiagnostics[0].code, "CONFIGURATION_NOT_AUTHORIZED");
+      assert.deepEqual(resolved, []);
+      assert.equal(client.initializationDiagnostics[0].code, "CONFIGURATION_LOCAL_SECRET");
     } finally { await client.close(); }
   });
 }
 
-for (const decision of [false, "throw"]) {
-  test(`upload authorization ${decision} skips the complete backend`, async () => {
-    const cfg = { subscriptions: [{ ...selected(), upload: upload() }] };
-    const client = new Hooks(registration(), { ...options(async (_url, init) => {
-      const message = JSON.parse(init.body);
-      return Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "draft", configuration: cfg } });
-    }), authorizeDiscoveredConfiguration(configuration, context) {
-      assert.deepEqual(configuration, cfg);
-      assert.equal(context.backendId, "test.backend");
-      if (decision === "throw") throw Error("private denial reason");
-      return false;
-    } });
-    try {
-      await client.initialized;
-      assert.equal(client.intercepts(events.toolBefore), false);
-      assert.equal(client.initializationDiagnostics.length, 1);
-      assert.equal(JSON.stringify(client.initializationDiagnostics).includes("private"), false);
-    } finally { await client.close(); }
-  });
-}
-
-test("explicit approval authorizes the complete detached upload configuration without rewriting it", async () => {
+test("discovered upload is admitted, and configured backend headers apply to it", async () => {
   const cfg = registration();
-  cfg.hooks[0].transport.headers = { Authorization: "Bearer approved-forwarding" };
+  cfg.hooks[0].transport.headers = { Authorization: "Bearer configured" };
   const declaration = { subscriptions: [{ ...selected(), content: { default: "body" }, upload: upload() }] };
   const calls = [];
-  const client = new Hooks(cfg, { ...options(async (url, init) => {
+  const client = new Hooks(cfg, options(async (url, init) => {
     calls.push(String(url));
-    assert.equal(new Headers(init.headers).get("authorization"), "Bearer approved-forwarding");
+    assert.equal(new Headers(init.headers).get("authorization"), "Bearer configured");
     if (String(url) === "https://upload.test/media") {
       return Response.json({ ref: "uploaded:body", size: init.body.byteLength,
         sha256: createHash("sha256").update(init.body).digest("hex") }, { status: 201 });
@@ -325,14 +301,10 @@ test("explicit approval authorizes the complete detached upload configuration wi
     const message = JSON.parse(init.body);
     return Response.json({ jsonrpc: "2.0", id: message.id, result: message.method === "hooks/configuration"
       ? { protocolVersion: "draft", configuration: declaration } : { protocolVersion: "draft", effects: [] } });
-  }), authorizeDiscoveredConfiguration(configuration, context) {
-    assert.deepEqual(configuration, declaration);
-    assert.equal(context.backendId, "test.backend");
-    configuration.subscriptions[0].upload.endpoint = "https://mutation.test/not-authorized";
-    return true;
-  } });
+  }));
   try {
     await client.initialized;
+    assert.deepEqual(client.initializationDiagnostics, []);
     assert.equal(client.intercepts(events.toolBefore), true);
     const result = await client.toolBefore({ ...input, items: [{ id: "body", kind: "attachment", selection: "body",
       mediaType: "application/octet-stream", body: Attachment.bytes(new Uint8Array([1, 2, 3])) }] });
@@ -341,30 +313,22 @@ test("explicit approval authorizes the complete detached upload configuration wi
   } finally { await client.close(); }
 });
 
-test("upload approval is bounded by the initialization deadline", async () => {
-  let signal;
-  const client = new Hooks(registration(), { ...options(async (_url, init) => {
+test("discovered upload with OAuth and no client secret reference is admitted", async () => {
+  const client = new Hooks(registration(), options(async (_url, init) => {
     const message = JSON.parse(init.body);
     return Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "draft",
-      configuration: { subscriptions: [{ ...selected(), upload: upload() }] } } });
-  }), configurationTimeoutMs: 30,
-  authorizeDiscoveredConfiguration(_configuration, context) {
-    signal = context.signal;
-    return new Promise(() => {});
-  } });
+      configuration: { subscriptions: [{ ...selected(), upload: upload(oauth) }] } } });
+  }));
   try {
     await client.initialized;
-    assert.equal(signal.aborted, true);
-    assert.equal(client.intercepts(events.toolBefore), false);
-    assert.equal(client.initializationDiagnostics[0].code, "CONFIGURATION_UNAVAILABLE");
+    assert.deepEqual(client.initializationDiagnostics, []);
+    assert.equal(client.intercepts(events.toolBefore), true);
   } finally { await client.close(); }
 });
 
-test("explicit local upload configuration does not invoke discovery authorization", async () => {
-  const client = new Hooks(registration([{ ...selected(), upload: upload({ type: "bearer", tokenRef: "local" }) }]), {
-    ...options(async () => { throw Error("initialization must not fetch"); }),
-    authorizeDiscoveredConfiguration() { throw Error("must not authorize local configuration"); },
-  });
+test("explicit local upload configuration may name local secrets", async () => {
+  const client = new Hooks(registration([{ ...selected(), upload: upload({ type: "bearer", tokenRef: "local" }) }]),
+    options(async () => { throw Error("initialization must not fetch"); }));
   try {
     await client.initialized;
     assert.equal(client.intercepts(events.toolBefore), true);
