@@ -9,6 +9,7 @@ import type {
   DeliveryDiagnosticCode,
 } from "../draft/raw.js";
 import type { Attachment, AttachmentContent } from "./content.js";
+import type { StdioSpawn } from "./transport.js";
 import type { BoundaryContracts } from "./contracts.js";
 import type {
   Capabilities,
@@ -90,6 +91,12 @@ export interface HooksOptions {
    * base environment (PATH, HOME, locale, temp dirs, ...). Registration `env`
    * entries apply on top either way. Default false. */
   inheritEnvironment?: boolean;
+  /** Start stdio backends with this launcher instead of `node:child_process`,
+   * for hosts that run without Node (a sandboxed plugin runtime, say). */
+  spawn?: StdioSpawn;
+  /** The host environment stdio backends draw their base environment from.
+   * Default `process.env`. */
+  environment?: Readonly<Record<string, string | undefined>>;
 }
 export interface BoundaryOptions<Arguments = unknown, Result = unknown, P = unknown> {
   /** Optional caller contracts run during admission, before any publication. */

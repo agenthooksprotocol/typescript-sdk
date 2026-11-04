@@ -1,8 +1,6 @@
 /** Canonical draft validation and synthetic, request-capability-gated runtime slices. */
-import { Ajv2020 } from "ajv/dist/2020.js";
-import type { ValidateFunction } from "ajv";
-import { fullFormats } from "ajv-formats/dist/formats.js";
-import { addCanonicalSchemas, parseJson } from "../json.js";
+import { parseJson } from "../json.js";
+import { schemaValidator, type SchemaValidator } from "../schema-validators.js";
 import {
   parseEffect as decodeEffect,
   parseInterceptRequest as decodeRequest,
@@ -451,23 +449,11 @@ export type DraftValidationResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly errors: readonly string[] };
 
-// Initialize canonical validation only when used; the narrow root runner does not
-// pay catalogue compilation costs while starting a short-lived stdio backend.
-let registry: Ajv2020 | undefined;
+// Precompiled canonical validators: no coercion, default insertion, removal of
+// unknown fields, or partial acceptance, and no code generation at run time.
 const base = "https://agenthooksprotocol.org/schemas/draft/";
-function validator(name: string): ValidateFunction {
-  if (registry === undefined) {
-    // No coercion, default insertion, removal of unknown fields, or partial acceptance.
-    registry = new Ajv2020({
-      allErrors: true,
-      strict: false,
-      ownProperties: true,
-    });
-    registry.addFormat("uri", fullFormats.uri);
-    registry.addFormat("date-time", fullFormats["date-time"]);
-    addCanonicalSchemas(registry);
-  }
-  return registry.getSchema(base + name + ".schema.json")!;
+function validator(name: string): SchemaValidator {
+  return schemaValidator(base + name + ".schema.json")!;
 }
 
 // JSON Schema operates on JSON, not arbitrary JS objects (NaN, undefined, cycles, etc.).
@@ -503,7 +489,7 @@ function isJson(value: unknown, ancestors = new Set<object>()): boolean {
 
 function validate<T>(
   value: unknown,
-  canonical: ValidateFunction,
+  canonical: SchemaValidator,
   decode: (value: unknown) => ParseResult<T>,
 ): DraftValidationResult<T> {
   try {

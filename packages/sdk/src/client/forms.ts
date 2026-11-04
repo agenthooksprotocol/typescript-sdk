@@ -1,5 +1,4 @@
 import type { Static, TObject, TSchema } from "@sinclair/typebox";
-import { Ajv2020 } from "ajv/dist/2020.js";
 import { schemas } from "../draft/schemas.js";
 import type {
   McpElicitationElicitRequestFormParams,
@@ -7,7 +6,7 @@ import type {
   ElicitResult,
   McpElicitationPrimitiveSchemaDefinition,
 } from "../draft/raw.js";
-import { addCanonicalSchemas } from "../json.js";
+import { errorsText, schemaValidator } from "../schema-validators.js";
 import { contract, decodeContract, freezeContractValue, type Codec } from "./contracts.js";
 
 /** Canonical MCP envelope, with a typed answer only when content is present.
@@ -28,13 +27,11 @@ export interface Form<S extends TObject> {
   decode(result: unknown, mode?: "form" | "url"): FormResult<Static<S>>;
 }
 
-const canonical = new Ajv2020({ allErrors: true, strict: false, ownProperties: true });
 const mcpId = "https://agenthooksprotocol.org/schemas/draft/mcp-elicitation.schema.json";
 const mcpSchema = schemas.find((schema) => schema.$id === mcpId);
 if (!mcpSchema) throw new Error("Missing canonical MCP elicitation schema");
-addCanonicalSchemas(canonical);
-const validateRequest = canonical.compile({ $ref: `${mcpId}#/$defs/ElicitRequestFormParams` });
-const validateResult = canonical.compile({ $ref: `${mcpId}#/$defs/ElicitResult` });
+const validateRequest = schemaValidator(`${mcpId}#/$defs/ElicitRequestFormParams`)!;
+const validateResult = schemaValidator(`${mcpId}#/$defs/ElicitResult`)!;
 const metadata = ["title", "description", "default"];
 
 function keywords(schema: TSchema, allowed: string[], path: string): void {
@@ -113,14 +110,14 @@ export function form<S extends TObject>(schema: S, validate?: (value: Static<S>)
     ...(schema.required === undefined ? {} : { required: [...schema.required] }),
   };
   if (!validateRequest({ message: "", mode: "form", requestedSchema })) {
-    throw new Error(`Invalid MCP form schema: ${canonical.errorsText(validateRequest.errors)}`);
+    throw new Error(`Invalid MCP form schema: ${errorsText(validateRequest.errors)}`);
   }
   // Keep the declaration and derived advertisement correlated without freezing
   // or mutating the caller's TypeBox schema (defaults may contain arrays).
   const advertisement = freezeContractValue(structuredClone(requestedSchema));
   const answer = contract(schema, validate);
   const decode = (value: unknown, mode: "form" | "url" = "form"): FormResult<Static<S>> => {
-    if (!validateResult(value)) throw new Error(`Invalid MCP elicitation result: ${canonical.errorsText(validateResult.errors)}`);
+    if (!validateResult(value)) throw new Error(`Invalid MCP elicitation result: ${errorsText(validateResult.errors)}`);
     const result = value as McpElicitationElicitResult;
     if (Object.hasOwn(result, "content") && (mode === "url" || result.action !== "accept")) {
       throw new Error("Only accepted form results can contain content");

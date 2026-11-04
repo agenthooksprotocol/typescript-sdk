@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn } from "node:child_process";
 import { channel } from "node:diagnostics_channel";
 import type {
   Backend,
@@ -20,14 +20,82 @@ type Pending = {
   response?: unknown;
 };
 type ProcessState = {
-  child: ChildProcessWithoutNullStreams;
+  child: StdioProcess;
   closed: Promise<void>;
   pending: Map<unknown, Pending>;
   stopped: boolean;
 };
 
+/** One started stdio backend, as the transport drives it. */
+export interface StdioProcess {
+  /** Write one frame to standard input; `end` closes it after the frame. */
+  write(data: string, end: boolean, callback: (error?: Error | null) => void): void;
+  /** Receive standard output in pieces, in order. */
+  onStdout(listener: (chunk: Uint8Array) => void): void;
+  /** Receive a failure to start, write or read. */
+  onError(listener: (error: unknown) => void): void;
+  /** Receive the exit status (null when a signal ended it), once output ends. */
+  onClose(listener: (code: number | null) => void): void;
+  /** Kill the process and release its pipes; idempotent. */
+  kill(): void;
+}
+
+/** What a {@link StdioSpawn} starts: argv, working directory and the complete
+ * environment the backend receives (no further inheritance). */
+export interface StdioSpawnRequest {
+  command: string;
+  args: readonly string[];
+  cwd?: string;
+  env: Record<string, string>;
+}
+
+/** Start a stdio backend. The default uses `node:child_process`; hosts without
+ * Node (sandboxed plugin runtimes) supply their own process launcher. */
+export type StdioSpawn = (request: StdioSpawnRequest) => StdioProcess;
+
+/** The Node.js launcher: no shell, piped standard streams, stderr drained. */
+export const nodeSpawn: StdioSpawn = (request) => {
+  const child = spawn(request.command, [...request.args], {
+    cwd: request.cwd,
+    env: request.env,
+    shell: false,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  child.stderr.resume();
+  return {
+    write(data, end, callback) {
+      if (end) child.stdin.end(data, callback);
+      else child.stdin.write(data, callback);
+    },
+    onStdout(listener) {
+      child.stdout.on("data", listener);
+    },
+    onError(listener) {
+      child.on("error", listener);
+      child.stdin.on("error", listener);
+      child.stdout.on("error", listener);
+    },
+    onClose(listener) {
+      child.on("close", listener);
+    },
+    kill() {
+      child.kill("SIGKILL");
+      // Descendants can inherit these pipes even after the SDK child exits.
+      // Retire our handles so reaping does not wait for external descendants.
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+    },
+  };
+};
+
 /** SDK options for `BackendTransport`; not part of the protocol registration. */
 export interface BackendTransportOptions {
+  /** Start stdio backends with this launcher instead of `node:child_process`. */
+  spawn?: StdioSpawn;
+  /** The host environment stdio backends draw their base environment from.
+   * Default `process.env`; a host without one passes its own (or `{}`). */
+  environment?: Readonly<Record<string, string | undefined>>;
   /** Start stdio backends with the full host environment instead of the minimal
    * base environment. Registration `env` entries still apply on top. Default false. */
   inheritEnvironment?: boolean;
@@ -50,8 +118,8 @@ const WINDOWS_BASE_ENVIRONMENT = [
 export function backendEnvironment(
   env: Readonly<Record<string, string>> | undefined,
   inherit: boolean,
-  host: Readonly<Record<string, string | undefined>> = process.env,
-  platform: string = process.platform,
+  host: Readonly<Record<string, string | undefined>> = typeof process === "undefined" ? {} : process.env,
+  platform: string = typeof process === "undefined" ? "" : process.platform,
 ): Record<string, string> {
   const windows = platform === "win32";
   const fold = (name: string) => (windows ? name.toUpperCase() : name);
@@ -152,6 +220,8 @@ export class BackendTransport {
   readonly #headers: ReturnType<typeof validateHeaders>;
   readonly #headerSecrets: HeaderSecrets | undefined;
   readonly #inheritEnvironment: boolean;
+  readonly #spawn: StdioSpawn;
+  readonly #environment: Readonly<Record<string, string | undefined>> | undefined;
   readonly #controllers = new Set<AbortController>();
   readonly #processes = new Set<ProcessState>();
   #process: ProcessState | undefined;
@@ -184,6 +254,8 @@ export class BackendTransport {
     this.#transport = (transport.type === "http" ? { ...transport } : transport) as StdioTransport | HttpTransport;
     this.#fetcher = fetcher;
     this.#inheritEnvironment = options.inheritEnvironment === true;
+    this.#spawn = options.spawn ?? nodeSpawn;
+    this.#environment = options.environment;
   }
 
   request(message: any, signal?: AbortSignal): Promise<unknown> {
@@ -344,11 +416,12 @@ export class BackendTransport {
 
   #start(): ProcessState {
     const transport = this.#transport as StdioTransport;
-    const child = spawn(transport.command, transport.args ?? [], {
-      cwd: transport.cwd,
-      env: backendEnvironment(transport.env, this.#inheritEnvironment),
-      shell: false,
-      stdio: ["pipe", "pipe", "pipe"],
+    const decoder = new NdjsonDecoder();
+    const child = this.#spawn({
+      command: transport.command,
+      args: transport.args ?? [],
+      ...(transport.cwd === undefined ? {} : { cwd: transport.cwd }),
+      env: backendEnvironment(transport.env, this.#inheritEnvironment, this.#environment),
     });
     let onClose!: () => void;
     const state: ProcessState = {
@@ -359,16 +432,12 @@ export class BackendTransport {
         onClose = resolve;
       }),
     };
-    const decoder = new NdjsonDecoder();
     const fail = (error: unknown) => {
       for (const pending of state.pending.values()) pending.reject(error);
       state.pending.clear();
       this.#stop(state);
     };
-    child.stderr.resume();
-    child.on("error", fail);
-    child.stdin.on("error", fail);
-    child.stdout.on("error", fail);
+    child.onError(fail);
     const persistent = transport.lifecycle === "persistent";
     // A persistent backend survives isolated bad frames; per-event output must be exact.
     const budget = persistent ? MALFORMED_FRAME_BUDGET : 1;
@@ -428,7 +497,7 @@ export class BackendTransport {
         malformed(error);
       }
     };
-    child.stdout.on("data", (chunk: Uint8Array) => {
+    child.onStdout((chunk: Uint8Array) => {
       // Feed one line at a time so a bad frame cannot discard its neighbours.
       for (let start = 0; start < chunk.length && !state.stopped; ) {
         const newline = chunk.indexOf(0x0a, start);
@@ -445,7 +514,7 @@ export class BackendTransport {
         start = end;
       }
     });
-    child.on("close", (code: number | null) => {
+    child.onClose((code: number | null) => {
       try {
         decoder.end();
         for (const pending of state.pending.values()) {
@@ -476,12 +545,7 @@ export class BackendTransport {
     if (!state.stopped) {
       state.stopped = true;
       // Do not let an uncooperative backend retain owned processes after cancellation.
-      state.child.kill("SIGKILL");
-      // Descendants can inherit these pipes even after the SDK child exits.
-      // Retire our handles so reaping does not wait for external descendants.
-      state.child.stdin.destroy();
-      state.child.stdout.destroy();
-      state.child.stderr.destroy();
+      state.child.kill();
     }
   }
 
@@ -528,8 +592,7 @@ export class BackendTransport {
           if (error) fail(error);
           else if (notification && !perEvent) finish(undefined);
         };
-        if (perEvent) state.child.stdin.end(wire, written);
-        else state.child.stdin.write(wire, written);
+        state.child.write(wire, perEvent, written);
       });
     } catch (error) {
       this.#stop(state);

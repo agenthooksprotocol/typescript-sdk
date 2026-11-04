@@ -10,7 +10,6 @@ import {
 import type { BoundaryContracts, Codec } from "./contracts.js";
 import { decodeSettledEvent, decodeSettledState, SettlementDecodeError } from "./settlement.js";
 import { HookOperationalError } from "../errors.js";
-import { randomUUID } from "node:crypto";
 import type {
   Authentication,
   ContentUpload,
@@ -341,6 +340,8 @@ export class Hooks {
         ),
         {
           inheritEnvironment: this.options.inheritEnvironment === true,
+          ...(this.options.spawn ? { spawn: this.options.spawn } : {}),
+          ...(this.options.environment ? { environment: this.options.environment } : {}),
         },
       );
       const group: Route[] = [];
@@ -364,7 +365,7 @@ export class Hooks {
     let retained = false;
     try {
       const response = await transport.request({
-        jsonrpc: "2.0", id: randomUUID(), method: "hooks/configuration",
+        jsonrpc: "2.0", id: crypto.randomUUID(), method: "hooks/configuration",
         params: { protocolVersion: PROTOCOL_VERSION },
       }, budget.signal);
       budget.check();
@@ -530,7 +531,7 @@ export class Hooks {
     const exchange: ElicitationLifetime | undefined =
       type === "user.elicitation.request"
         ? {
-            id: input.id === undefined ? randomUUID() : input.id,
+            id: input.id === undefined ? crypto.randomUUID() : input.id,
             sessionId: (input as any).session?.id,
             retired: false,
           }
@@ -605,7 +606,7 @@ export class Hooks {
       type,
       source: this.options.source,
       harness: structuredClone(this.options.harness),
-      id: exchange?.id ?? (input.id === undefined ? randomUUID() : input.id),
+      id: exchange?.id ?? (input.id === undefined ? crypto.randomUUID() : input.id),
       time: input.time === undefined ? new Date().toISOString() : input.time,
     });
     bindContentSources(type, event, options.contentSources);
