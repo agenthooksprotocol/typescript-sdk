@@ -4,11 +4,14 @@ const MAX_LINE_BYTES = 1024 * 1024;
 
 /** Incremental, strict UTF-8 NDJSON decoder. Empty lines are not frames. */
 export class NdjsonDecoder {
-  #buffer = Buffer.alloc(0);
+  #buffer: Uint8Array = new Uint8Array(0);
   readonly #decoder = new TextDecoder("utf-8", { fatal: true });
 
   push(chunk: Uint8Array): string[] {
-    this.#buffer = Buffer.concat([this.#buffer, chunk]);
+    const joined = new Uint8Array(this.#buffer.length + chunk.length);
+    joined.set(this.#buffer);
+    joined.set(chunk, this.#buffer.length);
+    this.#buffer = joined;
     if (this.#buffer.length > MAX_LINE_BYTES && !this.#buffer.includes(0x0a)) {
       throw new HookOperationalError(
         "MALFORMED_JSON_RPC",

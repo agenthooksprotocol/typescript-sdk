@@ -5,9 +5,7 @@ import { fileURLToPath } from "node:url";
 import {
   Hooks,
   Permission,
-  contract,
   state,
-  Type,
 } from "agenthooksprotocol/client";
 
 const client = new URL("../dist/src/client/index.js", import.meta.url).href;
@@ -75,9 +73,77 @@ test("contracts validate without generated code where the runtime refuses it", (
 });
 
 test("contracts behave the same compiled and interpreted", () => {
-  const codec = contract(Type.Object({ path: Type.String({ minLength: 1 }) }));
-  assert.deepEqual(codec.decode({ path: "README.md" }), { path: "README.md" });
-  assert.throws(() => codec.decode({ path: "" }));
+  const script = `
+    const { contract, Type } = await import(${JSON.stringify(client)});
+    const schemas = [
+      Type.String({ maxLength: 1 }),
+      Type.String({ minLength: 2 }),
+      Type.String({ pattern: "^.$" }),
+      Type.String({ format: "email" }),
+      Type.String({ format: "uri", maxLength: 3 }),
+      Type.Object({ list: Type.Array(Type.String({ maxLength: 1 })) }),
+      Type.Union([Type.Number(), Type.String({ maxLength: 1 })]),
+      Type.Optional(Type.String({ minLength: 2 })),
+    ];
+    const values = ["😀", "ab", "a@b.co", { list: ["😀"] }, { list: ["ab"] }, 1, null];
+    console.log(JSON.stringify(schemas.map((schema) => {
+      const codec = contract(schema);
+      return values.map((value) => {
+        try { codec.decode(value); return true; } catch { return false; }
+      });
+    })));
+  `;
+  const run = (...flags) => {
+    const result = spawnSync(process.execPath, [...flags, "--input-type=module", "-e", script],
+      { encoding: "utf8", cwd: fileURLToPath(new URL("..", import.meta.url)) });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  const compiled = run();
+  assert.deepEqual(compiled[0].slice(0, 2), [true, false]);
+  assert.deepEqual(compiled[1].slice(0, 2), [false, true]);
+  assert.deepEqual(run("--disallow-code-generation-from-strings"), compiled);
+});
+
+test("stdio runs through an injected launcher without Buffer", () => {
+  const script = `
+    const { BackendTransport } = await import(${JSON.stringify(new URL("../dist/src/client/transport.js", import.meta.url).href)});
+    delete globalThis.Buffer;
+    let killed = 0;
+    const transport = new BackendTransport(
+      { id: "org.example.stdio", transport: { type: "stdio", command: "policy", lifecycle: "per_event" } },
+      async () => { throw new Error("no fetch"); },
+      { environment: {}, spawn() {
+        const listeners = { stdout: [], close: [] };
+        return {
+          write(data, end, callback) {
+            callback();
+            const { id } = JSON.parse(data);
+            const reply = JSON.stringify({ jsonrpc: "2.0", id, result: { text: "😀" } }) + "\\n";
+            const bytes = new TextEncoder().encode(reply);
+            queueMicrotask(() => {
+              // Split inside the multi-byte character: frames span chunks.
+              for (const listener of listeners.stdout) {
+                listener(bytes.subarray(0, reply.indexOf("😀") + 1));
+                listener(bytes.subarray(reply.indexOf("😀") + 1));
+              }
+              for (const listener of listeners.close) listener(0);
+            });
+          },
+          onStdout: (listener) => listeners.stdout.push(listener),
+          onError() {},
+          onClose: (listener) => listeners.close.push(listener),
+          kill() { killed++; },
+        };
+      } },
+    );
+    const response = await transport.request({ jsonrpc: "2.0", id: "1", method: "hooks/intercept", params: {} });
+    await transport.close();
+    if (response.result.text !== "😀") throw new Error("frame was not decoded");
+  `;
+  const run = spawnSync(process.execPath, ["--input-type=module", "-e", script],
+    { encoding: "utf8", cwd: fileURLToPath(new URL("..", import.meta.url)) });
+  assert.equal(run.status, 0, run.stderr);
 });
 
 test("an injected spawner runs per_event stdio backends", async () => {

@@ -1,6 +1,6 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import { fullFormats } from 'ajv-formats/dist/formats.js';
-import { FormatRegistry, type Static, type TSchema } from '@sinclair/typebox';
+import { FormatRegistry, Kind, TypeRegistry, type Static, type TSchema } from '@sinclair/typebox';
 import { Check } from '@sinclair/typebox/value';
 import { assertJsonValue } from '../validation.js';
 import type { BoundaryResult, EventInput } from './types.js';
@@ -41,13 +41,38 @@ function compileContract(schema: TSchema): (value: unknown) => boolean {
     if (!(error instanceof EvalError)) throw error;
   }
   registerFormats();
-  return (value) => Check(schema, value);
+  const interpreted = jsonSchemaStrings(schema);
+  return (value) => Check(interpreted, value);
+}
+
+// TypeBox's interpreter counts UTF-16 units and compiles patterns without `u`;
+// JSON Schema, and so Ajv, counts code points and matches Unicode.
+const JSON_SCHEMA_STRING = 'AgentHooksProtocol:JsonSchemaString';
+
+function jsonSchemaStrings<T>(node: T): T {
+  if (Array.isArray(node)) return node.map(jsonSchemaStrings) as T;
+  if (node === null || typeof node !== 'object') return node;
+  const copy: Record<string | symbol, unknown> = {};
+  for (const key of Reflect.ownKeys(node)) copy[key] = jsonSchemaStrings((node as Record<string | symbol, unknown>)[key]);
+  if (copy[Kind] === 'String') copy[Kind] = JSON_SCHEMA_STRING;
+  return copy as T;
+}
+
+function satisfiesJsonSchemaString(schema: Record<string, unknown>, value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const length = [...value].length;
+  if (typeof schema.minLength === 'number' && length < schema.minLength) return false;
+  if (typeof schema.maxLength === 'number' && length > schema.maxLength) return false;
+  if (typeof schema.pattern === 'string' && !new RegExp(schema.pattern, 'u').test(value)) return false;
+  if (typeof schema.format !== 'string') return true;
+  return FormatRegistry.Get(schema.format)?.(value) === true;
 }
 
 let formatsRegistered = false;
 function registerFormats(): void {
   if (formatsRegistered) return;
   formatsRegistered = true;
+  TypeRegistry.Set(JSON_SCHEMA_STRING, satisfiesJsonSchemaString);
   for (const [name, format] of Object.entries(fullFormats)) {
     if (FormatRegistry.Has(name)) continue;
     const check = typeof format === 'object' && !(format instanceof RegExp) ? format.validate : format;

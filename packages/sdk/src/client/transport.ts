@@ -416,6 +416,7 @@ export class BackendTransport {
 
   #start(): ProcessState {
     const transport = this.#transport as StdioTransport;
+    const decoder = new NdjsonDecoder();
     const child = this.#spawn({
       command: transport.command,
       args: transport.args ?? [],
@@ -431,7 +432,6 @@ export class BackendTransport {
         onClose = resolve;
       }),
     };
-    const decoder = new NdjsonDecoder();
     const fail = (error: unknown) => {
       for (const pending of state.pending.values()) pending.reject(error);
       state.pending.clear();
