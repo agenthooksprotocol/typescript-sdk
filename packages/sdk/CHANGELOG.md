@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.10.1...agenthooksprotocol-v0.11.0) (2026-11-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* admit discovered uploads without an approval callback ([#47](https://github.com/agenthooksprotocol/typescript-sdk/issues/47))
+
+### Features
+
+* admit discovered uploads without an approval callback ([#47](https://github.com/agenthooksprotocol/typescript-sdk/issues/47)) ([24477b0](https://github.com/agenthooksprotocol/typescript-sdk/commit/24477b0b38608bd38bbd53a7a98a6dc7e20b0f8f))
+* run the client without Node or run-time code generation ([#46](https://github.com/agenthooksprotocol/typescript-sdk/issues/46)) ([55bd12b](https://github.com/agenthooksprotocol/typescript-sdk/commit/55bd12bb6e5085292abaf30ac31b3facbe3872e0))
+
 ## [0.10.1](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.10.0...agenthooksprotocol-v0.10.1) (2026-10-24)
 
 
