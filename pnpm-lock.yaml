@@ -22,6 +22,15 @@ importers:
         specifier: workspace:*
         version: link:../testing
 
+  packages/oauth:
+    dependencies:
+      agenthooksprotocol:
+        specifier: workspace:*
+        version: link:../sdk
+      oauth4webapi:
+        specifier: 3.8.8
+        version: 3.8.8
+
   packages/sdk:
     dependencies:
       '@sinclair/typebox':
@@ -65,6 +74,9 @@ packages:
   json-schema-traverse@1.0.0:
     resolution: {integrity: sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==}
 
+  oauth4webapi@3.8.8:
+    resolution: {integrity: sha512-8N28E+a/oxfXWBgOMt+ZP/JUf/XR+IFbvkAEPP3gznXOMv9BpAAwiIj0TFNz3tGTPc0ZQ8zmWBNgN1nAys0gng==}
+
   require-from-string@2.0.2:
     resolution: {integrity: sha512-Xf0nWe6RseziFMu+Ap9biiUbmplq6S9/p+7w7YXP/JBHhrUDDUhwa+vANyubuqfZWTveU//DYVGsDG7RKL/vEw==}
     engines: {node: '>=0.10.0'}
@@ -94,6 +106,8 @@ snapshots:
   fast-uri@3.1.8: {}
 
   json-schema-traverse@1.0.0: {}
+
+  oauth4webapi@3.8.8: {}
 
   require-from-string@2.0.2: {}
 

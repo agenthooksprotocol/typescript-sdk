@@ -293,17 +293,14 @@ client secret through the existing `resolveCredentialReference` option. The host
 also owns secret resolution and policy. Composition creates no browser,
 listener, worker or file store, and does not introduce another OAuth engine.
 
-An optional library-backed managed OAuth package is **not shipped** here.
-`oauth4webapi` 3.8.8 exposes discovery, PKCE, authorization-response validation,
-both token grants, refresh and custom fetch hooks, with ESM/Node 20 metadata.
-API inspection is not runtime security parity. Migration is blocked on preserving
-MCP protected-resource discovery/fallback, RFC 9728 resource validation, exact
-issuer and local scope policy, RFC 8707 resource-bound exchange, and DNS/redirect
-policy at every network boundary. It also needs namespace-isolated structural
-stores, generation-aware stale rejection, coordinated refresh/login, transient
-refresh retention, and host-controlled prepare/complete interaction tests.
-Existing APIs remain until both flows, cancellation and redaction have parity;
-this router does not provide those managed lifecycle guarantees.
+For library-backed managed lifecycle support, the separate opt-in workspace
+package [`@agenthooksprotocol/oauth`](../oauth/README.md) provides host-driven
+`prepare`/`complete`/`cancel`, PKCE, client credentials and refresh using
+`oauth4webapi`. It requires host-enforced network policy, local client trust,
+namespaced storage with coordination/CAS, and explicit operation budgets.
+It preserves existing OAuth exports rather than replacing the core engine;
+ordinary SDK installs acquire no OAuth dependency. See that package for host
+security contracts, pending-login lifetime, storage and release boundaries.
 
 ## Structural decoding and effect-family queries
 

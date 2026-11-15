@@ -83,6 +83,31 @@ export function normalizeAuthTarget(context: DeliveryAuthContext): AuthTarget {
   });
 }
 
+/** OAuth scopes are a set; object insertion order is not binding identity. */
+function sameTarget(left: AuthTarget, right: AuthTarget): boolean {
+  if (left.backendId !== right.backendId || left.purpose !== right.purpose || left.url !== right.url || left.type !== right.type) return false;
+  if (left.type === "bearer" && right.type === "bearer") {
+    return left.source.type === right.source.type && (left.source.type === "environment"
+      ? right.source.type === "environment" && left.source.name === right.source.name
+      : right.source.type === "reference" && left.source.reference === right.source.reference);
+  }
+  if (left.type === "oauth" && right.type === "oauth") {
+    return left.issuer === right.issuer && left.resource === right.resource && left.clientId === right.clientId
+      && left.flow === right.flow && left.clientSecretRef === right.clientSecretRef
+      && new Set(left.scopes).size === new Set(right.scopes).size
+      && left.scopes.every((scope) => right.scopes.includes(scope));
+  }
+  return left.type === "discover";
+}
+
+function authenticationSnapshot(binding: DeliveryAuthContext["authentication"]): DeliveryAuthContext["authentication"] {
+  if (!binding) return undefined;
+  if (binding.type !== "oauth" || binding.scopes === undefined) return Object.freeze({ ...binding });
+  const scopes = [...binding.scopes];
+  Object.freeze(scopes);
+  return Object.freeze({ ...binding, scopes });
+}
+
 export interface AuthCompositionOptions {
   readonly bearer?: DeliveryAuthProvider;
   readonly oauth?: DeliveryAuthProvider;
@@ -122,9 +147,8 @@ export function composeAuth(options: AuthCompositionOptions, defaultBearer: Deli
   const attempts = new WeakMap<object, {
     provider: DeliveryAuthProvider;
     credential: DeliveryCredential;
-    backendId: string;
-    purpose: string;
-    url: string;
+    target: AuthTarget;
+    authentication: DeliveryAuthContext["authentication"];
   }>();
   function route(context: DeliveryAuthContext) {
     const target = normalizeAuthTarget(context);
@@ -143,11 +167,15 @@ export function composeAuth(options: AuthCompositionOptions, defaultBearer: Deli
         if (context.challenged || context.challenge !== undefined) throw new AuthError("unsupported_binding");
         return undefined;
       }
+      const authentication = authenticationSnapshot(context.authentication);
+      const { authentication: _authentication, ...rest } = context;
+      const originalContext = { ...rest, backendId: target.backendId, purpose: target.purpose, url: target.url,
+        ...(authentication ? { authentication } : {}) };
       return invoke(context, async () => {
-        const credential = await provider.credential(context);
+        const credential = await provider.credential(originalContext);
         if (!credential || credential.type !== "bearer" || typeof credential.token !== "string" || !credential.token || /[\r\n]/.test(credential.token)) throw new AuthError("credential_unavailable");
         const attempt = Object.freeze({});
-        attempts.set(attempt, { provider, credential, backendId: context.backendId, purpose: context.purpose, url: context.url });
+        attempts.set(attempt, { provider, credential, target, authentication });
         return { type: "bearer", token: credential.token, attempt };
       });
     },
@@ -156,8 +184,10 @@ export function composeAuth(options: AuthCompositionOptions, defaultBearer: Deli
       const attempt = context.credential?.attempt;
       const owner = typeof attempt === "object" && attempt !== null ? attempts.get(attempt) : undefined;
       if (context.credential) {
-        if (!owner || owner.backendId !== context.backendId || owner.purpose !== context.purpose || owner.url !== context.url) throw new AuthError("invalid_configuration");
-        await invoke(context, () => owner.provider.challenge({ ...context, credential: owner.credential }));
+        if (!owner || !sameTarget(owner.target, normalizeAuthTarget(context))) throw new AuthError("invalid_configuration");
+        const { authentication: _authentication, ...rest } = context;
+        await invoke(context, () => owner.provider.challenge({ ...rest,
+          ...(owner.authentication ? { authentication: owner.authentication } : {}), credential: owner.credential }));
       } else {
         const { provider } = route(context);
         if (provider) await invoke(context, () => provider.challenge(context));

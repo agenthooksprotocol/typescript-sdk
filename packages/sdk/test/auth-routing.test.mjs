@@ -159,7 +159,7 @@ test("stale-401: challenge restores original opaque attempt to its owning provid
   store.generation = 2;
   const latest = await routing.credential(context(oauth));
   assert.equal(latest.token, "generation-2");
-  await routing.challenge({ ...context(bearer), credential: old, response: new Response(null, { status: 401 }) });
+  await routing.challenge({ ...context(oauth), credential: old, response: new Response(null, { status: 401 }) });
   assert.deepEqual(store.invalidated, [], "stale rejection must not invalidate newer host state");
 });
 
@@ -174,6 +174,51 @@ test("purpose-isolation / destination-isolation: foreign attempt never reaches h
   await assert.rejects(routing.challenge({ ...context(), credential: { ...credential, attempt: {} },
     response: new Response(null, { status: 401 }) }), rejected("invalid_configuration"));
   assert.equal(challenges, 0);
+});
+
+test("binding-isolation: same destination cannot challenge a different authentication identity", async () => {
+  let challenges = 0;
+  const owner = provider(() => ({ type: "bearer", token: "token" }), () => challenges++);
+  const routing = auth.compose({ bearer: owner, oauth: owner, discover: owner });
+  for (const [original, alternatives] of [
+    [bearer, [{ type: "bearer", tokenRef: "vault/other" }, { type: "bearer", tokenEnv: "TOKEN" }, oauth, null]],
+    [oauth, [
+      { ...oauth, issuer: "https://other.example" }, { ...oauth, resource: "https://other.example" },
+      { ...oauth, clientId: "other" }, { ...oauth, clientSecretRef: "vault/secret" },
+      { ...oauth, flow: "authorization_code_pkce" }, { ...oauth, scopes: ["admin"] }, bearer,
+    ]],
+    [null, [bearer]],
+  ]) {
+    const credential = await routing.credential(context(original, { challenged: true }));
+    for (const changed of alternatives) {
+      await assert.rejects(routing.challenge({ ...context(changed), credential,
+        response: new Response(null, { status: 401 }) }), rejected("invalid_configuration"));
+    }
+  }
+  assert.equal(challenges, 0);
+});
+
+test("binding snapshot: reordered properties and scope sets match but restore immutable original binding", async () => {
+  const binding = { ...oauth, scopes: ["events", "read"] };
+  let received;
+  const routing = auth.compose({ oauth: provider((ctx) => {
+    received = ctx.authentication;
+    assert.ok(Object.isFrozen(received));
+    assert.ok(Object.isFrozen(received.scopes));
+    return { type: "bearer", token: "token" };
+  }, (ctx) => {
+    assert.equal(ctx.authentication, received);
+    assert.deepEqual(ctx.authentication.scopes, ["events", "read"]);
+    assert.equal(ctx.authentication.clientId, "host-client");
+  }) });
+  const credential = await routing.credential(context(binding));
+  binding.clientId = "mutated";
+  binding.scopes.push("admin");
+  await assert.rejects(routing.challenge({ ...context(binding), credential,
+    response: new Response(null, { status: 401 }) }), rejected("invalid_configuration"));
+  const equivalent = { scopes: ["read", "events", "read"], flow: oauth.flow,
+    clientId: oauth.clientId, resource: oauth.resource, issuer: oauth.issuer, type: "oauth" };
+  await routing.challenge({ ...context(equivalent), credential, response: new Response(null, { status: 401 }) });
 });
 
 test("unconfigured-challenge: real HTTP discovery starts only after no-binding 401", async () => {
