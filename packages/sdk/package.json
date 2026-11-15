@@ -23,6 +23,10 @@
       "types": "./dist/src/client/index.d.ts",
       "default": "./dist/src/client/index.js"
     },
+    "./client/auth": {
+      "types": "./dist/src/client/auth.d.ts",
+      "default": "./dist/src/client/auth.js"
+    },
     "./server": {
       "types": "./dist/src/server/index.d.ts",
       "default": "./dist/src/server/index.js"

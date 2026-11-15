@@ -1,4 +1,7 @@
 import type { Authentication } from "../draft/raw.js";
+import { AuthError, composeAuth, type AuthCompositionOptions } from "./auth-routing.js";
+export { AuthError, normalizeAuthTarget } from "./auth-routing.js";
+export type { AuthErrorCode, AuthRecovery, AuthTarget, AuthCompositionOptions } from "./auth-routing.js";
 
 export interface Credential {
   token: string;
@@ -806,7 +809,7 @@ const defaults: AuthProvider = {
         ),
         context.signal,
       );
-      if (!token) error("bearer credential unavailable");
+      if (!token) throw new AuthError("credential_unavailable");
       return validateCredential({ token }, options);
     }
     if (binding && binding.type !== "oauth")
@@ -1020,6 +1023,14 @@ export const auth = Object.assign(
   },
   {
     ...defaults,
+    /** Route independent bearer, OAuth and challenge-discovery providers. */
+    compose(options: AuthCompositionOptions): DeliveryAuthProvider {
+      return composeAuth(options, auth());
+    },
+    /** Native bearer resolver; also suitable as the bearer composition route. */
+    bearer(options: Pick<AuthOptions, "resolveEnvironmentVariable" | "resolveCredentialReference"> = {}): AuthProvider {
+      return auth(options);
+    },
     authenticate(context: AuthContext, options?: AuthOptions) {
       return defaults.authenticate.call(context.provider ?? defaults, context, {
         ...context.authOptions,

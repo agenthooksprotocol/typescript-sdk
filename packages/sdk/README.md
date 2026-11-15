@@ -221,6 +221,90 @@ Registration headers do not change existing redirect behavior. These SDK
 transports already use `redirect: "error"`, with or without configured headers.
 No global HTTP-client defaults are changed.
 
+## Authentication routing
+
+`auth(overrides)` and custom `DeliveryAuthProvider` implementations remain supported.
+Use `auth.compose` when different bindings need different providers. Installing an
+OAuth provider does not replace native bearer resolution:
+
+```ts
+import { auth, AuthError, Hooks } from "agenthooksprotocol/client";
+
+const provider = auth.compose({
+  bearer: auth.bearer({
+    resolveCredentialReference: (reference, context) => vault.read(reference, {
+      signal: context.signal,
+    }),
+  }),
+  oauth: hostOAuth,
+  discover: hostOAuth,
+});
+const hooks = new Hooks(registration, { ...options, auth: provider });
+```
+
+The host supplies `vault`, `hostOAuth`, registration and other Hooks options.
+Each route implements the existing `credential(context)` and `challenge(context)`
+contract. Methods retain their receiver; callers need not use `this` or
+`context.provider` to compose routes. The bearer route defaults to `auth()`.
+There is no default OAuth route: configured OAuth without one fails with
+`unsupported_binding`, for both PKCE and client credentials. Missing credentials
+fail with `credential_unavailable`; routes never fall back to another provider.
+An explicit Authorization header still bypasses provider authentication.
+
+Without a binding, the first attempt remains anonymous. Only a subsequent
+challenge invokes `discover`; omit that route to disable automatic discovery.
+Uploads and events select routes from their own bindings. Challenges return to
+the provider that issued the exact opaque attempt, with its original credential;
+the router never refreshes or replays HTTP requests itself.
+
+`normalizeAuthTarget(context)` returns a frozen, readonly discriminated target
+(`bearer`, `oauth`, or `discover`) without resolving credentials or doing I/O. It
+validates local structure, not destination trust. Providers still own destination,
+issuer, resource, scope and client policy. `AuthError` exposes safe `code` and
+`recovery` fields (`configure`, `login`, `retry`, or `none`). For example, a host
+provider can throw `new AuthError("interaction_required")` to request login.
+Recovery is guidance, never permission to replay an effectful delivery.
+
+Routed provider exceptions become redacted `AuthError`s without cause chains.
+Native caller cancellation is preserved, including `AbortSignal.reason`.
+Providers and stores must honor that signal: stopping the wait cannot cancel work
+that ignores it. Configured-header resolver methods retain the existing safe
+header error boundary. The same helpers and types are explicitly exported from
+`agenthooksprotocol/client/auth`.
+
+### Existing OAuth and managed adapter status
+
+The existing `auth({ selectClient, authorize, ... })` helper still supports
+host-driven PKCE, client credentials, discovery and refresh. It can be explicitly
+installed as the `oauth` and `discover` routes:
+
+```ts
+const hostOAuth = auth({
+  selectClient: (issuers, resource, context) => trustedClients.select(issuers, resource, context),
+  authorize: (request, context) => hostLogin.completeCallback(request, context),
+});
+const provider = auth.compose({ oauth: hostOAuth, discover: hostOAuth });
+```
+
+Here `trustedClients` is host policy and `hostLogin` owns consent/callback
+transport, returning the complete callback URL and honoring `request.signal`.
+Client-credentials bindings do not invoke `authorize`; resolve their configured
+client secret through the existing `resolveCredentialReference` option. The host
+also owns secret resolution and policy. Composition creates no browser,
+listener, worker or file store, and does not introduce another OAuth engine.
+
+An optional library-backed managed OAuth package is **not shipped** here.
+`oauth4webapi` 3.8.8 exposes discovery, PKCE, authorization-response validation,
+both token grants, refresh and custom fetch hooks, with ESM/Node 20 metadata.
+API inspection is not runtime security parity. Migration is blocked on preserving
+MCP protected-resource discovery/fallback, RFC 9728 resource validation, exact
+issuer and local scope policy, RFC 8707 resource-bound exchange, and DNS/redirect
+policy at every network boundary. It also needs namespace-isolated structural
+stores, generation-aware stale rejection, coordinated refresh/login, transient
+refresh retention, and host-controlled prepare/complete interaction tests.
+Existing APIs remain until both flows, cancellation and redaction have parity;
+this router does not provide those managed lifecycle guarantees.
+
 ## Structural decoding and effect-family queries
 
 Use `draftCodecs.parseInterceptRequest(input)` (and the other generated `parse*`
