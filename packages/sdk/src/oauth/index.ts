@@ -273,7 +273,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         if (existing?.pending && existing.baseGeneration === current?.generation && existing.expiresAt >= operation.deadline && existing.expiresAt > Date.now() &&
             existing.target.client.redirectUri === requestedTarget.client.redirectUri &&
             JSON.stringify(scopes(existing.target.client.scopes)) === JSON.stringify(scopes(requestedTarget.client.scopes)) &&
-            JSON.stringify(scopes(existing.target.client.requiredScopes ?? [])) === JSON.stringify(scopes(target.client.requiredScopes ?? [])) &&
+            JSON.stringify(scopes(existing.target.hostRequiredScopes ?? [])) === JSON.stringify(scopes(target.hostRequiredScopes ?? [])) &&
             existing.signals.every(signal => !signal.aborted) &&
             required.every(scope => existing.target.client.scopes.includes(scope))) return existing.pending;
         if (existing) forget(existing);

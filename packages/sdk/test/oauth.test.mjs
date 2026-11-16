@@ -912,3 +912,19 @@ test('persisted network requirements cannot authorize a scope-less challenge as 
   assert.equal((await recreated.prepare(f.context, budget())).credential.token, ready.credential.token);
   assert.equal(f.tokens.length, 1);
 });
+
+
+test('pending reuse compares explicit host requirements even when network requirements already match', async t => {
+  const f = await fixture(t); f.client.allowedScopes = ['deliver', 'audit'];
+  await assert.rejects(f.managed.challenge({ ...f.context, credential: undefined, response: new Response(null, {
+    status: 403, headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="audit"' },
+  }) }, budget()), { code: 'interaction_required' });
+  const hostBudget = budget(undefined, 10000);
+  const first = await f.prepare({}, hostBudget);
+  f.client.requiredScopes = ['audit'];
+  const replacement = await f.prepare({}, hostBudget);
+  assert.notEqual(replacement, first, 'equal merged scopes must not hide a changed explicit host requirement');
+  await assert.rejects(f.managed.complete(first, f.callback(first), budget()), { code: 'invalid_configuration' });
+  f.state.scope = 'deliver audit';
+  assert.equal((await f.managed.complete(replacement, f.callback(replacement), budget())).credential.token, 'access-1');
+});
