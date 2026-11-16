@@ -1,3 +1,4 @@
+import { classifyAuthError } from "./auth.js";
 import type { AuthChallengeContext, DeliveryAuthContext, DeliveryAuthProvider, DeliveryCredential } from "./auth.js";
 
 export type AuthErrorCode =
@@ -135,7 +136,7 @@ async function invoke<T>(context: DeliveryAuthContext, operation: () => T | Prom
     return value;
   } catch (error) {
     signal?.throwIfAborted();
-    throw new AuthError(error instanceof AuthError ? error.code : "provider_failed");
+    throw classifyAuthError(error);
   } finally {
     if (abort) signal?.removeEventListener("abort", abort);
   }
@@ -162,7 +163,6 @@ export function composeAuth(options: AuthCompositionOptions, defaultBearer: Deli
     async credential(context) {
       context.signal?.throwIfAborted();
       const { target, provider } = route(context);
-      if (target.type === "discover" && !context.challenged && context.challenge === undefined) return undefined;
       if (!provider) {
         if (context.challenged || context.challenge !== undefined) throw new AuthError("unsupported_binding");
         return undefined;
@@ -173,6 +173,7 @@ export function composeAuth(options: AuthCompositionOptions, defaultBearer: Deli
         ...(authentication ? { authentication } : {}) };
       return invoke(context, async () => {
         const credential = await provider.credential(originalContext);
+        if (credential === undefined && target.type === "discover" && !context.challenged && context.challenge === undefined) return undefined;
         if (!credential || credential.type !== "bearer" || typeof credential.token !== "string" || !credential.token || /[\r\n]/.test(credential.token)) throw new AuthError("credential_unavailable");
         const attempt = Object.freeze({});
         attempts.set(attempt, { provider, credential, target, authentication });

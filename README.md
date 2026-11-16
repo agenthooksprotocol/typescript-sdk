@@ -232,13 +232,15 @@ Requests retain their identity and prepared body across recovery.
 The provider owns secret lookup, discovery/trust policy, OAuth login/exchange,
 rotation, shared coordination and persistence. Callbacks must honor their signal;
 cancelling one wait does not authorize cancelling other callers' shared work.
-Absent bindings start anonymously and may use challenge-driven discovery under the
-host's trust policy. Configured missing credentials fail closed. Upload bindings
+Unknown endpoints start anonymously and may use challenge-driven discovery under
+the host's trust policy. Previously approved cached bindings attach credentials
+up front, even without portable configuration. Missing configured credentials
+fail closed. Upload bindings
 never fall back to event credentials. The `auth()` discovery/exchange helpers
 are optional; TLS/network policy belongs in the trusted HTTP adapter.
 
 For coordinated native OAuth, the opt-in
-[`@agenthooksprotocol/oauth`](packages/oauth/README.md) package supports PKCE and
+[`agenthooksprotocol/oauth`](packages/sdk/OAUTH.md) subpath supports PKCE and
 client credentials using `oauth4webapi`. The host supplies trusted network policy,
 client selection, atomic token storage and coordination, deadlines, and consent
 UI/callback transport. Its `prepare`/`complete` lifecycle creates no implicit

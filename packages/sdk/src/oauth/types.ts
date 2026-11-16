@@ -1,5 +1,5 @@
 import type { AuthorizationServer } from "oauth4webapi";
-import type { DeliveryAuthContext } from "agenthooksprotocol/client/auth";
+import type { DeliveryAuthContext } from "../client/auth.js";
 
 export interface Operation { readonly signal: AbortSignal; readonly deadline: number }
 export type NetworkPurpose = "metadata" | "token" | "authorization";
@@ -11,17 +11,32 @@ export interface ClientConfig {
   readonly issuer: string; readonly resource: string; readonly clientId: string;
   readonly flow: "authorization_code_pkce" | "client_credentials";
   readonly scopes: readonly string[];
+  readonly allowedScopes?: readonly string[];
+  readonly requiredScopes?: readonly string[];
+  readonly grantPartition?: string;
   readonly clientSecret?: string; readonly redirectUri?: string;
 }
-export interface ResolvedTarget { readonly client: ClientConfig; readonly metadata: AuthorizationServer }
+export interface ResolvedTarget {
+  readonly client: ClientConfig;
+  readonly metadata: AuthorizationServer;
+  /** Current host policy only; never inferred from a challenge or cached requirements. */
+  readonly hostRequiredScopes?: readonly string[];
+}
 export interface TokenValue {
-  readonly token: string; readonly expiresAt: number;
+  readonly token: string; readonly expiresAt?: number | undefined;
   readonly refreshToken?: string; readonly scopes: readonly string[];
+  readonly requiredScopes?: readonly string[];
+  readonly rejected?: boolean;
 }
 export interface StoredCredential extends TokenValue {
   readonly generation: string;
   readonly rejected?: boolean;
   readonly refreshRejected?: boolean;
+  /** A rotated credential is retained, but requires explicit host consent/repair. */
+  readonly refreshQuarantined?: boolean;
+  /** Internal non-secret discovery cache, stored under the separate binding key. */
+  readonly bindingMetadata?: ResolvedTarget;
+  readonly requiredScopes?: readonly string[];
 }
 /** Host implements cross-instance coordination and atomic generation checks.
  * coordinate must serialize work for a key across all instances sharing this store,

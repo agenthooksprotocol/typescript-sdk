@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { resolveTarget } from '../dist/src/discovery.js';
-import { acquireClientCredentials } from '../dist/src/protocol.js';
+import { resolveTarget } from '../dist/src/oauth/discovery.js';
+import { acquireClientCredentials } from '../dist/src/oauth/protocol.js';
 
 
 const operation = () => ({ signal: new AbortController().signal, deadline: Date.now() + 10_000 });
@@ -132,4 +132,66 @@ test('normalized issuer lookup does not normalize the metadata issuer identity',
     assert.equal(url, 'https://issuer.example/.well-known/oauth-authorization-server/tenant');
     return Response.json({ ...target.metadata, issuer: issuer.slice(0, -1) });
   }), operation()), { code: 'discovery_failed' });
+});
+
+const preset = { type: 'oauth', ...target.client };
+for (const flow of ['client_credentials', 'authorization_code_pkce']) {
+  test(`configured ${flow} preset skips PRM but validates issuer metadata and scope policy`, async () => {
+    const requests = [];
+    const client = { ...target.client, flow, allowedScopes: ['deliver', 'extra'], requiredScopes: ['deliver'] };
+    const metadata = { ...target.metadata, grant_types_supported: ['client_credentials', 'authorization_code'],
+      authorization_endpoint: `${issuer}authorize`, code_challenge_methods_supported: ['S256'] };
+    const resolved = await resolveTarget({ url: resource, authentication: { ...preset, flow },
+      challenge: 'Bearer resource_metadata="https://attacker.example/metadata", scope="extra"' }, {
+      ...options(async url => { requests.push(url); return Response.json(metadata); }), selectClient: () => client,
+    }, operation());
+    assert.deepEqual(requests, ['https://issuer.example/.well-known/oauth-authorization-server/tenant']);
+    assert.deepEqual(resolved.client.scopes, ['deliver']);
+    assert.deepEqual(resolved.client.allowedScopes, ['deliver', 'extra']);
+    assert.deepEqual(resolved.client.requiredScopes, ['deliver', 'extra']);
+    assert.ok(Object.isFrozen(resolved.client.requiredScopes));
+  });
+}
+
+test('preset issuer mismatch fails without a protected-resource fallback', async () => {
+  const requests = [];
+  await assert.rejects(resolveTarget({ url: resource, authentication: preset }, options(async url => {
+    requests.push(url); return Response.json({ ...target.metadata, issuer: 'https://other.example' });
+  }), operation()), { code: 'discovery_failed' });
+  assert.equal(requests.length, 1);
+});
+
+test('preset local principal mismatch fails before metadata I/O', async () => {
+  await assert.rejects(resolveTarget({ url: resource, authentication: preset }, {
+    ...options(() => assert.fail('no network for forbidden local principal')),
+    selectClient: () => ({ ...target.client, clientId: 'different' }),
+  }, operation()), { code: 'invalid_configuration' });
+});
+
+test('challenge requirement outside local ceiling fails before issuer I/O', async () => {
+  await assert.rejects(resolveTarget({ url: resource, authentication: preset,
+    challenge: 'Bearer error="insufficient_scope", scope="forbidden"' },
+  options(() => assert.fail('forbidden scopes must not reach metadata')), operation()), { code: 'access_denied' });
+});
+
+test('discovery preserves native cancellation from an in-flight host selection', async () => {
+  const controller = new AbortController(), reason = new DOMException('host cancellation', 'AbortError');
+  await assert.rejects(resolveTarget({ url: resource, authentication: preset }, {
+    ...options(() => assert.fail('cancelled selection must not fetch metadata')),
+    selectClient: () => { controller.abort(reason); throw new Error('provider detail'); },
+  }, { signal: controller.signal, deadline: Date.now() + 10_000 }), error => error === reason);
+});
+
+test('cached discovery revalidates local client policy and current secrets without metadata I/O', async () => {
+  const resolved = await resolveTarget({ url: resource, authentication: preset }, {
+    ...options(() => assert.fail('valid cached metadata must not require network')),
+    selectClient: () => ({ ...target.client, scopes: ['deliver', 'deliver'], clientSecret: 'rotated-secret' }),
+  }, operation(), target);
+  assert.equal(resolved.client.clientSecret, 'rotated-secret');
+  assert.deepEqual(resolved.client.scopes, ['deliver']);
+});
+
+test('cached discovery cannot bypass current local destination policy', async () => {
+  await assert.rejects(resolveTarget({ url: 'https://other.example/events', authentication: preset },
+    options(() => assert.fail('forbidden destination must not fetch metadata')), operation(), target), { code: 'discovery_failed' });
 });

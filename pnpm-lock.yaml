@@ -14,22 +14,13 @@ importers:
 
   packages/conformance:
     dependencies:
-      'agenthooksprotocol':
+      agenthooksprotocol:
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
       '@agenthooksprotocol/testing':
         specifier: workspace:*
         version: link:../testing
-
-  packages/oauth:
-    dependencies:
-      agenthooksprotocol:
-        specifier: workspace:*
-        version: link:../sdk
-      oauth4webapi:
-        specifier: 3.8.8
-        version: 3.8.8
 
   packages/sdk:
     dependencies:
@@ -42,10 +33,13 @@ importers:
       ajv-formats:
         specifier: 3.0.1
         version: 3.0.1(ajv@8.17.1)
+      oauth4webapi:
+        specifier: 3.8.8
+        version: 3.8.8
 
   packages/testing:
     dependencies:
-      'agenthooksprotocol':
+      agenthooksprotocol:
         specifier: workspace:*
         version: link:../sdk
 

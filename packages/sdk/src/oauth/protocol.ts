@@ -1,5 +1,5 @@
 import * as oauth from "oauth4webapi";
-import { AuthError } from "agenthooksprotocol/client/auth";
+import { AuthError, classifyAuthError } from "../client/auth.js";
 import { checkedFetch } from "./discovery.js";
 import type { ManagedOAuthOptions, Operation, ResolvedTarget, TokenValue } from "./types.js";
 
@@ -14,7 +14,7 @@ function active(operation: Operation): void {
   if (Date.now() >= operation.deadline) throw new AuthError("provider_failed");
 }
 
-async function protect<T>(operation: Operation, work: () => Promise<T>, refresh = false): Promise<T> {
+async function protect<T>(operation: Operation, work: () => Promise<T>, refresh = false, interactive = true): Promise<T> {
   try {
     active(operation);
     const result = await work();
@@ -22,17 +22,19 @@ async function protect<T>(operation: Operation, work: () => Promise<T>, refresh 
     return result;
   } catch (error) {
     operation.signal.throwIfAborted();
-    if (error instanceof AuthError) throw error;
+    const classified = classifyAuthError(error);
+    if (classified.code !== "provider_failed") throw classified;
     if (error instanceof oauth.ResponseBodyError || error instanceof oauth.AuthorizationResponseError) {
+      if (error.error === "invalid_client" || error.error === "unauthorized_client") throw new AuthError("credential_unavailable");
       if (error.error === "access_denied") throw new AuthError("access_denied");
-      if (refresh && error.error === "invalid_grant") throw new AuthError("refresh_rejected");
+      if (error.error === "invalid_grant") throw new AuthError(refresh ? "refresh_rejected" : interactive ? "interaction_required" : "credential_unavailable");
     }
     if (error instanceof oauth.UnsupportedOperationError ||
         (error instanceof oauth.OperationProcessingError &&
          (error.code === oauth.MISSING_SERVER_METADATA || error.code === oauth.INVALID_SERVER_METADATA))) {
       throw new AuthError("unsupported_binding");
     }
-    throw new AuthError("provider_failed");
+    throw classified;
   }
 }
 
@@ -65,21 +67,29 @@ function safeToken(value: string): boolean {
 function tokenValue(response: oauth.TokenEndpointResponse, target: ResolvedTarget): TokenValue {
   const expires = response.expires_in;
   const scopes = response.scope === undefined ? [...target.client.scopes] : response.scope.split(" ");
-  const allowed = new Set(target.client.scopes);
+  const allowed = new Set(target.client.allowedScopes ?? target.client.scopes);
   if (response.token_type !== "bearer" || !/^[A-Za-z0-9\-._~+/]+=*$/.test(response.access_token) ||
-      typeof expires !== "number" || !Number.isFinite(expires) || expires <= 0 ||
+      (expires !== undefined && (typeof expires !== "number" || !Number.isFinite(expires) || expires <= 0)) ||
       (response.scope !== undefined && !/^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/.test(response.scope)) ||
-      scopes.some(scope => !allowed.has(scope)) ||
-      target.client.scopes.some(scope => !scopes.includes(scope)) ||
       (response.refresh_token !== undefined && !safeToken(response.refresh_token))) {
     throw new AuthError("provider_failed");
   }
-  const expiresAt = Date.now() + expires * 1000;
-  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) throw new AuthError("provider_failed");
+  const expiresAt = expires === undefined ? undefined : Date.now() + expires * 1000;
+  if (expiresAt !== undefined && (!Number.isFinite(expiresAt) || expiresAt <= Date.now())) throw new AuthError("provider_failed");
   return {
     token: response.access_token, expiresAt, scopes: [...new Set(scopes)],
+    ...(scopes.some(scope => !allowed.has(scope)) ? { rejected: true } : {}),
     ...(response.refresh_token === undefined ? {} : { refreshToken: response.refresh_token }),
   };
+}
+
+function literalLoopback(authority: string, hostname: string): boolean {
+  if (/^\[[0-9a-f:]+\](?::[0-9]+)?$/i.test(authority)) return hostname === "[::1]";
+  const raw = /^([^:]+)(?::[0-9]+)?$/.exec(authority)?.[1];
+  if (raw === undefined) return false;
+  const octets = raw.split(".");
+  return octets.length === 4 && octets[0] === "127" &&
+    octets.every(octet => /^(?:0|[1-9][0-9]{0,2})$/.test(octet) && Number(octet) <= 255);
 }
 
 function pkce(target: ResolvedTarget): void {
@@ -101,7 +111,7 @@ function pkce(target: ResolvedTarget): void {
   const authority = /^[a-z]+:\/\/([^/?#]*)/i.exec(redirectUri)?.[1] ?? "";
   if (redirect.username || redirect.password || authority.includes("@") || redirectUri.includes("\\") ||
       (redirect.protocol !== "https:" &&
-       !(redirect.protocol === "http:" && /^(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]+)?$/i.test(authority))) ||
+       !(redirect.protocol === "http:" && literalLoopback(authority, redirect.hostname))) ||
       ["code", "state", "error", "iss"].some(key => redirect.searchParams.has(key))) {
     throw new AuthError("invalid_configuration");
   }
@@ -128,15 +138,15 @@ export function startLogin(target: ResolvedTarget, options: ManagedOAuthOptions,
     try {
       await options.checkDestination(url, "authorization", operation);
       if (url.href !== approved) throw new AuthError("untrusted_destination");
-    } catch {
+    } catch (error) {
       operation.signal.throwIfAborted();
-      throw new AuthError("untrusted_destination");
+      throw classifyAuthError(error, "untrusted_destination");
     }
     return { authorizationUrl: approved, state, verifier };
   });
 }
 
-function callbackParameters(target: ResolvedTarget, login: LoginState, callback: string): URLSearchParams {
+export function callbackParameters(target: ResolvedTarget, login: LoginState, callback: string): URLSearchParams {
   const expected = new URL(target.client.redirectUri!);
   const actual = new URL(callback);
   if (actual.origin !== expected.origin || actual.pathname !== expected.pathname ||
@@ -153,13 +163,19 @@ function callbackParameters(target: ResolvedTarget, login: LoginState, callback:
   if (actual.searchParams.has("iss") && actual.searchParams.get("iss") !== target.metadata.issuer) {
     throw new AuthError("access_denied");
   }
-  if (!login.state || !login.verifier) throw new AuthError("access_denied");
+  if (!login.state || !login.verifier || actual.searchParams.getAll("state").length !== 1 ||
+      actual.searchParams.get("state") !== login.state || actual.searchParams.getAll("iss").length > 1) throw new AuthError("access_denied");
   try {
     return oauth.validateAuthResponse(target.metadata, client(target), actual, login.state);
   } catch (error) {
     if (error instanceof oauth.AuthorizationResponseError) throw error;
     throw new AuthError("access_denied");
   }
+}
+
+export function validateCallback(target: ResolvedTarget, login: LoginState, callback: string): void {
+  try { callbackParameters(target, login, callback); }
+  catch (error) { if (!(error instanceof oauth.AuthorizationResponseError)) throw error; }
 }
 
 export function exchangeCode(target: ResolvedTarget, login: LoginState, callback: string,
@@ -183,7 +199,7 @@ export function acquireClientCredentials(target: ResolvedTarget, options: Manage
     const response = await oauth.clientCredentialsGrantRequest(target.metadata, client(target), authentication(target),
       { resource: target.client.resource, scope: target.client.scopes.join(" ") }, requestOptions(options, operation));
     return tokenValue(await oauth.processClientCredentialsResponse(target.metadata, client(target), response), target);
-  });
+  }, false, false);
 }
 
 export function refreshCredential(target: ResolvedTarget, refreshToken: string, options: ManagedOAuthOptions,
@@ -196,6 +212,8 @@ export function refreshCredential(target: ResolvedTarget, refreshToken: string, 
       ...requestOptions(options, operation),
       additionalParameters: { resource: target.client.resource, scope: target.client.scopes.join(" ") },
     });
-    return tokenValue(await oauth.processRefreshTokenResponse(target.metadata, client(target), response), target);
+    return tokenValue(await oauth.processRefreshTokenResponse(target.metadata, client(target), response), {
+      ...target, client: { ...target.client, allowedScopes: target.client.scopes },
+    });
   }, true);
 }

@@ -1,11 +1,10 @@
-import { AuthError, type DeliveryAuthContext } from "agenthooksprotocol/client/auth";
+import { AuthError, classifyAuthError, type DeliveryAuthContext } from "../client/auth.js";
 import { processDiscoveryResponse, type AuthorizationServer } from "oauth4webapi";
 import type { ClientConfig, ManagedOAuthOptions, NetworkPurpose, Operation, ResolvedTarget } from "./types.js";
 
 function active(operation: Operation): void {
-  if (operation.signal.aborted || Date.now() >= operation.deadline) {
-    throw new AuthError("provider_failed");
-  }
+  operation.signal.throwIfAborted();
+  if (Date.now() >= operation.deadline) throw new DOMException("OAuth operation deadline exceeded", "TimeoutError");
 }
 
 function https(value: string): URL {
@@ -30,13 +29,19 @@ export async function checkedFetch(
   active(operation);
   try {
     await options.checkDestination(destination, purpose, operation);
-  } catch { throw new AuthError("untrusted_destination"); }
+  } catch (error) {
+    active(operation);
+    throw classifyAuthError(error, "untrusted_destination");
+  }
   active(operation);
   if (destination.href !== original) throw new AuthError("untrusted_destination");
   let response: Response;
   try {
     response = await options.policyFetch(url, { ...init, redirect: "error", signal: operation.signal }, { purpose, operation });
-  } catch { throw new AuthError("provider_failed"); }
+  } catch (error) {
+    active(operation);
+    throw classifyAuthError(error);
+  }
   active(operation);
   if (response.redirected || (response.url !== "" && response.url !== url)) {
     throw new AuthError("untrusted_destination");
@@ -73,15 +78,15 @@ async function metadataAt(urls: readonly string[], options: ManagedOAuthOptions,
       if (expectedResources && metadata.resource !== expectedResources.get(url)) throw new AuthError("discovery_failed");
       return metadata;
     } catch (error) {
-      if (error instanceof AuthError) throw error;
-      throw new AuthError("discovery_failed");
+      active(operation);
+      throw classifyAuthError(error, "discovery_failed");
     }
   }
   throw new AuthError("discovery_failed");
 }
 
 /** Split challenges without interpreting commas or scheme names inside quoted strings. */
-function bearerParameters(header: string | undefined): Map<string, string> {
+export function bearerParameters(header: string | undefined): Map<string, string> {
   const result = new Map<string, string>();
   if (header === undefined || header === "") return result;
   if (header.length > 16384 || /[\r\n\0]/.test(header)) throw new AuthError("discovery_failed");
@@ -110,6 +115,8 @@ function bearerParameters(header: string | undefined): Map<string, string> {
       text = beginning[2] ?? "";
     }
     if (!bearer || text === "") continue;
+    // RFC 7235 token68 is not an auth-param list, including padded payloads.
+    if (/^[A-Za-z0-9._~+\/-]+=*$/.test(text)) continue;
     const match = parameter.exec(text);
     if (!match) throw new AuthError("discovery_failed");
     const name = match[1]!.toLowerCase();
@@ -139,20 +146,20 @@ function validateClient(client: ClientConfig): void {
   }
 }
 
-export async function resolveTarget(context: DeliveryAuthContext, options: ManagedOAuthOptions, operation: Operation): Promise<ResolvedTarget> {
+export async function resolveTarget(context: DeliveryAuthContext, options: ManagedOAuthOptions, operation: Operation, cachedTarget?: ResolvedTarget): Promise<ResolvedTarget> {
   try {
-    return await discover(context, options, operation);
+    return await discover(context, options, operation, cachedTarget);
   } catch (error) {
-    if (error instanceof AuthError) throw error;
-    throw new AuthError("discovery_failed");
+    active(operation);
+    throw classifyAuthError(error, "discovery_failed");
   }
 }
 
-async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptions, operation: Operation): Promise<ResolvedTarget> {
+async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptions, operation: Operation, cachedTarget?: ResolvedTarget): Promise<ResolvedTarget> {
   active(operation);
   const binding = context.authentication;
   if (binding !== undefined && binding.type !== "oauth") throw new AuthError("unsupported_binding");
-  if (!binding && context.challenged !== true) throw new AuthError("credential_unavailable");
+  if (!binding && !cachedTarget && context.challenged !== true) throw new AuthError("credential_unavailable");
   const endpoint = https(context.url);
   const challenge = bearerParameters(context.challenge);
   const advertised = challenge.get("resource_metadata");
@@ -165,7 +172,11 @@ async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptio
   const expected = advertised !== undefined
     ? new Map([[advertised, context.url]])
     : new Map([[specific, context.url], [root, endpoint.origin]]);
-  const protectedResource = await metadataAt(advertised !== undefined ? [advertised] : [specific, root], options, operation, expected);
+  // A preset already fixes the principal; PRM must not override or gate it.
+  const protectedResource: Record<string, unknown> = binding
+    ? { resource: binding.resource, authorization_servers: [binding.issuer] }
+    : cachedTarget ? { resource: cachedTarget.client.resource, authorization_servers: [cachedTarget.client.issuer] }
+    : await metadataAt(advertised !== undefined ? [advertised] : [specific, root], options, operation, expected);
   if (typeof protectedResource.resource !== "string") throw new AuthError("discovery_failed");
   const resource = protectedResource.resource;
   resourceCovers(resource, context.url);
@@ -181,7 +192,10 @@ async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptio
   let selected: ClientConfig;
   try {
     selected = await options.selectClient(Object.freeze(binding ? [binding.issuer] : [...issuers]), resource, context, operation);
-  } catch { throw new AuthError("credential_unavailable"); }
+  } catch (error) {
+    active(operation);
+    throw classifyAuthError(error, "credential_unavailable");
+  }
   active(operation);
   validateClient(selected);
   if ((selected.flow === "client_credentials" || binding?.clientSecretRef !== undefined) &&
@@ -189,18 +203,31 @@ async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptio
   if (!issuers.includes(selected.issuer) || selected.resource !== resource) throw new AuthError("invalid_configuration");
   if (binding && (selected.issuer !== binding.issuer || selected.resource !== binding.resource ||
       selected.clientId !== binding.clientId || selected.flow !== binding.flow ||
-      JSON.stringify([...selected.scopes].sort()) !== JSON.stringify([...(binding.scopes ?? [])].sort()))) throw new AuthError("invalid_configuration");
+      JSON.stringify([...new Set(selected.scopes)].sort()) !== JSON.stringify([...new Set(binding.scopes ?? [])].sort()))) throw new AuthError("invalid_configuration");
   // Snapshot host-owned configuration before subsequent asynchronous policy calls.
-  const client: ClientConfig = Object.freeze({ ...selected, scopes: Object.freeze([...selected.scopes]) });
+  const scopePolicy = selected;
+  const allowedScopes = scopePolicy.allowedScopes ?? selected.scopes;
+  const requiredScopes = [...(scopePolicy.requiredScopes ?? [])];
+  const validScope = (scope: unknown): scope is string => typeof scope === "string" && /^[\x21\x23-\x5B\x5D-\x7E]+$/.test(scope);
+  if (!Array.isArray(allowedScopes) || !allowedScopes.every(validScope) ||
+      !Array.isArray(scopePolicy.requiredScopes ?? []) || !requiredScopes.every(validScope) ||
+      [...selected.scopes, ...requiredScopes].some(scope => !allowedScopes.includes(scope))) throw new AuthError("invalid_configuration");
+  const hostRequiredScopes = Object.freeze([...new Set(requiredScopes)]);
   const required = challenge.get("scope");
   if (required !== undefined) {
     if (!/^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/.test(required) ||
-        required.split(" ").some(scope => !client.scopes.includes(scope))) throw new AuthError("access_denied");
+        required.split(" ").some(scope => !allowedScopes.includes(scope))) throw new AuthError("access_denied");
   }
+  if (required !== undefined) requiredScopes.push(...required.split(" "));
+  const client: ClientConfig = Object.freeze({ ...selected,
+    scopes: Object.freeze([...new Set(selected.scopes)]),
+    allowedScopes: Object.freeze([...new Set(allowedScopes)]),
+    requiredScopes: Object.freeze([...new Set(requiredScopes)]),
+  });
   const issuer = https(client.issuer);
   // RFC 8414 section 3.1 removes a terminating slash for metadata lookup only.
   const issuerPath = issuer.pathname.replace(/\/$/, "");
-  const metadata = await metadataAt([
+  const metadata = cachedTarget?.metadata ?? await metadataAt([
     `${issuer.origin}/.well-known/oauth-authorization-server${issuerPath}`,
     `${issuer.origin}/.well-known/openid-configuration${issuerPath}`,
     `${issuer.origin}${issuerPath.replace(/\/$/, "")}/.well-known/openid-configuration`,
@@ -225,5 +252,5 @@ async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptio
       throw new AuthError("unsupported_binding");
     }
   }
-  return { client, metadata: metadata as unknown as AuthorizationServer };
+  return { client, metadata: metadata as unknown as AuthorizationServer, hostRequiredScopes };
 }

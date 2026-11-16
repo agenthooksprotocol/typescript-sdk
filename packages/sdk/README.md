@@ -22,6 +22,11 @@ for canonical validation and reference boundary helpers. `/generated` exposes
 the filtered codecs for those same current draft contracts; it is not a separate
 wire version.
 
+For host-managed OAuth, import `managedOAuth` from `agenthooksprotocol/oauth`
+and follow [the OAuth integration guide](OAUTH.md). No second package is needed.
+The OAuth engine is a regular installed dependency; only loading the OAuth
+subpath is opt-in. Low-level authentication exports remain supported.
+
 See the [SDK documentation and examples](https://github.com/agenthooksprotocol/typescript-sdk#readme)
 for all entrypoints and integration guidance. Consumer results expose one typed
 `event`, settled `state`, residual `effects`, complete `acceptedResponses`, and
@@ -251,11 +256,14 @@ There is no default OAuth route: configured OAuth without one fails with
 fail with `credential_unavailable`; routes never fall back to another provider.
 An explicit Authorization header still bypasses provider authentication.
 
-Without a binding, the first attempt remains anonymous. Only a subsequent
-challenge invokes `discover`; omit that route to disable automatic discovery.
-Uploads and events select routes from their own bindings. Challenges return to
-the provider that issued the exact opaque attempt, with its original credential;
-the router never refreshes or replays HTTP requests itself.
+Without a portable binding, the `discover` route may return a previously
+approved cached credential up front or `undefined` for an anonymous first contact.
+Omit that route to disable automatic discovery. Uploads and events select routes
+from their own bindings. Challenges return to the provider that issued the exact
+opaque attempt, with its original credential; the router never replays HTTP
+requests itself. Only read-only configuration requests may retry once after an
+auth challenge. Effectful events, notifications and uploads are not replayed;
+prepare an unknown endpoint explicitly before an unsafe first call.
 
 `normalizeAuthTarget(context)` returns a frozen, readonly discriminated target
 (`bearer`, `oauth`, or `discover`) without resolving credentials or doing I/O. It
@@ -272,7 +280,7 @@ that ignores it. Configured-header resolver methods retain the existing safe
 header error boundary. The same helpers and types are explicitly exported from
 `agenthooksprotocol/client/auth`.
 
-### Existing OAuth and managed adapter status
+### Choose an OAuth integration
 
 The existing `auth({ selectClient, authorize, ... })` helper still supports
 host-driven PKCE, client credentials, discovery and refresh. It can be explicitly
@@ -293,14 +301,15 @@ client secret through the existing `resolveCredentialReference` option. The host
 also owns secret resolution and policy. Composition creates no browser,
 listener, worker or file store, and does not introduce another OAuth engine.
 
-For library-backed managed lifecycle support, the separate opt-in workspace
-package [`@agenthooksprotocol/oauth`](../oauth/README.md) provides host-driven
-`prepare`/`complete`/`cancel`, PKCE, client credentials and refresh using
-`oauth4webapi`. It requires host-enforced network policy, local client trust,
+For library-backed managed lifecycle support, import
+[`agenthooksprotocol/oauth`](OAUTH.md) from the same SDK installation. It provides
+host-driven `prepare`/`complete`/`cancel`, PKCE, client credentials and refresh
+using `oauth4webapi`. It requires host-enforced network policy, local client trust,
 namespaced storage with coordination/CAS, and explicit operation budgets.
-It preserves existing OAuth exports rather than replacing the core engine;
-ordinary SDK installs acquire no OAuth dependency. See that package for host
-security contracts, pending-login lifetime, storage and release boundaries.
+The OAuth subpath is opt-in to load, not an optional installed dependency:
+`oauth4webapi` ships as a regular SDK dependency. Existing low-level OAuth exports
+remain supported. See the integration guide for consent budgets, isolated/shared
+grant partitions, storage and retry contracts.
 
 ## Structural decoding and effect-family queries
 

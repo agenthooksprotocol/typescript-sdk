@@ -37,6 +37,7 @@ import { composeResponseAsync, normalizeEffects, type ComposedEffect } from "./c
 import { runtimeInteger } from "../runtime-integer.js";
 import { admitContracts, decodeContract, encodeContract, freezeContractValue, type ToolBeforeInput, type ToolBeforeResult } from "./contracts.js";
 import { auth } from "./auth.js";
+import { bearerParameters } from "../oauth/discovery.js";
 import { isEventType, validateWire } from "./validation.js";
 import {
   ConfigurationError,
@@ -434,6 +435,17 @@ export class Hooks {
       ? await raceAbort(resolveHeaders(entries, this.provider, { ...context, signal }), signal)
       : new Headers();
     const explicitAuthorization = configured.has("authorization");
+    // Only the read-only configuration request is replayable. Event delivery,
+    // notifications and uploads may be effectful even when auth was rejected.
+    let replaySafe = false;
+    if (purpose === "event" && typeof init.body === "string") {
+      try {
+        const message: unknown = JSON.parse(init.body);
+        replaySafe = typeof message === "object" && message !== null &&
+          (message as { method?: unknown }).method === "hooks/configuration" &&
+          Object.hasOwn(message, "id");
+      } catch { /* Unknown request bodies are never replayed. */ }
+    }
     for (let attempt = 0; attempt < 2; attempt++) {
       const credential = explicitAuthorization ? undefined : await raceAbort(
         Promise.resolve(
@@ -474,7 +486,13 @@ export class Hooks {
         }),
         signal,
       );
-      if (response.status === 401 && !explicitAuthorization) {
+      let authRejected = response.status === 401;
+      if (!explicitAuthorization && response.status === 403) {
+        try {
+          authRejected = bearerParameters(response.headers.get("www-authenticate") ?? undefined).get("error") === "insufficient_scope";
+        } catch { /* Malformed/ambiguous challenges do not authorize retry. */ }
+      }
+      if (authRejected && !explicitAuthorization) {
         try {
           await raceAbort(
             Promise.resolve(
@@ -492,7 +510,7 @@ export class Hooks {
           throw error;
         }
       }
-      if (explicitAuthorization || response.status !== 401 || attempt === 1) {
+      if (explicitAuthorization || !authRejected || !replaySafe || attempt === 1) {
         delete context.challenge;
         delete context.challenged;
         return response;

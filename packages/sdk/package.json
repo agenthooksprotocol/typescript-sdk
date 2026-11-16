@@ -34,6 +34,10 @@
     "./server/stdio": {
       "types": "./dist/src/server/stdio.d.ts",
       "default": "./dist/src/server/stdio.js"
+    },
+    "./oauth": {
+      "types": "./dist/src/oauth/index.d.ts",
+      "default": "./dist/src/oauth/index.js"
     }
   },
   "scripts": {
@@ -42,7 +46,8 @@
   "dependencies": {
     "@sinclair/typebox": "0.34.49",
     "ajv": "8.17.1",
-    "ajv-formats": "3.0.1"
+    "ajv-formats": "3.0.1",
+    "oauth4webapi": "3.8.8"
   },
   "description": "TypeScript SDK for the Agent Hooks Protocol",
   "license": "Apache-2.0",
@@ -60,6 +65,7 @@
     "src",
     "README.md",
     "CONFIGURATION.md",
+    "OAUTH.md",
     "LICENSE"
   ],
   "types": "./dist/src/index.d.ts",

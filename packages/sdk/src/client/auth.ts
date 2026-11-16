@@ -1,7 +1,24 @@
 import type { Authentication } from "../draft/raw.js";
-import { AuthError, composeAuth, type AuthCompositionOptions } from "./auth-routing.js";
+import { AuthError, composeAuth, type AuthCompositionOptions, type AuthErrorCode } from "./auth-routing.js";
 export { AuthError, normalizeAuthTarget } from "./auth-routing.js";
 export type { AuthErrorCode, AuthRecovery, AuthTarget, AuthCompositionOptions } from "./auth-routing.js";
+
+/** Classify across SDK copies without retaining untrusted messages or causes. */
+export function classifyAuthError(error: unknown, fallback: AuthErrorCode = "provider_failed"): AuthError {
+  let cancellation = false;
+  try { cancellation = error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError"); } catch { /* Untrusted getters are not cancellation. */ }
+  if (cancellation) throw error;
+  let code: unknown;
+  try {
+    if (typeof error === "object" && error !== null) code = (error as { code?: unknown }).code;
+  } catch { /* Untrusted provider objects may have throwing accessors. */ }
+  const allowed: readonly string[] = [
+    "invalid_configuration", "unsupported_binding", "credential_unavailable",
+    "interaction_required", "access_denied", "refresh_rejected",
+    "discovery_failed", "untrusted_destination", "provider_failed",
+  ];
+  return new AuthError(typeof code === "string" && allowed.includes(code) ? code as AuthErrorCode : fallback);
+}
 
 export interface Credential {
   token: string;
@@ -80,6 +97,10 @@ export interface OAuthClient {
   clientId: string;
   flow: "authorization_code_pkce" | "client_credentials";
   scopes?: string[];
+  /** Local ceiling; defaults to requested scopes. */
+  allowedScopes?: string[];
+  /** Explicit operation requirements, not all requested scopes. */
+  requiredScopes?: string[];
   clientSecretRef?: string;
   redirectUri?: string;
 }
@@ -499,7 +520,7 @@ function validateResource(
   const resource = secureUrl(value, options),
     target = secureUrl(endpoint, options);
   if (
-    resource.search ||
+    (value !== endpoint && resource.search !== "") ||
     resource.origin !== target.origin ||
     !(
       target.pathname === resource.pathname ||
@@ -565,25 +586,6 @@ const defaults: AuthProvider = {
           : {}),
       };
       resource = client.resource;
-      const advertised = challengeParameter(
-        context.challenge,
-        "resource_metadata",
-      );
-      const metadata = await metadataAt(
-        advertised
-          ? [advertised]
-          : [
-              `${endpoint.origin}/.well-known/oauth-protected-resource${endpoint.pathname === "/" ? "" : endpoint.pathname}`,
-              `${endpoint.origin}/.well-known/oauth-protected-resource`,
-            ],
-        context,
-        options,
-      );
-      if (
-        metadata.resource !== resource ||
-        !strings(metadata.authorization_servers).includes(client.issuer)
-      )
-        error("preset constraints violated");
     } else {
       const advertised = challengeParameter(
         context.challenge,
@@ -624,8 +626,9 @@ const defaults: AuthProvider = {
       challengeParameter(context.challenge, "scope")
         ?.split(/\s+/)
         .filter(Boolean) ?? [];
-    if (requiredScopes.some((scope) => !(client.scopes ?? []).includes(scope)))
-      error("challenge exceeds permitted scopes");
+    if (requiredScopes.some((scope) => !(client.allowedScopes ?? client.scopes ?? []).includes(scope)))
+      throw new AuthError("access_denied");
+    client = { ...client, requiredScopes: [...new Set([...(client.requiredScopes ?? []), ...requiredScopes])] };
     const path =
       issuer.pathname === "/" ? "" : issuer.pathname.replace(/\/$/, "");
     const discovered = await metadataAt(
@@ -739,14 +742,11 @@ const defaults: AuthProvider = {
         body.expires_in <= 0)
     )
       error("invalid token expiry");
-    const scopes =
-      body.scope === undefined
-        ? client.scopes
-        : string(body.scope, "scope").split(/\s+/);
-    if (
-      scopes?.some((scope) => !(client.scopes ?? []).includes(scope)) ||
-      client.scopes?.some((scope) => !scopes?.includes(scope))
-    )
+    if (body.scope !== undefined && (typeof body.scope !== "string" ||
+        !/^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/.test(body.scope)))
+      error("invalid token scope");
+    const scopes = [...new Set(body.scope === undefined ? client.scopes ?? [] : (body.scope as string).split(" "))];
+    if (scopes.some(scope => !(client.allowedScopes ?? client.scopes ?? []).includes(scope)))
       error("token scope mismatch");
     return validateCredential(
       {
@@ -840,8 +840,11 @@ const defaults: AuthProvider = {
       context.challenge === undefined &&
       (cached.expiresAt === undefined ||
         cached.expiresAt > now + (options.expirySkewMs ?? 30_000))
-    )
+    ) {
+      if (client.requiredScopes?.some((scope: string) => !cached.scopes?.includes(scope)))
+        throw new AuthError("access_denied");
       return validateCredential(cached, options);
+    }
     const request: TokenRequest = {
       client,
       metadata,
@@ -979,6 +982,8 @@ const defaults: AuthProvider = {
       context.signal,
     );
     discoveryCache.set(discoveryKey, discovered);
+    if (client.requiredScopes?.some((scope: string) => !credential.scopes?.includes(scope)))
+      throw new AuthError("access_denied");
     return credential;
   },
 };

@@ -37,13 +37,14 @@ function transport(
     options,
   );
 }
-function hooks(headers, fetcher, { timeoutMs = 10000, ...options } = {}) {
+function hooks(headers, fetcher, { timeoutMs = 10000, authentication, ...options } = {}) {
   return new Hooks(
     {
       protocolVersion: "draft",
       hooks: [
         {
           id: "headers.backend",
+          ...(authentication ? { authentication } : {}),
           transport: {
             type: "http",
             url: "https://example.com/events",
@@ -113,10 +114,12 @@ test("custom event headers never enter OAuth discovery, issuer metadata or token
     { "X-Key": { valueRef: "key" } },
     async (_url, init) => {
       assert.equal(new Headers(init.headers).get("x-key"), "event-only");
-      return ++events === 1 ? new Response(null, { status: 401 }) : reply(init);
+      events++;
+      return reply(init);
     },
     {
       auth: provider,
+      authentication: { type: "oauth", issuer, resource, clientId: "client", flow: "client_credentials" },
     },
   );
   try {
@@ -125,9 +128,9 @@ test("custom event headers never enter OAuth discovery, issuer metadata or token
       result.diagnostics.filter((d) => d.phase !== "observation"),
       [],
     );
-    assert.equal(events, 2);
+    assert.equal(events, 1);
     assert.equal(resolutions, 1);
-    assert.ok(requests.some((url) => url.includes("oauth-protected-resource")));
+    assert.ok(!requests.some((url) => url.includes("oauth-protected-resource")), "configured presets skip protected-resource discovery");
     assert.ok(requests.includes(`${issuer}/token`));
   } finally {
     await h.close();
@@ -661,7 +664,7 @@ test("headers do not reach non-event requests or another transport", async () =>
   assert.equal(seen[1].has("x-key"), false);
 });
 
-test("Hooks resolves once per dispatch, preserves auth retries and rotates next dispatch", async () => {
+test("Hooks resolves headers once per dispatch without unsafe auth replay and rotates next dispatch", async () => {
   let resolutions = 0;
   let calls = 0;
   const seen = [];
@@ -685,11 +688,11 @@ test("Hooks resolves once per dispatch, preserves auth retries and rotates next 
     await h.initialized;
     await h.dispatch("tool.before", input());
     await h.dispatch("tool.before", input());
-    assert.equal(calls, 3);
+    assert.equal(calls, 2);
     assert.equal(resolutions, 2);
     assert.deepEqual(
       seen.map((h) => h.get("x-key")),
-      ["secret-1", "secret-1", "secret-2"],
+      ["secret-1", "secret-2"],
     );
     assert.ok(seen.every((h) => h.get("authorization") === "Bearer auth-only"));
   } finally {

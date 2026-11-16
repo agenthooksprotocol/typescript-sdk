@@ -7,7 +7,6 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { auth, AuthError, normalizeAuthTarget, Hooks, Attachment } from "agenthooksprotocol/client";
 
-// Scenario labels match /tmp/ahp-auth-parity-cases.json; no runtime dependency on /tmp.
 const bearer = { type: "bearer", tokenRef: "vault/events" };
 const oauth = {
   type: "oauth", issuer: "https://identity.example", resource: "https://receiver.example",
@@ -221,9 +220,10 @@ test("binding snapshot: reordered properties and scope sets match but restore im
   await routing.challenge({ ...context(equivalent), credential, response: new Response(null, { status: 401 }) });
 });
 
-test("unconfigured-challenge: real HTTP discovery starts only after no-binding 401", async () => {
+test("unconfigured-challenge: real HTTP records auth state without replaying effectful delivery", async () => {
   const calls = [];
   const routing = auth.compose({ discover: provider((ctx) => {
+    if (!ctx.challenged) return undefined;
     assert.equal(ctx.challenged, true);
     assert.equal(ctx.challenge, "Bearer");
     calls.push("credential"); return { type: "bearer", token: "discovered-token" };
@@ -237,9 +237,9 @@ test("unconfigured-challenge: real HTTP discovery starts only after no-binding 4
       assert.equal(await routing.credential(context(null)), undefined);
       assert.deepEqual(calls, []);
       const result = await unconfigured.dispatch("tool.before", input());
-      assert.deepEqual(result.diagnostics.filter((d) => d.phase !== "observation"), []);
-      assert.deepEqual(calls, ["challenge", "credential"]);
-      assert.deepEqual(requests.map((r) => r.authorization), [undefined, "Bearer discovered-token"]);
+      assert.ok(result.diagnostics.some(d => d.phase !== "observation"));
+      assert.deepEqual(calls, ["challenge"]);
+      assert.deepEqual(requests.map((r) => r.authorization), [undefined]);
     } finally { await unconfigured.close(); }
   });
 });
@@ -397,3 +397,26 @@ test("public AuthTarget is readonly and discriminated through client and auth su
   assert.deepEqual(ts.getPreEmitDiagnostics(program).map((diagnostic) =>
     ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")), []);
 });
+
+for (const status of [401, 403]) {
+  test(`safe configuration request has at most one auth retry (${status})`, async () => {
+    let challenges = 0;
+    const routing = auth.compose({ bearer: provider(() => ({ type: 'bearer', token: `token-${challenges}` }), () => { challenges++; }) });
+    await withServer((_req, res) => {
+      res.writeHead(status, { 'www-authenticate': status === 403 ? 'Bearer error="insufficient_scope", scope="events"' : 'Bearer' });
+      res.end();
+    }, async (origin, requests) => {
+      const client = new Hooks({ protocolVersion: 'draft', hooks: [{ id: 'routing.backend',
+        transport: { type: 'http', url: `${origin}/configuration` }, authentication: bearer }] }, {
+        source: 'urn:test:auth-routing', harness: { name: 'test', version: '1' },
+        capabilities: { toolBefore: { intercept: { deny: true } } }, auth: routing,
+      });
+      try {
+        await client.initialized;
+        assert.equal(requests.length, 2);
+        assert.equal(challenges, 2);
+        assert.deepEqual(requests.map(request => request.authorization), ['Bearer token-0', 'Bearer token-1']);
+      } finally { await client.close(); }
+    });
+  });
+}

@@ -222,7 +222,7 @@ for (const binding of bindings) {
 }
 
 for (const finalStatus of [200, 401]) {
-  test(`Hooks challenges exact credential and response; retry is bounded (final ${finalStatus})`, async () => {
+  test(`Hooks challenges exact credential without replay; next independent event uses recovery (final ${finalStatus})`, async () => {
     const credentials = [
       { type: "bearer", token: "old-secret", attempt: { generation: 1 } },
       { type: "bearer", token: "new-secret", attempt: Symbol("generation-2") },
@@ -255,6 +255,12 @@ for (const finalStatus of [200, 401]) {
       bindings[0],
     );
     try {
+      const rejected = await hooks.dispatch("tool.before", toolInput());
+      assert.equal(rejected.diagnostics.filter(d => d.phase !== "observation").length, 1);
+      assert.equal(acquisitions, 1);
+      assert.equal(requests.length, 1);
+      assert.equal(challenges.length, 1);
+      await rejected.content?.close();
       const result = await hooks.dispatch("tool.before", toolInput());
       assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, finalStatus === 200 ? 0 : 1);
       assert.equal(acquisitions, 2);
@@ -274,10 +280,10 @@ for (const finalStatus of [200, 401]) {
         assert.equal(challenge.purpose, "event");
         assert.equal(challenge.url, eventUrl);
       }
-      assert.equal(requests[0].init.body, requests[1].init.body);
-      assert.equal(
+      assert.notEqual(
         JSON.parse(requests[0].init.body).id,
         JSON.parse(requests[1].init.body).id,
+        "recovery is used by a new event, not a replay of the rejected request",
       );
       assert.equal(requests[0].init.method, requests[1].init.method);
       assert.equal(
@@ -402,17 +408,21 @@ test("Hooks allows provider-owned recovery from an anonymous challenge", async (
     },
   );
   try {
-    assert.deepEqual(
-      (await hooks.dispatch("tool.before", toolInput())).diagnostics.filter(d => d.phase !== "observation"),
-      [],
-    );
+    const rejected = await hooks.dispatch("tool.before", toolInput());
+    assert.equal(rejected.diagnostics.filter(d => d.phase !== "observation").length, 1);
+    assert.equal(requests.length, 1);
+    assert.equal(challenged, true);
+    await rejected.content?.close();
+    const recovered = await hooks.dispatch("tool.before", toolInput());
+    assert.deepEqual(recovered.diagnostics.filter(d => d.phase !== "observation"), []);
     assert.equal(requests.length, 2);
     assert.equal(new Headers(requests[0].headers).get("authorization"), null);
     assert.equal(
       new Headers(requests[1].headers).get("authorization"),
       "Bearer discovered-by-host",
     );
-    assert.equal(requests[0].body, requests[1].body);
+    assert.notEqual(JSON.parse(requests[0].body).id, JSON.parse(requests[1].body).id);
+    await recovered.content?.close();
   } finally {
     await hooks.close();
   }
@@ -495,7 +505,7 @@ for (const phase of ["credential", "challenge"]) {
   );
 }
 
-test("Hooks never retries a challenge anonymously when the provider still has no credential", async () => {
+test("Hooks records anonymous rejection without replay when the provider has no credential", async () => {
   let deliveries = 0,
     challenges = 0,
     acquisitions = 0;
@@ -518,7 +528,7 @@ test("Hooks never retries a challenge anonymously when the provider still has no
     const result = await hooks.dispatch("tool.before", toolInput());
     assert.equal(deliveries, 1);
     assert.equal(challenges, 1);
-    assert.equal(acquisitions, 2);
+    assert.equal(acquisitions, 1);
     assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
     assert.equal(result.diagnostics.filter(d => d.phase !== "observation")[0].syntheticDenial, true);
     await result.content?.close();

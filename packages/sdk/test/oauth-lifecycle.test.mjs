@@ -1,18 +1,19 @@
 import assert from 'node:assert/strict';
 import { getEventListeners } from 'node:events';
 import { test } from 'node:test';
-import { managedOAuth } from '../dist/src/index.js';
+import { managedOAuth } from '../dist/src/oauth/index.js';
 
 const budget = (signal = new AbortController().signal, ms = 5000) => ({ signal, deadline: Date.now() + ms });
 function fixture() {
-  const values = new Map(), locks = new Map();
+  const values = new Map(), bindings = new Map(), locks = new Map();
   const state = { tokenCalls: 0, writes: 0 };
   const store = {
-    async load(key, signal) { signal.throwIfAborted(); return values.get(key); },
+    async load(key, signal) { signal.throwIfAborted(); return (key.startsWith("ahp.oauth.binding:") ? bindings : values).get(key); },
     async compareAndSet(key, expected, value, signal) {
       signal.throwIfAborted();
-      if (values.get(key)?.generation !== expected) return false;
-      values.set(key, value); state.writes++; return true;
+      const selected = key.startsWith("ahp.oauth.binding:") ? bindings : values;
+      if (selected.get(key)?.generation !== expected) return false;
+      selected.set(key, value); if (selected === values) state.writes++; return true;
     },
     async coordinate(key, signal, work) {
       const previous = locks.get(key) ?? Promise.resolve();
@@ -56,11 +57,12 @@ function fixture() {
 
 test('pending completion rejects a superseded generation before sending a code', async () => {
   const f = fixture();
-  const pending = await f.oauth.prepare(f.context, budget());
+  const operation = budget();
+  const pending = await f.oauth.prepare(f.context, operation);
   let storedKey;
   const coordinate = f.options.store.coordinate;
   f.options.store.coordinate = (key, signal, work) => { storedKey = key; return coordinate(key, signal, work); };
-  assert.equal(await f.oauth.prepare(f.context, budget()), pending);
+  assert.equal(await f.oauth.prepare(f.context, operation), pending);
   f.values.set(storedKey, { token: 'new', expiresAt: Date.now() + 60000, scopes: ['deliver'], generation: 'new' });
   await assert.rejects(f.oauth.complete(pending, f.callback(pending), budget()), { code: 'invalid_configuration' });
   assert.equal(f.state.tokenCalls, 0);
@@ -102,7 +104,8 @@ test('prepare lazily prunes expired login listeners without background work', as
 
 test('parallel prepares share a pending login and completion consumes it once', async () => {
   const f = fixture(), signal = new AbortController().signal;
-  const pending = await Promise.all(Array.from({ length: 4 }, () => f.oauth.prepare(f.context, budget(signal))));
+  const operation = budget(signal);
+  const pending = await Promise.all(Array.from({ length: 4 }, () => f.oauth.prepare(f.context, operation)));
   assert.ok(pending.every(value => value === pending[0]));
   const result = await Promise.allSettled(Array.from({ length: 2 }, () => f.oauth.complete(pending[0], f.callback(pending[0]), budget())));
   assert.equal(result.filter(value => value.status === 'fulfilled').length, 1);
