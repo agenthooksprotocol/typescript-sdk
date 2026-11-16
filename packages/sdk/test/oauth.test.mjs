@@ -72,6 +72,10 @@ async function fixture(t, overrides = {}) {
       if (path === '/token' || path === '/rotated-token') {
         tokens.push({ path, body, authorization: req.headers.authorization }); state.tokenEntered.resolve();
         if (state.tokenGate) await state.tokenGate.promise;
+        if (state.expectedClientSecret !== undefined && (typeof req.headers.authorization !== 'string' ||
+            decodeURIComponent(Buffer.from(req.headers.authorization.slice(6), 'base64').toString()) !== `client:${state.expectedClientSecret}`)) {
+          res.statusCode = 400; res.end(JSON.stringify({ error: 'invalid_client' })); return;
+        }
         res.statusCode = state.tokenStatus;
         res.end(JSON.stringify(state.tokenError ?? state.tokenResponse ?? { access_token: `access-${tokens.length}`, token_type: 'Bearer',
           expires_in: 3600, ...(state.omitRefreshToken ? {} : { refresh_token: `refresh-${tokens.length}` }), scope: state.scope }));
@@ -817,6 +821,10 @@ test('refresh cannot broaden prior grant; rotated refresh persists quarantined b
   assert.equal((await f.prepare()).type, 'pending_login');
   assert.equal(f.tokens.length, 2, 'quarantined grant cannot refresh into broader permissions');
   await assert.rejects(f.managed.provider({ budget: () => budget() }).credential(f.context), { code: 'interaction_required' });
+  const recreated = managedOAuth(f.options);
+  await assert.rejects(recreated.provider({ budget: () => budget() }).credential(f.context), { code: 'interaction_required' });
+  assert.equal(f.tokens.length, 2, 'recreated provider cannot use or refresh a quarantined broader grant');
+  assert.equal([...f.store.values.values()][0].refreshToken, 'quarantined-rotation');
 });
 
 test('concurrent scope challenges merge requirements even after rejection', async t => {
@@ -927,4 +935,110 @@ test('pending reuse compares explicit host requirements even when network requir
   await assert.rejects(f.managed.complete(first, f.callback(first), budget()), { code: 'invalid_configuration' });
   f.state.scope = 'deliver audit';
   assert.equal((await f.managed.complete(replacement, f.callback(replacement), budget())).credential.token, 'access-1');
+});
+
+
+test('code completion resolves a rotated client secret outside coordination without replacing consent', async t => {
+  const f = await fixture(t); f.client.clientSecret = 'revoked-secret';
+  let selections = 0;
+  const managed = managedOAuth({ ...f.options, selectClient(...args) {
+    assert.equal(f.store.locks.size, 0, 'runtime client selection must be outside store coordination');
+    selections++; return f.options.selectClient(...args);
+  } });
+  const controller = new AbortController(), hostBudget = budget(controller.signal, 30000);
+  const pending = await managed.prepare({ ...f.context, challenged: true }, hostBudget);
+  const callback = f.callback(pending), authorization = new URL(pending.authorizationUrl);
+  f.client.clientSecret = 'rotated-secret'; f.state.expectedClientSecret = 'rotated-secret';
+  const ready = await managed.complete(pending, callback, budget());
+  assert.equal(ready.credential.token, 'access-1'); assert.equal(selections, 2);
+  assert.equal(f.tokens.length, 1, 'revoked secret must never reach the token endpoint');
+  assert.equal(decodeURIComponent(Buffer.from(f.tokens[0].authorization.slice(6), 'base64').toString()), 'client:rotated-secret');
+  assert.equal(createHash('sha256').update(f.tokens[0].body.get('code_verifier')).digest('base64url'), authorization.searchParams.get('code_challenge'));
+  assert.equal(pending.expiresAt, hostBudget.deadline);
+  const persisted = JSON.stringify([...f.store.values.values(), ...f.store.bindings.values()]);
+  assert(!persisted.includes('revoked-secret')); assert(!persisted.includes('rotated-secret'));
+});
+
+for (const [field, changed] of [
+  ['issuer', client => `${client.issuer}/other`],
+  ['resource', client => `${client.resource}/other`],
+  ['clientId', () => 'other-client'],
+  ['flow', () => 'client_credentials'],
+  ['redirectUri', client => `${client.redirectUri}/other`],
+  ['scopes', () => ['deliver', 'audit']],
+  ['requiredScopes', () => ['deliver']],
+  ['allowedScopes', () => ['deliver']],
+  ['grantPartition', () => 'other-partition'],
+]) {
+  test(`code completion denies incompatible current ${field} without consuming original consent`, async t => {
+    const f = await fixture(t); f.client.clientSecret = 'secret'; f.client.allowedScopes = ['deliver', 'audit'];
+    const pending = await f.prepare(), callback = f.callback(pending);
+    const original = f.client[field]; f.client[field] = changed(f.client);
+    await assert.rejects(f.managed.complete(pending, callback, budget()), { code: 'invalid_configuration' });
+    assert.equal(f.tokens.length, 0);
+    if (original === undefined) delete f.client[field]; else f.client[field] = original;
+    assert.equal((await f.managed.complete(pending, callback, budget())).credential.token, 'access-1');
+  });
+}
+
+
+test('host credential lookup failure before callback claim preserves the original pending consent', async t => {
+  const f = await fixture(t); f.client.clientSecret = 'secret';
+  let unavailable = false;
+  const managed = managedOAuth({ ...f.options, selectClient(...args) {
+    assert.equal(f.store.locks.size, 0);
+    if (unavailable) throw { code: 'credential_unavailable', message: 'private host lookup failure' };
+    return f.options.selectClient(...args);
+  } });
+  const pending = await managed.prepare({ ...f.context, challenged: true }, budget()), callback = f.callback(pending);
+  unavailable = true;
+  await assert.rejects(managed.complete(pending, callback, budget()), { code: 'credential_unavailable' });
+  assert.equal(f.tokens.length, 0);
+  unavailable = false;
+  assert.equal((await managed.complete(pending, callback, budget())).credential.token, 'access-1');
+});
+
+test('completion cancellation during current-client selection does not claim or replace host consent', async t => {
+  const f = await fixture(t), entered = deferred(), release = deferred();
+  let block = false;
+  const managed = managedOAuth({ ...f.options, async selectClient(...args) {
+    assert.equal(f.store.locks.size, 0);
+    if (block) { entered.resolve(); await release.promise; args[3].signal.throwIfAborted(); }
+    return f.options.selectClient(...args);
+  } });
+  const pending = await managed.prepare({ ...f.context, challenged: true }, budget()), callback = f.callback(pending);
+  block = true;
+  const controller = new AbortController(), reason = new Error('host cancelled callback processing');
+  const completing = managed.complete(pending, callback, budget(controller.signal));
+  await entered.promise; controller.abort(reason);
+  await assert.rejects(completing, error => error === reason);
+  assert.equal(f.tokens.length, 0);
+  block = false; release.resolve();
+  assert.equal((await managed.complete(pending, callback, budget())).credential.token, 'access-1');
+});
+
+
+test('pending reuse compares original host-requested scopes even when expanded consent scopes match', async t => {
+  const f = await fixture(t); Object.assign(f.client, { allowedScopes: ['deliver', 'audit'], requiredScopes: ['audit'] });
+  const hostBudget = budget(undefined, 30000), first = await f.prepare({}, hostBudget);
+  f.client.scopes = ['deliver', 'audit'];
+  const replacement = await f.prepare({}, budget(undefined, 10000));
+  assert.notEqual(replacement, first);
+  await assert.rejects(f.managed.complete(first, f.callback(first), budget()), { code: 'invalid_configuration' });
+  f.state.scope = 'deliver audit';
+  assert.equal((await f.managed.complete(replacement, f.callback(replacement), budget())).credential.token, 'access-1');
+});
+
+test('valid consent denial is claimed once without resolving unavailable runtime client credentials', async t => {
+  const f = await fixture(t); let unavailable = false, selections = 0;
+  const managed = managedOAuth({ ...f.options, selectClient(...args) {
+    selections++; if (unavailable) throw { code: 'credential_unavailable' };
+    return f.options.selectClient(...args);
+  } });
+  const pending = await managed.prepare({ ...f.context, challenged: true }, budget());
+  const denied = new URL(f.callback(pending)); denied.searchParams.delete('code'); denied.searchParams.set('error', 'access_denied');
+  unavailable = true;
+  await assert.rejects(managed.complete(pending, denied.href, budget()), { code: 'access_denied' });
+  assert.equal(selections, 1); assert.equal(f.tokens.length, 0);
+  await assert.rejects(managed.complete(pending, denied.href, budget()), { code: 'invalid_configuration' });
 });

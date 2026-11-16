@@ -173,9 +173,13 @@ export function callbackParameters(target: ResolvedTarget, login: LoginState, ca
   }
 }
 
-export function validateCallback(target: ResolvedTarget, login: LoginState, callback: string): void {
-  try { callbackParameters(target, login, callback); }
-  catch (error) { if (!(error instanceof oauth.AuthorizationResponseError)) throw error; }
+/** Return whether a correctly bound callback denies authorization. */
+export function validateCallback(target: ResolvedTarget, login: LoginState, callback: string): boolean {
+  try { callbackParameters(target, login, callback); return false; }
+  catch (error) {
+    if (error instanceof oauth.AuthorizationResponseError) return true;
+    throw error;
+  }
 }
 
 export function exchangeCode(target: ResolvedTarget, login: LoginState, callback: string,

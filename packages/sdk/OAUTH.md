@@ -113,7 +113,11 @@ Callbacks are single-use, validate state/issuer/redirect binding through
 the library, and cannot outlive the original budget or ten minutes. Completion
 has its own cancellable budget, capped by that original deadline. Tokens are
 written only under the original CAS generation, so another completed login cannot
-be overwritten. Completion checks the current generation before sending the code,
+be overwritten. Completion reselects current host client authentication outside store coordination
+before it claims the callback. Secret rotation does not require new consent;
+principal, redirect, requested scopes and explicit host requirements must remain
+compatible with the pending operation. Pending records do not retain client
+secrets. Completion also checks the current generation before sending the code,
 so a stale pending login cannot consume a code after another login has replaced
 its credential. Cancellation releases retained login secrets immediately; expired
 records are pruned on the next prepare call, with expiry enforced on every use.

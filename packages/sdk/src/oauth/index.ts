@@ -12,6 +12,8 @@ export type PrepareResult = Ready | PendingLogin;
 interface PendingRecord {
   readonly key: string;
   readonly target: ResolvedTarget;
+  readonly context: DeliveryAuthContext;
+  readonly requestedScopes: readonly string[];
   readonly identity: string;
   readonly baseGeneration: string | undefined;
   readonly expiresAt: number;
@@ -273,11 +275,14 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         if (existing?.pending && existing.baseGeneration === current?.generation && existing.expiresAt >= operation.deadline && existing.expiresAt > Date.now() &&
             existing.target.client.redirectUri === requestedTarget.client.redirectUri &&
             JSON.stringify(scopes(existing.target.client.scopes)) === JSON.stringify(scopes(requestedTarget.client.scopes)) &&
+            JSON.stringify(existing.requestedScopes) === JSON.stringify(scopes(target.client.scopes)) &&
             JSON.stringify(scopes(existing.target.hostRequiredScopes ?? [])) === JSON.stringify(scopes(target.hostRequiredScopes ?? [])) &&
             existing.signals.every(signal => !signal.aborted) &&
             required.every(scope => existing.target.client.scopes.includes(scope))) return existing.pending;
         if (existing) forget(existing);
-        const record: PendingRecord = { key, target: requestedTarget, identity: binding, baseGeneration: current?.generation,
+        const { clientSecret: _pendingSecret, ...pendingClient } = requestedTarget.client;
+        const record: PendingRecord = { key, target: { ...requestedTarget, client: Object.freeze(pendingClient) },
+          context, requestedScopes: Object.freeze(scopes(target.client.scopes)), identity: binding, baseGeneration: current?.generation,
           expiresAt: Math.min(operation.deadline, Date.now() + 600_000),
           signals: [...new Set([budget.signal, ...(context.signal ? [context.signal] : [])])] };
         // Reserve before asynchronous PKCE/destination policy work; remove only our entry.
@@ -305,6 +310,21 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       const record = pendingRecords.get(pending);
       if (!record || !record.login) throw new AuthError("invalid_configuration");
       if (record.expiresAt <= Date.now()) throw new AuthError("interaction_required");
+      let denied: boolean;
+      try { denied = validateCallback(record.target, record.login, callback); }
+      catch { throw new AuthError("access_denied"); }
+      // Consent fixes identity, not runtime client authentication. Reapprove with
+      // current host secrets outside coordination before claiming the callback.
+      const currentTarget = denied ? record.target : await step(operation, resolveTarget(record.context, options, operation, record.target));
+      if (!denied && (grantKey(options.namespace, record.context, currentTarget.client) !== record.key ||
+          currentTarget.client.redirectUri !== record.target.client.redirectUri ||
+          JSON.stringify(scopes(currentTarget.client.scopes)) !== JSON.stringify(record.requestedScopes) ||
+          JSON.stringify(scopes(currentTarget.hostRequiredScopes ?? [])) !== JSON.stringify(scopes(record.target.hostRequiredScopes ?? [])) ||
+          (currentTarget.client.requiredScopes ?? []).some(scope => !record.target.client.scopes.includes(scope)))) {
+        throw new AuthError("invalid_configuration");
+      }
+      const exchangeTarget: ResolvedTarget = { ...currentTarget, client: { ...currentTarget.client,
+        scopes: record.target.client.scopes, requiredScopes: record.target.client.requiredScopes ?? [] } };
       return step(operation, store.coordinate(record.key, operation.signal, async () => {
         operation.signal.throwIfAborted();
         if (pendingByKey.get(record.key) !== record || pendingRecords.get(pending) !== record) throw new AuthError("invalid_configuration");
@@ -315,9 +335,9 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         try {
           const current = await load(record.key, operation);
           if (current?.generation !== record.baseGeneration) throw new AuthError("invalid_configuration");
-          const token = await step(operation, exchangeCode(record.target, record.login!, callback, options, operation));
+          const token = await step(operation, exchangeCode(exchangeTarget, record.login!, callback, options, operation));
           const stored = await save(record.key, record.baseGeneration, { ...token, requiredScopes: current?.requiredScopes ?? [] }, operation);
-          return checkedReady(stored, record.key, record.identity, record.target);
+          return checkedReady(stored, record.key, record.identity, exchangeTarget);
         } finally {
           forget(record);
         }
