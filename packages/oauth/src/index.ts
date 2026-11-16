@@ -18,6 +18,7 @@ interface PendingRecord {
   readonly signals: readonly AbortSignal[];
   login?: LoginState;
   pending?: PendingLogin;
+  cleanup?: () => void;
 }
 interface Attempt { readonly key: string; readonly generation: string; readonly identity: string }
 
@@ -103,6 +104,26 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
   const pendingByKey = new Map<string, PendingRecord>();
   const pendingRecords = new WeakMap<PendingLogin, PendingRecord>();
   const attempts = new WeakMap<object, Attempt>();
+  const ended = new WeakMap<PendingLogin, { readonly expiresAt: number; readonly signal: AbortSignal | undefined }>();
+  function forget(record: PendingRecord): void {
+    record.cleanup?.();
+    if (record.pending) pendingRecords.delete(record.pending);
+    if (pendingByKey.get(record.key) === record) pendingByKey.delete(record.key);
+  }
+  function retire(record: PendingRecord): void {
+    if (record.pending) ended.set(record.pending, {
+      expiresAt: record.expiresAt, signal: record.signals.find(signal => signal.aborted),
+    });
+    forget(record);
+  }
+  function retain(record: PendingRecord): void {
+    const expire = () => retire(record);
+    record.cleanup = () => {
+      for (const signal of record.signals) signal.removeEventListener("abort", expire);
+    };
+    for (const signal of record.signals) signal.addEventListener("abort", expire, { once: true });
+    if (record.signals.some(signal => signal.aborted)) expire();
+  }
   function ready(value: StoredCredential, key: string, binding: string): Ready {
     if (!value.token || /[\r\n]/.test(value.token) || !Number.isFinite(value.expiresAt) ||
         value.expiresAt <= Date.now() || !value.generation) throw new AuthError("credential_unavailable");
@@ -133,6 +154,10 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     const budget = Object.freeze({ signal: suppliedBudget.signal, deadline: suppliedBudget.deadline });
     const context = snapshotContext(input);
     return bounded(budget, async (operation) => {
+      // No background cleanup: expiry is enforced at use and pruned on prepare.
+      for (const record of pendingByKey.values()) {
+        if (record.expiresAt <= Date.now() || record.signals.some(signal => signal.aborted)) retire(record);
+      }
       const binding = identity(context);
       const target = await step(operation, resolveTarget(context, options, operation));
       const key = keyFor(options.namespace, context, target);
@@ -165,9 +190,9 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
           return ready(await save(key, current?.generation, token, operation), key, binding);
         }
         const existing = pendingByKey.get(key);
-        if (existing?.pending && existing.expiresAt > Date.now() &&
+        if (existing?.pending && existing.baseGeneration === current?.generation && existing.expiresAt > Date.now() &&
             existing.signals.every(signal => !signal.aborted)) return existing.pending;
-        if (existing?.pending) pendingRecords.delete(existing.pending);
+        if (existing) forget(existing);
         const record: PendingRecord = { key, target, identity: binding, baseGeneration: current?.generation,
           expiresAt: Math.min(operation.deadline, Date.now() + 600_000),
           signals: [...new Set([budget.signal, ...(context.signal ? [context.signal] : [])])] };
@@ -177,9 +202,11 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
           record.login = await step(operation, startLogin(target, options, operation));
           record.pending = Object.freeze({ type: "pending_login", authorizationUrl: record.login.authorizationUrl, expiresAt: record.expiresAt });
           pendingRecords.set(record.pending, record);
+          retain(record);
+          operation.signal.throwIfAborted();
           return record.pending;
         } catch (error) {
-          if (pendingByKey.get(key) === record) pendingByKey.delete(key);
+          forget(record);
           throw error;
         }
       }));
@@ -187,7 +214,9 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
   }
   async function complete(pending: PendingLogin, callback: string, budget: Operation): Promise<Ready> {
     const known = pendingRecords.get(pending);
-    const enclosing = { ...budget, deadline: Math.min(budget.deadline, known?.expiresAt ?? budget.deadline) };
+    const terminal = ended.get(pending);
+    terminal?.signal?.throwIfAborted();
+    const enclosing = { ...budget, deadline: Math.min(budget.deadline, known?.expiresAt ?? terminal?.expiresAt ?? budget.deadline) };
     return bounded(enclosing, async (operation) => {
       const record = pendingRecords.get(pending);
       if (!record || !record.login) throw new AuthError("invalid_configuration");
@@ -198,11 +227,13 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         // A callback/code is single-use, including unsuccessful exchanges.
         pendingRecords.delete(pending);
         try {
+          const current = await load(record.key, operation);
+          if (current?.generation !== record.baseGeneration) throw new AuthError("invalid_configuration");
           const token = await step(operation, exchangeCode(record.target, record.login!, callback, options, operation));
           const stored = await save(record.key, record.baseGeneration, token, operation);
           return ready(stored, record.key, record.identity);
         } finally {
-          if (pendingByKey.get(record.key) === record) pendingByKey.delete(record.key);
+          forget(record);
         }
       }));
     }, known?.signals);
@@ -229,8 +260,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       if (!record) return;
       await step(operation, store.coordinate(record.key, operation.signal, async () => {
         operation.signal.throwIfAborted();
-        pendingRecords.delete(pending);
-        if (pendingByKey.get(record.key) === record) pendingByKey.delete(record.key);
+        forget(record);
       }));
     });
   }

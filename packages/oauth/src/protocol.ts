@@ -64,10 +64,11 @@ function safeToken(value: string): boolean {
 
 function tokenValue(response: oauth.TokenEndpointResponse, target: ResolvedTarget): TokenValue {
   const expires = response.expires_in;
-  const scopes = response.scope === undefined ? [...target.client.scopes] : response.scope.split(" ").filter(Boolean);
+  const scopes = response.scope === undefined ? [...target.client.scopes] : response.scope.split(" ");
   const allowed = new Set(target.client.scopes);
-  if (response.token_type !== "bearer" || !safeToken(response.access_token) ||
+  if (response.token_type !== "bearer" || !/^[A-Za-z0-9\-._~+/]+=*$/.test(response.access_token) ||
       typeof expires !== "number" || !Number.isFinite(expires) || expires <= 0 ||
+      (response.scope !== undefined && !/^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/.test(response.scope)) ||
       scopes.some(scope => !allowed.has(scope)) ||
       target.client.scopes.some(scope => !scopes.includes(scope)) ||
       (response.refresh_token !== undefined && !safeToken(response.refresh_token))) {

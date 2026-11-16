@@ -94,8 +94,11 @@ instance. Callbacks are single-use, validate state/issuer/redirect binding throu
 the library, and cannot outlive the original budget or ten minutes. Completion
 has its own cancellable budget, capped by that original deadline. Tokens are
 written only under the original CAS generation, so another completed login cannot
-be overwritten. After abandoned/expired login, prepare again; no worker cleans up
-in the background.
+be overwritten. Completion checks the current generation before sending the code,
+so a stale pending login cannot consume a code after another login has replaced
+its credential. Cancellation releases retained login secrets immediately; expired
+records are pruned on the next prepare call, with expiry enforced on every use.
+After abandoned/expired login, prepare again; no worker cleans up in the background.
 
 For unattended use, return a `ClientConfig` with `flow: "client_credentials"`,
 a locally resolved `clientSecret`, and permitted `scopes`. `prepare` returns

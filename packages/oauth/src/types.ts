@@ -23,7 +23,12 @@ export interface StoredCredential extends TokenValue {
   readonly rejected?: boolean;
   readonly refreshRejected?: boolean;
 }
-/** Host implements cross-instance coordination and atomic generation checks. */
+/** Host implements cross-instance coordination and atomic generation checks.
+ * coordinate must serialize work for a key across all instances sharing this store,
+ * hold the lock until work settles, and never start an aborted waiter. Store writes
+ * must check signal before committing. New credentials use fresh generations;
+ * rejection-only updates preserve the credential generation.
+ */
 export interface TokenStore {
   load(key: string, signal: AbortSignal): Promise<StoredCredential | undefined>;
   compareAndSet(key: string, expectedGeneration: string | undefined,

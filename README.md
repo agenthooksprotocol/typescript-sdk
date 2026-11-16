@@ -237,6 +237,14 @@ host's trust policy. Configured missing credentials fail closed. Upload bindings
 never fall back to event credentials. The `auth()` discovery/exchange helpers
 are optional; TLS/network policy belongs in the trusted HTTP adapter.
 
+For coordinated native OAuth, the opt-in
+[`@agenthooksprotocol/oauth`](packages/oauth/README.md) package supports PKCE and
+client credentials using `oauth4webapi`. The host supplies trusted network policy,
+client selection, atomic token storage and coordination, deadlines, and consent
+UI/callback transport. Its `prepare`/`complete` lifecycle creates no implicit
+browser, listener, store or refresh worker; bearer routes and low-level providers
+remain compatible.
+
 Literal helpers imported as `effect` from the server entrypoint construct canonical
 effects. Event-correlated replies constrain their types; request grants and host
 policy still determine whether they may be emitted or enacted.

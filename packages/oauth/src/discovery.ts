@@ -197,11 +197,11 @@ async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptio
         required.split(" ").some(scope => !client.scopes.includes(scope))) throw new AuthError("access_denied");
   }
   const issuer = https(client.issuer);
-  const issuerPath = issuer.pathname === "/" ? "" : issuer.pathname.replace(/\/$/, "");
+  const issuerPath = issuer.pathname === "/" ? "" : issuer.pathname;
   const metadata = await metadataAt([
     `${issuer.origin}/.well-known/oauth-authorization-server${issuerPath}`,
     `${issuer.origin}/.well-known/openid-configuration${issuerPath}`,
-    `${issuer.origin}${issuerPath}/.well-known/openid-configuration`,
+    `${issuer.origin}${issuerPath.replace(/\/$/, "")}/.well-known/openid-configuration`,
   ], options, operation, undefined, client.issuer);
   if (metadata.issuer !== client.issuer || typeof metadata.token_endpoint !== "string") throw new AuthError("discovery_failed");
   if (metadata.protected_resources !== undefined &&
