@@ -36,6 +36,11 @@ resource/issuer mismatches and broader-than-permitted scopes. It does not regist
 clients dynamically. Unsigned JSON metadata is supported over trusted HTTPS;
 signed metadata is rejected until a verified signed-metadata integration exists.
 Client credentials require explicit advertised grant support; PKCE requires S256.
+Authorization-server discovery removes a terminating issuer slash only for
+well-known lookup paths; the metadata issuer must still match the original issuer
+exactly. Resource path discovery preserves endpoint queries and requires the
+returned resource identifier to match that discovery source exactly. Origin-root
+fallback remains bound to the origin, not the original endpoint query.
 
 ## Compose without replacing bearer resolution
 

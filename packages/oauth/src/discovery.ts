@@ -121,7 +121,7 @@ function bearerParameters(header: string | undefined): Map<string, string> {
 
 function resourceCovers(resource: string, endpoint: string): void {
   const base = https(resource), target = https(endpoint);
-  if (base.search || resource.includes("?") || base.origin !== target.origin ||
+  if ((resource.includes("?") && resource !== endpoint) || base.origin !== target.origin ||
       !(target.pathname === base.pathname || target.pathname.startsWith(base.pathname.replace(/\/$/, "") + "/"))) {
     throw new AuthError("discovery_failed");
   }
@@ -158,12 +158,13 @@ async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptio
   const advertised = challenge.get("resource_metadata");
   if (advertised !== undefined && advertised === "") throw new AuthError("discovery_failed");
   const path = endpoint.pathname === "/" ? "" : endpoint.pathname;
-  const specific = `${endpoint.origin}/.well-known/oauth-protected-resource${path}`;
+  const query = endpoint.href.includes("?") ? endpoint.href.slice(endpoint.href.indexOf("?")) : "";
+  const specific = `${endpoint.origin}/.well-known/oauth-protected-resource${path}${query}`;
   const root = `${endpoint.origin}/.well-known/oauth-protected-resource`;
   // RFC 9728 section 3.3 binds the returned identifier to the discovery source.
   const expected = advertised !== undefined
     ? new Map([[advertised, context.url]])
-    : new Map([[specific, `${endpoint.origin}${path}`], [root, endpoint.origin]]);
+    : new Map([[specific, context.url], [root, endpoint.origin]]);
   const protectedResource = await metadataAt(advertised !== undefined ? [advertised] : [specific, root], options, operation, expected);
   if (typeof protectedResource.resource !== "string") throw new AuthError("discovery_failed");
   const resource = protectedResource.resource;
@@ -197,7 +198,8 @@ async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptio
         required.split(" ").some(scope => !client.scopes.includes(scope))) throw new AuthError("access_denied");
   }
   const issuer = https(client.issuer);
-  const issuerPath = issuer.pathname === "/" ? "" : issuer.pathname;
+  // RFC 8414 section 3.1 removes a terminating slash for metadata lookup only.
+  const issuerPath = issuer.pathname.replace(/\/$/, "");
   const metadata = await metadataAt([
     `${issuer.origin}/.well-known/oauth-authorization-server${issuerPath}`,
     `${issuer.origin}/.well-known/openid-configuration${issuerPath}`,
