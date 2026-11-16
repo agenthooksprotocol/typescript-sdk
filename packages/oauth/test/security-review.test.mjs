@@ -133,4 +133,3 @@ test('normalized issuer lookup does not normalize the metadata issuer identity',
     return Response.json({ ...target.metadata, issuer: issuer.slice(0, -1) });
   }), operation()), { code: 'discovery_failed' });
 });
-
