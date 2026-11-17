@@ -116,7 +116,9 @@ A later `prepare` reuses it when the grant key and redirect match and the new
 requested plus required scopes are covered; otherwise it supersedes it. With the
 same grant key and redirect, the new login requests old ∪ ((new requested ∪ new
 required) ∩ new ceiling) and stores the union of both ceilings; otherwise it uses
-only the new caller's scopes and ceiling. A login ends by
+only the new caller's scopes and ceiling. Because reuse requires the exact
+redirect, hosts sharing a store must keep the redirect stable per grant key (or
+give per-process ephemeral loopback redirects distinct grant partitions). A login ends by
 completion (a claimed valid callback, including consent denial), supersede,
 `cancel` or expiry; a callback for an ended login fails `interaction_required`.
 Redirect, state and issuer are validated before the login is claimed, so a stray
@@ -148,7 +150,11 @@ and records; it does not constrain what an issued token can do.
 Refresh runs inside host coordination, reloads the latest generation, and uses
 CAS for replacement; concurrent callers reuse the refreshed grant. Refresh uses
 the persisted authorization-server metadata; `prepare` and challenge handling
-rediscover outside store locks, falling back to it during an outage.
+rediscover outside store locks, falling back to it during an outage. If a renewal
+fails without an OAuth error response (network, TLS, 404/410, moved endpoint), the
+stored issuer's metadata is refetched once, persisted if the issuer is unchanged,
+and the renewal retried once; otherwise it fails `discovery_failed` and the host
+repairs the binding with `prepare`.
 Missing refresh-token rotation retains the previous refresh token. Transient
 failures preserve stored credentials and advise retry. An invalid token response
 is never dispatched and fails `provider_failed`: an initial exchange persists

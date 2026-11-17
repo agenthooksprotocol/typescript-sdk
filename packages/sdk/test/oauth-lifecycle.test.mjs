@@ -412,3 +412,37 @@ test('[step-up-keeps-previous-grant] step-up consent requests and records the pr
   await f.oauth.complete(pending, f.callback(pending), budget());
   assert.deepEqual([...f.store.grants()[0].scopes].sort(), ['files', 'read', 'write'], 'earlier scopes are not lost');
 });
+
+test('[stale-metadata-refetch-once] a moved token endpoint refetches issuer metadata once; OAuth errors never refetch', async () => {
+  const f = fixture();
+  await f.login();
+  const fetch = f.options.policyFetch;
+  const urls = [];
+  let moved = false, issuer = 'https://issuer.example';
+  const options = { ...f.options, async policyFetch(url, init, context) {
+    urls.push(url);
+    if (url === 'https://issuer.example/token' && moved) return new Response('gone', { status: 410 });
+    if (url === 'https://issuer.example/token2') return fetch('https://issuer.example/token', init, context);
+    const response = await fetch(url, init, context);
+    if (!url.includes('oauth-authorization-server')) return response;
+    return Response.json({ ...await response.json(), issuer, ...(moved ? { token_endpoint: 'https://issuer.example/token2' } : {}) });
+  } };
+  const provider = managedOAuth(options).provider({ budget: () => budget() });
+  // Moved endpoint: one issuer-metadata refetch, persisted, then one retry.
+  moved = true; f.expire(); urls.length = 0;
+  assert.equal((await provider.credential(f.context)).token, 'access-2');
+  assert.equal(urls.filter(url => url.includes('oauth-authorization-server')).length, 1);
+  assert(urls.every(url => !url.includes('oauth-protected-resource')));
+  const binding = [...f.store.values.values()].find(value => value.kind === 'binding');
+  assert.equal(binding.metadata.token_endpoint, 'https://issuer.example/token2');
+  // An OAuth error response never triggers a refetch.
+  f.expire(); urls.length = 0;
+  Object.assign(f.state, { tokenStatus: 400, tokenError: { error: 'invalid_client' } });
+  await assert.rejects(provider.credential(f.context), { code: 'credential_unavailable' });
+  assert.equal(urls.filter(url => url.includes('oauth-authorization-server')).length, 0);
+  // A changed issuer after a transport failure is discovery_failed; the host repairs with prepare.
+  Object.assign(f.state, { tokenStatus: 200, tokenError: undefined });
+  for (const [key, value] of f.store.values) if (value.kind === 'binding') f.store.values.set(key, { ...value, metadata: { ...value.metadata, token_endpoint: 'https://issuer.example/token' } });
+  issuer = 'https://other-issuer.example';
+  await assert.rejects(provider.credential(f.context), { code: 'discovery_failed', recovery: 'retry' });
+});

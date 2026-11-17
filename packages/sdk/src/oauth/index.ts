@@ -2,7 +2,7 @@ import { AuthError, normalizeAuthTarget, classifyAuthError } from "../client/aut
 import type { AuthChallengeContext, DeliveryAuthContext, DeliveryAuthProvider, DeliveryCredential } from "../client/auth.js";
 import { bearerParameters } from "../client/challenge.js";
 import { resolveTarget, type CachedBinding } from "./discovery.js";
-import { acquireClientCredentials, exchangeCode, refreshCredential, startLogin, validateCallback } from "./protocol.js";
+import { acquireClientCredentials, exchangeCode, isTransportFailure, refreshCredential, startLogin, validateCallback } from "./protocol.js";
 import type { TokenResult } from "./protocol.js";
 import type {
   ClientConfig, ManagedOAuthOptions, Operation, ResolvedTarget, StoredBinding, StoredGrant, StoredPendingLogin, StoredRecord, TokenValue,
@@ -210,7 +210,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       key = grantKey(namespace, context, target.client);
     }
     const required = target.client.requiredScopes ?? [];
-    return race(operation.signal, store.coordinate(key, operation.signal, async () => {
+    const renew = (target: ResolvedTarget) => race(operation.signal, store.coordinate(key, operation.signal, async (): Promise<PrepareResult> => {
       const current = await read(key, "grant", operation);
       if (usable(current, target, required)) return ready(current, key, binding, target, []);
       const prior = current ? effective(current, target) : [];
@@ -225,6 +225,25 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       if (mode !== "host") throw new AuthError("interaction_required", required);
       return login(context, acquisition(target, current), key, operation);
     }));
+    try {
+      return await renew(target);
+    } catch (error) {
+      operation.signal.throwIfAborted();
+      if (!cached || !isTransportFailure(error)) throw error;
+    }
+    // Persisted metadata may be stale (moved endpoint, 404/410, network): refetch the
+    // stored issuer's metadata once, outside the lock, never protected-resource metadata.
+    let refreshed: ResolvedTarget;
+    try {
+      refreshed = withExplicit(await resolveTarget(context, options, operation, { issuer: cached.issuer, resource: cached.resource }));
+    } catch (error) {
+      operation.signal.throwIfAborted();
+      throw new AuthError("discovery_failed");
+    }
+    if (refreshed.client.issuer !== cached.issuer || grantKey(namespace, context, refreshed.client) !== key) throw new AuthError("discovery_failed");
+    await write(bindingKey(namespace, context), cached.generation, { ...cached, generation: crypto.randomUUID(),
+      metadata: refreshed.metadata, discoveredAt: Date.now() }, operation);
+    return renew(refreshed);
   }
 
   /**

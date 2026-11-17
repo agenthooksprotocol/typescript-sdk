@@ -20,6 +20,13 @@ function https(value: string): URL {
   return url;
 }
 
+const transport = new WeakSet<AuthError>();
+/** Tag a failure that had no OAuth error response: network, TLS, 404/410, moved endpoint. */
+export function markTransport(error: AuthError): AuthError { transport.add(error); return error; }
+export function isTransportFailure(error: unknown): boolean {
+  return error instanceof AuthError && transport.has(error);
+}
+
 /** The host must enforce DNS/connect policy, not merely inspect this URL. */
 export async function checkedFetch(
   url: string,
@@ -44,7 +51,8 @@ export async function checkedFetch(
     response = await options.policyFetch(url, { ...init, redirect: "error", signal: operation.signal }, { purpose, operation });
   } catch (error) {
     active(operation);
-    throw classifyAuthError(error);
+    const classified = classifyAuthError(error);
+    throw classified.code === "provider_failed" ? markTransport(classified) : classified;
   }
   active(operation);
   if (response.redirected || (response.url !== "" && response.url !== url)) {

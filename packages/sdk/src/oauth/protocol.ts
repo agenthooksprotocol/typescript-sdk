@@ -1,6 +1,7 @@
 import * as oauth from "oauth4webapi";
 import { AuthError, classifyAuthError } from "../client/auth.js";
-import { active, checkedFetch } from "./discovery.js";
+import { active, checkedFetch, markTransport } from "./discovery.js";
+export { isTransportFailure } from "./discovery.js";
 import type { ManagedOAuthOptions, Operation, ResolvedTarget, TokenValue } from "./types.js";
 
 /** A token response that was not dispatched still reports a valid rotated refresh token. */
@@ -96,12 +97,18 @@ function parseToken(body: unknown, target: ResolvedTarget, previous?: readonly s
 
 async function tokenResult(response: Response, target: ResolvedTarget,
   process: (response: Response) => Promise<unknown>, previous?: readonly string[]): Promise<TokenResult> {
-  const raw: unknown = response.status === 200 ? await response.clone().json().catch(() => undefined) : undefined;
+  const parsed: unknown = await response.clone().json().catch(() => undefined);
+  const raw = response.status === 200 ? parsed : undefined;
   let body: unknown;
   try { body = await process(response); }
   catch (error) {
     // OAuth error responses are classified by protect(); anything else is an invalid response.
-    if (error instanceof oauth.ResponseBodyError || raw === undefined) throw error;
+    if (error instanceof oauth.ResponseBodyError) throw error;
+    if (raw === undefined) {
+      // A non-200 without an OAuth error body (404/410, proxy page) may be a moved endpoint.
+      const oauthError = typeof (parsed as { error?: unknown } | undefined)?.error === "string";
+      throw oauthError ? new AuthError("provider_failed") : markTransport(new AuthError("provider_failed"));
+    }
     return parseToken({ ...raw as object, token_type: "invalid" }, target);
   }
   // Validate the server's own expires_in, not oauth4webapi's parseFloat coercion.
