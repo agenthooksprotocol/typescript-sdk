@@ -721,7 +721,14 @@ const defaults: AuthProvider = {
       ),
       context.signal,
     );
-    if (!response.ok) error("token request rejected");
+    if (!response.ok) {
+      if (parameters.get("grant_type") === "refresh_token") {
+        const failure = await withinBudget(response.json().catch(() => undefined), context.signal) as { error?: unknown } | undefined;
+        // Definitive rejection of the presented refresh token; anything else is transient.
+        if (failure?.error === "invalid_grant") throw new AuthError("refresh_rejected");
+      }
+      error("token request rejected");
+    }
     const body = record(await withinBudget(response.json(), context.signal));
     if (
       typeof body.token_type !== "string" ||
@@ -851,16 +858,20 @@ const defaults: AuthProvider = {
     let credential: Credential;
     // A refresh can never broaden a grant, so skip it when a requirement is missing.
     if (cached?.refreshToken && required.every((scope: string) => cached.scopes?.includes(scope) ?? true)) {
-      await withinBudget(
-        Promise.resolve(this.deleteToken(key, context)),
-        context.signal,
-      );
-      credential = await this.refresh(
-        context,
-        { ...request, client },
-        cached.refreshToken,
-        options,
-      );
+      // Keep the record until the refresh succeeds (replaced by setToken below) or
+      // definitively fails; a transient failure must not lose refresh material.
+      const presented = cached.refreshToken;
+      try {
+        credential = await this.refresh(context, { ...request, client }, presented, options);
+      } catch (failure) {
+        if (failure instanceof AuthError && failure.code === "refresh_rejected") {
+          // Compare-and-delete: keep a newer record holding a different refresh token.
+          const latest = await withinBudget(Promise.resolve(this.getToken(key, context)), context.signal);
+          if (latest?.refreshToken === presented)
+            await withinBudget(Promise.resolve(this.deleteToken(key, context)), context.signal);
+        }
+        throw failure;
+      }
       if (cached.scopes && credential.scopes)
         credential = { ...credential, scopes: credential.scopes.filter((scope: string) => cached.scopes!.includes(scope)) };
     } else if (client.flow === "client_credentials") {

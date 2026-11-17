@@ -618,3 +618,40 @@ test("[insufficient-scope-step-up] built-in auth() never resends after an out-of
     await hooks.close();
   }
 });
+
+test("[transient-refresh-failure] built-in auth() keeps its refresh token until a refresh definitively fails", async () => {
+  let respond = () => ({ status: 200 });
+  let issued = 0;
+  const cache = new Map();
+  const provider = auth({
+    resolveHostname: async () => ["93.184.216.34"],
+    resolveCredentialReference: () => "client-secret",
+    async fetch(url) {
+      if (url.pathname.startsWith("/.well-known/")) {
+        return Response.json({ issuer: "https://identity.example/tenant", token_endpoint: "https://identity.example/token",
+          grant_types_supported: ["client_credentials", "refresh_token"] });
+      }
+      const { status, body } = respond();
+      if (status !== 200) return Response.json(body, { status });
+      issued++;
+      return Response.json({ access_token: `access-${issued}`, refresh_token: `refresh-${issued}`, token_type: "Bearer", expires_in: 3600, scope: "events" });
+    },
+  });
+  const context = { backendId: "auth.backend", purpose: "event", url: eventUrl, authentication: bindings[2], cache };
+  assert.equal((await provider.authenticate(context)).token, "access-1");
+  const [key] = cache.keys();
+  const expire = () => cache.set(key, { ...cache.get(key), expiresAt: 0 });
+  expire();
+  respond = () => ({ status: 503, body: { error: "temporarily_unavailable" } });
+  await assert.rejects(provider.authenticate(context));
+  assert.equal(cache.get(key).refreshToken, "refresh-1", "transient failure keeps refresh material");
+  // A newer record written while the refresh was in flight survives invalid_grant.
+  respond = () => { cache.set(key, { token: "newer", refreshToken: "refresh-newer", expiresAt: 0, scopes: ["events"] }); return { status: 400, body: { error: "invalid_grant" } }; };
+  await assert.rejects(provider.authenticate(context), { code: "refresh_rejected" });
+  assert.equal(cache.get(key).refreshToken, "refresh-newer");
+  respond = () => ({ status: 400, body: { error: "invalid_grant" } });
+  await assert.rejects(provider.authenticate(context), { code: "refresh_rejected" });
+  assert.equal(cache.has(key), false, "definitive rejection of the stored refresh token drops the record");
+  respond = () => ({ status: 200 });
+  assert.equal((await provider.authenticate(context)).token, "access-2");
+});
