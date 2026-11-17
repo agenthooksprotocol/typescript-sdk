@@ -39,8 +39,8 @@ Supply all of these capabilities:
   local approval. Preserve records verbatim; expiry is optional.
 
 The adapter rejects redirects, URL credentials, non-HTTPS network endpoints,
-resource/issuer mismatches and broader-than-permitted scopes. It does not register
-clients dynamically. Unsigned JSON metadata is supported over trusted HTTPS;
+resource/issuer mismatches and broader-than-permitted scopes. Clients come from
+[client registration](#client-registration). Unsigned JSON metadata is supported over trusted HTTPS;
 signed metadata is rejected until a verified signed-metadata integration exists.
 Client credentials require explicit advertised grant support; PKCE requires S256.
 Authorization-server discovery removes a terminating issuer slash only for
@@ -146,7 +146,46 @@ effective scopes are the grant ∩ the current ceiling, and only explicit or
 challenge requirements are mandatory. The ceiling governs what the SDK requests
 and records; it does not constrain what an issued token can do.
 
+## Client registration
+
+Each grant's `client_id` comes from one source, chosen per issuer and flow:
+
+1. **Pre-registered**: `ClientConfig.clientId` (or the preset's). It always wins.
+2. **Client ID Metadata Document**: PKCE only, when `clientMetadataDocument`
+   (`{ url, redirectUris }`) is set and the issuer advertises
+   `client_id_metadata_document_supported: true`. The URL is the `client_id`; the
+   SDK never fetches it. The redirect must equal one of `redirectUris`.
+3. **Dynamic registration (RFC 7591)**: when `registration` (`{ clientName,
+   softwareId?, softwareVersion?, scopes?, initialAccessTokenRef? }`) is set on the
+   config for that exact issuer and it advertises `registration_endpoint`.
+   Client credentials also need `secrets`, a host `SecretStore`
+   (`put`/`get`/`delete` by opaque reference); secrets never enter `store`. An
+   initial access token reference is resolved with `secrets.get` and sent only to
+   that issuer's endpoint (`checkDestination` purpose `"registration"`).
+
+Otherwise the operation fails `credential_unavailable`. The selection is recorded
+on the binding and survives metadata changes until host policy changes it.
+Registrations are `registration` records shared per namespace, issuer, flow and
+redirect, created once under `coordinate`. Only host `prepare` registers a PKCE
+client; client credentials may register in any acquisition. A failed registration
+writes a `registration_failure` backoff marker (`registrationBackoff`, default 1
+minute doubling to 1 hour, honouring `Retry-After`); until it elapses only
+`prepare` sends a request. Client credentials re-register when the secret expires
+or the token endpoint answers `invalid_client` (once per operation), and renew
+proactively within `min(10% of the secret lifetime, renewalMarginMs)` of expiry.
+A PKCE client deleted by the server cannot be detected; repair it with
+`prepare(context, budget, { forceRegistration: true })`.
+
+The built-in `auth()` provider uses pre-registered clients only: it has no
+coordinated store, secret hook or `prepare`, so a missing `clientId` fails
+`credential_unavailable`.
+
 ## Rotation, rejection and failure
+
+A delivery that fails on authentication reports it in its `DeliveryDiagnostic`
+as `auth: { code, recovery, requiredScopes? }`, the redacted `AuthError` fields.
+`recovery: "login"` (for example `interaction_required`) tells the host to run
+its login (`prepare`) for that diagnostic's `backendId`, passing `requiredScopes`.
 
 Refresh runs inside host coordination, reloads the latest generation, and uses
 CAS for replacement; concurrent callers reuse the refreshed grant. Refresh uses

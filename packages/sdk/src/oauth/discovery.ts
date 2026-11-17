@@ -11,7 +11,7 @@ export function active(operation: Operation): void {
   if (Date.now() >= operation.deadline) throw new DOMException("OAuth operation deadline exceeded", "TimeoutError");
 }
 
-function https(value: string): URL {
+export function https(value: string): URL {
   let url: URL;
   try { url = new URL(value); } catch { throw new AuthError("untrusted_destination"); }
   if (url.protocol !== "https:" || url.username || url.password || url.hash || value.includes("#")) {
@@ -134,12 +134,22 @@ function resourceCovers(resource: string, endpoint: string): void {
 
 function validateClient(client: ClientConfig): void {
   if (!client || typeof client.issuer !== "string" || typeof client.resource !== "string" ||
-      typeof client.clientId !== "string" || !client.clientId.trim() ||
+      (client.clientId !== undefined && (typeof client.clientId !== "string" || !client.clientId.trim())) ||
       !["authorization_code_pkce", "client_credentials"].includes(client.flow)) throw new AuthError("invalid_configuration");
   const issuer = https(client.issuer);
   https(client.resource);
   if (issuer.search || client.issuer.includes("?")) throw new AuthError("invalid_configuration");
   if (!Array.isArray(client.scopes) || client.scopes.some(scope => typeof scope !== "string" || !/^[\x21\x23-\x5B\x5D-\x7E]+$/.test(scope))) {
+    throw new AuthError("invalid_configuration");
+  }
+  const document = client.clientMetadataDocument, policy = client.registration;
+  const text = (value: unknown) => typeof value === "string" && value.length > 0;
+  if ((document !== undefined && (!document || typeof document.url !== "string" || !Array.isArray(document.redirectUris) ||
+        !document.redirectUris.every(text))) ||
+      (policy !== undefined && (!policy || !text(policy.clientName) ||
+        [policy.softwareId, policy.softwareVersion, policy.initialAccessTokenRef].some(value => value !== undefined && !text(value)) ||
+        (policy.scopes !== undefined && (!Array.isArray(policy.scopes) ||
+          policy.scopes.some(scope => typeof scope !== "string" || !/^[\x21\x23-\x5B\x5D-\x7E]+$/.test(scope))))))) {
     throw new AuthError("invalid_configuration");
   }
 }
@@ -198,7 +208,8 @@ async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptio
   }
   active(operation);
   validateClient(selected);
-  if ((selected.flow === "client_credentials" || binding?.clientSecretRef !== undefined) &&
+  // A pre-registered confidential client needs its secret; a registered one gets it from `secrets`.
+  if (selected.clientId !== undefined && (selected.flow === "client_credentials" || binding?.clientSecretRef !== undefined) &&
       (typeof selected.clientSecret !== "string" || !selected.clientSecret)) throw new AuthError("credential_unavailable");
   if (!issuers.includes(selected.issuer) || selected.resource !== resource) throw new AuthError("invalid_configuration");
   if (binding && (selected.issuer !== binding.issuer || selected.resource !== binding.resource ||

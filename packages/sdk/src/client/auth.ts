@@ -619,10 +619,10 @@ const defaults: AuthProvider = {
     validateResource(resource, context.url, options);
     const issuer = secureUrl(client.issuer, options);
     if (issuer.search) error("invalid issuer");
-    if (
-      !client.clientId ||
-      !["authorization_code_pkce", "client_credentials"].includes(client.flow)
-    )
+    // Pre-registered clients only: without the managed store, coordination and secret
+    // hook, this provider never uses CIMD or registers, so no client is unavailable.
+    if (!client.clientId) throw new AuthError("credential_unavailable");
+    if (!["authorization_code_pkce", "client_credentials"].includes(client.flow))
       error("invalid client configuration");
     const requiredScopes =
       challengeParameter(context.challenge, "scope")
