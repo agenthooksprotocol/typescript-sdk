@@ -222,7 +222,7 @@ for (const binding of bindings) {
 }
 
 for (const finalStatus of [200, 401]) {
-  test(`Hooks challenges exact credential and response; retry is bounded (final ${finalStatus})`, async () => {
+  test(`[challenged-replay-once] Hooks challenges exact credential and replays intercept once (final ${finalStatus})`, async () => {
     const credentials = [
       { type: "bearer", token: "old-secret", attempt: { generation: 1 } },
       { type: "bearer", token: "new-secret", attempt: Symbol("generation-2") },
@@ -258,15 +258,11 @@ for (const finalStatus of [200, 401]) {
       const result = await hooks.dispatch("tool.before", toolInput());
       assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, finalStatus === 200 ? 0 : 1);
       assert.equal(acquisitions, 2);
-      assert.equal(requests.length, 2);
+      assert.equal(requests.length, 2, "replayed at most once");
       assert.equal(challenges.length, finalStatus === 200 ? 1 : 2);
       for (const [index, challenge] of challenges.entries()) {
         assert.equal(challenge.response, responses[index]);
         assert.equal(challenge.response.status, 401);
-        assert.equal(
-          challenge.response.headers.get("www-authenticate"),
-          'Bearer error="invalid_token"',
-        );
         assert.equal(challenge.credential, credentials[index]);
         assert.equal(challenge.credential.attempt, credentials[index].attempt);
         assert.deepEqual(challenge.authentication, bindings[0]);
@@ -274,24 +270,12 @@ for (const finalStatus of [200, 401]) {
         assert.equal(challenge.purpose, "event");
         assert.equal(challenge.url, eventUrl);
       }
-      assert.equal(requests[0].init.body, requests[1].init.body);
-      assert.equal(
-        JSON.parse(requests[0].init.body).id,
-        JSON.parse(requests[1].init.body).id,
-      );
-      assert.equal(requests[0].init.method, requests[1].init.method);
-      assert.equal(
-        new Headers(requests[0].init.headers).get("authorization"),
-        "Bearer old-secret",
-      );
-      assert.equal(
-        new Headers(requests[1].init.headers).get("authorization"),
-        "Bearer new-secret",
-      );
-      assert.doesNotMatch(
-        JSON.stringify(result.diagnostics.filter(d => d.phase !== "observation")),
-        /old-secret|new-secret/,
-      );
+      assert.equal(requests[1].init.body, requests[0].init.body, "replay reuses the buffered body and JSON-RPC id");
+      assert.equal(JSON.parse(requests[1].init.body).method, "hooks/intercept");
+      assert.equal(new Headers(requests[0].init.headers).get("authorization"), "Bearer old-secret");
+      assert.equal(new Headers(requests[1].init.headers).get("authorization"), "Bearer new-secret");
+      assert.doesNotMatch(JSON.stringify(result.diagnostics), /old-secret|new-secret/);
+      await result.content?.close();
     } finally {
       await hooks.close();
     }
@@ -402,17 +386,14 @@ test("Hooks allows provider-owned recovery from an anonymous challenge", async (
     },
   );
   try {
-    assert.deepEqual(
-      (await hooks.dispatch("tool.before", toolInput())).diagnostics.filter(d => d.phase !== "observation"),
-      [],
-    );
+    const recovered = await hooks.dispatch("tool.before", toolInput());
+    assert.deepEqual(recovered.diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.equal(challenged, true);
     assert.equal(requests.length, 2);
     assert.equal(new Headers(requests[0].headers).get("authorization"), null);
-    assert.equal(
-      new Headers(requests[1].headers).get("authorization"),
-      "Bearer discovered-by-host",
-    );
-    assert.equal(requests[0].body, requests[1].body);
+    assert.equal(new Headers(requests[1].headers).get("authorization"), "Bearer discovered-by-host");
+    assert.equal(requests[1].body, requests[0].body);
+    await recovered.content?.close();
   } finally {
     await hooks.close();
   }
@@ -495,7 +476,7 @@ for (const phase of ["credential", "challenge"]) {
   );
 }
 
-test("Hooks never retries a challenge anonymously when the provider still has no credential", async () => {
+test("Hooks fails an anonymous rejection when the provider still has no credential for the replay", async () => {
   let deliveries = 0,
     challenges = 0,
     acquisitions = 0;
@@ -579,4 +560,192 @@ test("Hooks cannot substitute event credentials for missing configured upload cr
   } finally {
     await hooks.close();
   }
+});
+
+function builtInOAuth() {
+  const issued = [];
+  const provider = auth({
+    resolveHostname: async () => ["93.184.216.34"],
+    resolveCredentialReference: () => "client-secret",
+    async fetch(url, init) {
+      if (url.pathname.startsWith("/.well-known/")) {
+        return Response.json({ issuer: "https://identity.example/tenant", token_endpoint: "https://identity.example/token",
+          grant_types_supported: ["client_credentials"] });
+      }
+      const scope = new URLSearchParams(String(init.body)).get("scope");
+      issued.push(scope);
+      return Response.json({ access_token: `access-${issued.length}`, token_type: "Bearer", expires_in: 3600, scope });
+    },
+  });
+  return { provider, issued };
+}
+
+test("[challenged-replay-once] built-in auth() drops a revoked cached token instead of resending it", async () => {
+  const { provider, issued } = builtInOAuth();
+  const revoked = new Set(), seen = [];
+  const hooks = deliveryFixture(provider, async (url, init) => {
+    const authorization = new Headers(init.headers).get("authorization");
+    seen.push({ authorization, body: init.body });
+    return revoked.has(authorization) ? new Response(null, { status: 401 }) : success(init);
+  }, bindings[2]);
+  try {
+    assert.deepEqual((await hooks.dispatch("tool.before", toolInput())).diagnostics.filter(d => d.phase !== "observation"), []);
+    revoked.add("Bearer access-1");
+    assert.deepEqual((await hooks.dispatch("tool.before", toolInput())).diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.deepEqual((await hooks.dispatch("tool.before", toolInput())).diagnostics.filter(d => d.phase !== "observation"), []);
+    assert.deepEqual(seen.map(item => item.authorization),
+      ["Bearer access-1", "Bearer access-1", "Bearer access-2", "Bearer access-2"]);
+    assert.equal(seen[2].body, seen[1].body, "replay keeps the request id and body");
+    assert.equal(issued.length, 2);
+  } finally {
+    await hooks.close();
+  }
+});
+
+test("[insufficient-scope-step-up] built-in auth() never resends after an out-of-ceiling insufficient_scope", async () => {
+  const { provider, issued } = builtInOAuth();
+  let deliveries = 0;
+  const hooks = deliveryFixture(provider, async () => {
+    deliveries++;
+    return new Response(null, { status: 403, headers: { "www-authenticate": 'Bearer error="insufficient_scope", scope="admin"' } });
+  }, bindings[2]);
+  try {
+    const result = await hooks.dispatch("tool.before", toolInput());
+    assert.equal(result.diagnostics.filter(d => d.phase !== "observation").length, 1);
+    assert.equal(deliveries, 1);
+    assert.equal(issued.length, 1);
+  } finally {
+    await hooks.close();
+  }
+});
+
+test("[transient-refresh-failure] built-in auth() keeps its refresh token until a refresh definitively fails", async () => {
+  let respond = () => ({ status: 200 });
+  let issued = 0;
+  const cache = new Map();
+  const provider = auth({
+    resolveHostname: async () => ["93.184.216.34"],
+    resolveCredentialReference: () => "client-secret",
+    async fetch(url) {
+      if (url.pathname.startsWith("/.well-known/")) {
+        return Response.json({ issuer: "https://identity.example/tenant", token_endpoint: "https://identity.example/token",
+          grant_types_supported: ["client_credentials", "refresh_token"] });
+      }
+      const { status, body } = respond();
+      if (status !== 200) return Response.json(body, { status });
+      issued++;
+      return Response.json({ access_token: `access-${issued}`, refresh_token: `refresh-${issued}`, token_type: "Bearer", expires_in: 3600, scope: "events" });
+    },
+  });
+  const context = { backendId: "auth.backend", purpose: "event", url: eventUrl, authentication: bindings[2], cache };
+  assert.equal((await provider.authenticate(context)).token, "access-1");
+  const [key] = cache.keys();
+  const expire = () => cache.set(key, { ...cache.get(key), expiresAt: 0 });
+  expire();
+  respond = () => ({ status: 503, body: { error: "temporarily_unavailable" } });
+  await assert.rejects(provider.authenticate(context));
+  assert.equal(cache.get(key).refreshToken, "refresh-1", "transient failure keeps refresh material");
+  // A newer record written while the refresh was in flight survives invalid_grant.
+  respond = () => { cache.set(key, { token: "newer", refreshToken: "refresh-newer", expiresAt: 0, scopes: ["events"] }); return { status: 400, body: { error: "invalid_grant" } }; };
+  await assert.rejects(provider.authenticate(context), { code: "refresh_rejected" });
+  assert.equal(cache.get(key).refreshToken, "refresh-newer");
+  respond = () => ({ status: 400, body: { error: "invalid_grant" } });
+  await assert.rejects(provider.authenticate(context), { code: "refresh_rejected" });
+  assert.equal(cache.has(key), false, "definitive rejection of the stored refresh token drops the record");
+  respond = () => ({ status: 200 });
+  assert.equal((await provider.authenticate(context)).token, "access-2");
+});
+
+test("[challenge-renews-rejected-unexpired-token] built-in auth() never resends an unknown-expiry token after a 401", async () => {
+  let issued = 0;
+  const cache = new Map();
+  const provider = auth({
+    resolveHostname: async () => ["93.184.216.34"],
+    resolveCredentialReference: () => "client-secret",
+    async fetch(url) {
+      if (url.pathname.startsWith("/.well-known/")) {
+        return Response.json({ issuer: "https://identity.example/tenant", token_endpoint: "https://identity.example/token",
+          grant_types_supported: ["client_credentials"] });
+      }
+      return Response.json({ access_token: `access-${++issued}`, token_type: "Bearer", scope: "events" });
+    },
+  });
+  const context = { backendId: "auth.backend", purpose: "event", url: eventUrl, authentication: bindings[2], cache };
+  const first = await provider.credential(context);
+  assert.equal(first.token, "access-1");
+  // Not replayed (e.g. a notification): the next attempt must not reuse the rejected token.
+  await provider.challenge({ ...context, credential: first, response: new Response(null, { status: 401 }) });
+  assert.equal((await provider.credential(context)).token, "access-2");
+});
+
+test("[insufficient-scope-step-up] built-in auth() keeps a valid token after 403 insufficient_scope", async () => {
+  const { provider, issued } = builtInOAuth();
+  const cache = new Map();
+  const context = { backendId: "auth.backend", purpose: "event", url: eventUrl, authentication: bindings[2], cache };
+  const first = await provider.credential(context);
+  await provider.challenge({ ...context, credential: first, response: new Response(null, { status: 403,
+    headers: { "www-authenticate": 'Bearer error="insufficient_scope", scope="admin"' } }) });
+  assert.equal((await provider.credential(context)).token, "access-1");
+  assert.equal(issued.length, 1);
+});
+
+test("[token-validation-failure-clears-in-flight] built-in auth() persists a rotated refresh token from an invalid refresh response", async () => {
+  let invalid = false;
+  const cache = new Map();
+  const provider = auth({
+    resolveHostname: async () => ["93.184.216.34"],
+    resolveCredentialReference: () => "client-secret",
+    async fetch(url) {
+      if (url.pathname.startsWith("/.well-known/")) {
+        return Response.json({ issuer: "https://identity.example/tenant", token_endpoint: "https://identity.example/token",
+          grant_types_supported: ["client_credentials", "refresh_token"] });
+      }
+      return invalid
+        ? Response.json({ access_token: "n", token_type: "Bearer", expires_in: "3600.5", refresh_token: "rotated" })
+        : Response.json({ access_token: "a", token_type: "Bearer", expires_in: 3600, refresh_token: "r1", scope: "events" });
+    },
+  });
+  const context = { backendId: "auth.backend", purpose: "event", url: eventUrl, authentication: bindings[2], cache };
+  await provider.credential(context);
+  const [key] = cache.keys();
+  cache.set(key, { ...cache.get(key), expiresAt: 0 });
+  invalid = true;
+  await assert.rejects(provider.credential(context));
+  assert.equal(cache.get(key).refreshToken, "rotated");
+});
+
+test("[token-validation-failure-clears-in-flight] built-in auth() commits a real HTTP refresh response despite a caller abort", async (t) => {
+  const { createServer } = await import("node:http");
+  const server = createServer((request, response) => { request.resume(); request.on("end", () => {
+    const text = JSON.stringify({ access_token: "n", token_type: "Bearer", expires_in: 3600, refresh_token: "rotated-real", scope: "events" });
+    response.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(text) });
+    response.end(text);
+  }); });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  let live = false, controller;
+  const provider = auth({
+    resolveHostname: async () => ["93.184.216.34"],
+    resolveCredentialReference: () => "client-secret",
+    async fetch(url, init) {
+      if (url.pathname.startsWith("/.well-known/")) {
+        return Response.json({ issuer: "https://identity.example/tenant", token_endpoint: "https://identity.example/token",
+          grant_types_supported: ["client_credentials", "refresh_token"] });
+      }
+      if (!live) return Response.json({ access_token: "a", token_type: "Bearer", expires_in: 3600, refresh_token: "r1", scope: "events" });
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/token`, { method: "POST", headers: init.headers, body: init.body, signal: init.signal });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      controller.abort();
+      return response;
+    },
+  });
+  const cache = new Map();
+  const context = { backendId: "auth.backend", purpose: "event", url: eventUrl, authentication: bindings[2], cache };
+  await provider.credential(context);
+  const [key] = cache.keys();
+  cache.set(key, { ...cache.get(key), expiresAt: 0 });
+  live = true; controller = new AbortController();
+  await assert.rejects(provider.credential({ ...context, signal: controller.signal }), { name: "AbortError" });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(cache.get(key).refreshToken, "rotated-real");
 });

@@ -296,7 +296,7 @@ test("dispatch authentication failure honors fail-open without unauthenticated f
   }
 });
 
-test("top-level authentication override can ignore challenge; retry preserves body and identity", async () => {
+test("top-level authentication override handles a challenge and replays the intercept once", async () => {
   let calls = 0;
   const s = await server((m, q, r, n) =>
     n === 1
@@ -313,12 +313,11 @@ test("top-level authentication override can ignore challenge; retry preserves bo
   );
   try {
     const r = await hooks.dispatch("tool.before", tool());
-    assert.equal(
-      r.diagnostics.filter((d) => d.phase !== "observation").length,
-      0,
-    );
+    assert.equal(r.diagnostics.filter((d) => d.phase !== "observation").length, 0);
     assert.equal(calls, 2);
-    assert.deepEqual(s.messages[0].message, s.messages[1].message);
+    assert.equal(s.messages.length, 2, "replayed exactly once");
+    assert.deepEqual(s.messages[1].message, s.messages[0].message, "replay keeps the JSON-RPC id and body");
+    assert.equal(s.messages[0].headers.authorization, "Bearer local-1");
     assert.equal(s.messages[1].headers.authorization, "Bearer local-2");
   } finally {
     await hooks.close();

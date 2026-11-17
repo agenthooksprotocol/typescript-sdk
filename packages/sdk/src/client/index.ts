@@ -13,6 +13,8 @@ export type { Codec, BoundaryContracts, PayloadContract, ToolBeforeInput, ToolBe
 export { form } from "./forms.js";
 export type { Form, FormResult } from "./forms.js";
 export { auth } from "./auth.js";
+export { AuthError, normalizeAuthTarget } from "./auth-routing.js";
+export type { AuthErrorCode, AuthRecovery, AuthTarget, AuthCompositionOptions } from "./auth-routing.js";
 export type {
   Credential, AuthContext, DeliveryCredential, DeliveryAuthContext,
   AuthChallengeContext, DeliveryAuthProvider, OAuthClient, AuthorizationRequest,

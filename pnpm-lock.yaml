@@ -14,7 +14,7 @@ importers:
 
   packages/conformance:
     dependencies:
-      'agenthooksprotocol':
+      agenthooksprotocol:
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
@@ -33,10 +33,13 @@ importers:
       ajv-formats:
         specifier: 3.0.1
         version: 3.0.1(ajv@8.17.1)
+      oauth4webapi:
+        specifier: 3.8.8
+        version: 3.8.8
 
   packages/testing:
     dependencies:
-      'agenthooksprotocol':
+      agenthooksprotocol:
         specifier: workspace:*
         version: link:../sdk
 
@@ -64,6 +67,9 @@ packages:
 
   json-schema-traverse@1.0.0:
     resolution: {integrity: sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==}
+
+  oauth4webapi@3.8.8:
+    resolution: {integrity: sha512-8N28E+a/oxfXWBgOMt+ZP/JUf/XR+IFbvkAEPP3gznXOMv9BpAAwiIj0TFNz3tGTPc0ZQ8zmWBNgN1nAys0gng==}
 
   require-from-string@2.0.2:
     resolution: {integrity: sha512-Xf0nWe6RseziFMu+Ap9biiUbmplq6S9/p+7w7YXP/JBHhrUDDUhwa+vANyubuqfZWTveU//DYVGsDG7RKL/vEw==}
@@ -94,6 +100,8 @@ snapshots:
   fast-uri@3.1.8: {}
 
   json-schema-traverse@1.0.0: {}
+
+  oauth4webapi@3.8.8: {}
 
   require-from-string@2.0.2: {}
 

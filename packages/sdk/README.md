@@ -22,6 +22,11 @@ for canonical validation and reference boundary helpers. `/generated` exposes
 the filtered codecs for those same current draft contracts; it is not a separate
 wire version.
 
+For host-managed OAuth, import `managedOAuth` from `agenthooksprotocol/oauth`
+and follow [the OAuth integration guide](OAUTH.md). No second package is needed.
+The OAuth engine is a regular installed dependency; only loading the OAuth
+subpath is opt-in. Low-level authentication exports remain supported.
+
 See the [SDK documentation and examples](https://github.com/agenthooksprotocol/typescript-sdk#readme)
 for all entrypoints and integration guidance. Consumer results expose one typed
 `event`, settled `state`, residual `effects`, complete `acceptedResponses`, and
@@ -220,6 +225,91 @@ standalone transports; its fetch adapter continues to own authentication.
 Registration headers do not change existing redirect behavior. These SDK
 transports already use `redirect: "error"`, with or without configured headers.
 No global HTTP-client defaults are changed.
+
+## Authentication routing
+
+`auth(overrides)` and custom `DeliveryAuthProvider` implementations remain supported.
+Use `auth.compose` when different bindings need different providers. Installing an
+OAuth provider does not replace native bearer resolution:
+
+```ts
+import { auth, AuthError, Hooks } from "agenthooksprotocol/client";
+
+const provider = auth.compose({
+  bearer: auth.bearer({
+    resolveCredentialReference: (reference, context) => vault.read(reference, {
+      signal: context.signal,
+    }),
+  }),
+  oauth: hostOAuth,
+  discover: hostOAuth,
+});
+const hooks = new Hooks(registration, { ...options, auth: provider });
+```
+
+The host supplies `vault`, `hostOAuth`, registration and other Hooks options.
+Each route implements the existing `credential(context)` and `challenge(context)`
+contract. Methods retain their receiver; callers need not use `this` or
+`context.provider` to compose routes. The bearer route defaults to `auth()`.
+There is no default OAuth route: configured OAuth without one fails with
+`unsupported_binding`, for both PKCE and client credentials. Missing credentials
+fail with `credential_unavailable`; routes never fall back to another provider.
+An explicit Authorization header still bypasses provider authentication.
+
+Without a portable binding, the `discover` route may return a previously
+approved cached credential up front or `undefined` for an anonymous first contact.
+Omit that route to disable automatic discovery. Uploads and events select routes
+from their own bindings. Challenges return to the provider that issued the exact
+opaque attempt, with its original credential; the router never replays HTTP
+requests itself. Only read-only configuration requests may retry once after an
+auth challenge. Effectful events, notifications and uploads are not replayed;
+prepare an unknown endpoint explicitly before an unsafe first call.
+
+`normalizeAuthTarget(context)` returns a frozen, readonly discriminated target
+(`bearer`, `oauth`, or `discover`) without resolving credentials or doing I/O. It
+validates local structure, not destination trust. Providers still own destination,
+issuer, resource, scope and client policy. `AuthError` exposes safe `code` and
+`recovery` fields (`configure`, `login`, `retry`, or `none`). For example, a host
+provider can throw `new AuthError("interaction_required")` to request login.
+Recovery is guidance, never permission to replay an effectful delivery.
+
+Routed provider exceptions become redacted `AuthError`s without cause chains.
+Native caller cancellation is preserved, including `AbortSignal.reason`.
+Providers and stores must honor that signal: stopping the wait cannot cancel work
+that ignores it. Configured-header resolver methods retain the existing safe
+header error boundary. The same helpers and types are explicitly exported from
+`agenthooksprotocol/client/auth`.
+
+### Choose an OAuth integration
+
+The existing `auth({ selectClient, authorize, ... })` helper still supports
+host-driven PKCE, client credentials, discovery and refresh. It can be explicitly
+installed as the `oauth` and `discover` routes:
+
+```ts
+const hostOAuth = auth({
+  selectClient: (issuers, resource, context) => trustedClients.select(issuers, resource, context),
+  authorize: (request, context) => hostLogin.completeCallback(request, context),
+});
+const provider = auth.compose({ oauth: hostOAuth, discover: hostOAuth });
+```
+
+Here `trustedClients` is host policy and `hostLogin` owns consent/callback
+transport, returning the complete callback URL and honoring `request.signal`.
+Client-credentials bindings do not invoke `authorize`; resolve their configured
+client secret through the existing `resolveCredentialReference` option. The host
+also owns secret resolution and policy. Composition creates no browser,
+listener, worker or file store, and does not introduce another OAuth engine.
+
+For library-backed managed lifecycle support, import
+[`agenthooksprotocol/oauth`](OAUTH.md) from the same SDK installation. It provides
+host-driven `prepare`/`complete`/`cancel`, PKCE, client credentials and refresh
+using `oauth4webapi`. It requires host-enforced network policy, local client trust,
+namespaced storage with coordination/CAS, and explicit operation budgets.
+The OAuth subpath is opt-in to load, not an optional installed dependency:
+`oauth4webapi` ships as a regular SDK dependency. Existing low-level OAuth exports
+remain supported. See the integration guide for consent budgets, isolated/shared
+grant partitions, storage and retry contracts.
 
 ## Structural decoding and effect-family queries
 

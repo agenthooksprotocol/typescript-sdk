@@ -223,19 +223,34 @@ attachment bodies are immutable and are not text-edit targets.
 
 `HooksOptions.auth` accepts a small `DeliveryAuthProvider`: `credential(context)`
 returns `{ type: "bearer", token, attempt? }`, and `challenge(context)` handles an
-actual 401 response before the one bounded retry. Context includes the selected
+actual 401 or Bearer 403 `insufficient_scope` response. Context includes the selected
 registration authentication binding, backend ID, destination URL, event/upload
 purpose, and operation signal. Challenge context also contains the exact attempted
 credential, including its opaque identity, for stale-token rejection handling.
-Requests retain their identity and prepared body across recovery.
+After the provider handles the challenge, Hooks replays `hooks/intercept`,
+`hooks/configuration` and `hooks/capabilities` at most once, with the same JSON-RPC
+id and buffered body; a second rejection fails the operation. Observe notifications
+and uploads are never replayed, but their challenge still runs so the next request
+sends a credential. A provider must actually recover in `challenge`: the built-in
+`auth()` provider drops the rejected cached token, so it is never resent.
 
 The provider owns secret lookup, discovery/trust policy, OAuth login/exchange,
 rotation, shared coordination and persistence. Callbacks must honor their signal;
 cancelling one wait does not authorize cancelling other callers' shared work.
-Absent bindings start anonymously and may use challenge-driven discovery under the
-host's trust policy. Configured missing credentials fail closed. Upload bindings
+Unknown endpoints start anonymously and may use challenge-driven discovery under
+the host's trust policy. Previously approved cached bindings attach credentials
+up front, even without portable configuration. Missing configured credentials
+fail closed. Upload bindings
 never fall back to event credentials. The `auth()` discovery/exchange helpers
 are optional; TLS/network policy belongs in the trusted HTTP adapter.
+
+For coordinated native OAuth, the opt-in
+[`agenthooksprotocol/oauth`](packages/sdk/OAUTH.md) subpath supports PKCE and
+client credentials using `oauth4webapi`. The host supplies trusted network policy,
+client selection, atomic token storage and coordination, deadlines, and consent
+UI/callback transport. Its `prepare`/`complete` lifecycle creates no implicit
+browser, listener, store or refresh worker; bearer routes and low-level providers
+remain compatible.
 
 Literal helpers imported as `effect` from the server entrypoint construct canonical
 effects. Event-correlated replies constrain their types; request grants and host

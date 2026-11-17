@@ -56,6 +56,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Build SDK
         run: pnpm --filter agenthooksprotocol build
+      - name: Verify packed SDK
+        run: pnpm check:package
       - name: Publish SDK with trusted publishing
         working-directory: packages/sdk
         run: npm publish --access public --provenance

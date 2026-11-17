@@ -331,7 +331,7 @@ test("discovery honors quoted challenge metadata after realm and enforces scope 
       authentication: binding,
       challenge: 'Bearer scope="admin"',
     }),
-    /permitted scopes/,
+    { code: "access_denied", recovery: "none" },
   );
 });
 
