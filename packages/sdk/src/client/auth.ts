@@ -209,6 +209,7 @@ export interface AuthProvider extends DeliveryAuthProvider {
   ): Promise<Credential>;
 }
 
+const TRANSFER_TIMEOUT_MS = 30_000;
 /** Rotated refresh tokens carried by invalid token responses, keyed by the thrown error. */
 const rotatedRefresh = new WeakMap<object, string>();
 function error(message: string): never {
@@ -710,29 +711,29 @@ const defaults: AuthProvider = {
       !metadata.token_endpoint_auth_methods_supported.includes("none")
     )
       error("client secret required");
-    const response = await withinBudget(
-      fetchChecked(
-        url,
-        {
-          method: "POST",
-          headers,
-          body: parameters,
-          redirect: "error",
-          ...(context.signal ? { signal: context.signal } : {}),
-        },
-        options,
-      ),
-      context.signal,
+    // Caller cancellation is honoured only before sending. The transfer (headers and
+    // body) is bounded by its own timeout so a response is never cut off mid-read.
+    context.signal?.throwIfAborted();
+    const response = await fetchChecked(
+      url,
+      {
+        method: "POST",
+        headers,
+        body: parameters,
+        redirect: "error",
+        signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+      },
+      options,
     );
     if (!response.ok) {
       if (parameters.get("grant_type") === "refresh_token") {
-        const failure = await withinBudget(response.json().catch(() => undefined), context.signal) as { error?: unknown } | undefined;
+        const failure = await response.json().catch(() => undefined) as { error?: unknown } | undefined;
         // Definitive rejection of the presented refresh token; anything else is transient.
         if (failure?.error === "invalid_grant") throw new AuthError("refresh_rejected");
       }
       error("token request rejected");
     }
-    const body = record(await withinBudget(response.json(), context.signal));
+    const body = record(await response.json());
     try {
       if (
         typeof body.token_type !== "string" ||
@@ -864,31 +865,42 @@ const defaults: AuthProvider = {
       metadata,
       parameters: new URLSearchParams(),
     };
+    // Once a token request is sent, receiving and persisting its response runs
+    // detached from the caller's signal; the caller still gets its abort promptly.
+    const commit = async (credential: Credential): Promise<Credential> => {
+      validateCredential(credential, options);
+      await Promise.resolve(this.setToken(key, credential, context));
+      return credential;
+    };
     let credential: Credential;
     // A refresh can never broaden a grant, so skip it when a requirement is missing.
     if (cached?.refreshToken && required.every((scope: string) => cached.scopes?.includes(scope) ?? true)) {
-      // Keep the record until the refresh succeeds (replaced by setToken below) or
-      // definitively fails; a transient failure must not lose refresh material.
+      // Keep the record until the refresh succeeds or definitively fails; a
+      // transient failure must not lose refresh material.
       const presented = cached.refreshToken;
-      try {
-        credential = await this.refresh(context, { ...request, client }, presented, options);
-      } catch (failure) {
-        const rotated = typeof failure === "object" && failure !== null ? rotatedRefresh.get(failure) : undefined;
-        if ((failure instanceof AuthError && failure.code === "refresh_rejected") || rotated !== undefined) {
-          // Compare-and-delete/replace: keep a newer record holding a different refresh token.
-          const latest = await withinBudget(Promise.resolve(this.getToken(key, context)), context.signal);
-          if (latest?.refreshToken === presented) {
-            await withinBudget(Promise.resolve(rotated === undefined
-              ? this.deleteToken(key, context)
-              : this.setToken(key, { ...latest, refreshToken: rotated, expiresAt: 0 }, context)), context.signal);
+      credential = await withinBudget((async () => {
+        let refreshed: Credential;
+        try {
+          refreshed = await this.refresh(context, { ...request, client }, presented, options);
+        } catch (failure) {
+          const rotated = typeof failure === "object" && failure !== null ? rotatedRefresh.get(failure) : undefined;
+          if ((failure instanceof AuthError && failure.code === "refresh_rejected") || rotated !== undefined) {
+            // Compare-and-delete/replace: keep a newer record holding a different refresh token.
+            const latest = await Promise.resolve(this.getToken(key, context));
+            if (latest?.refreshToken === presented) {
+              await Promise.resolve(rotated === undefined
+                ? this.deleteToken(key, context)
+                : this.setToken(key, { ...latest, refreshToken: rotated, expiresAt: 0 }, context));
+            }
           }
+          throw failure;
         }
-        throw failure;
-      }
-      if (cached.scopes && credential.scopes)
-        credential = { ...credential, scopes: credential.scopes.filter((scope: string) => cached.scopes!.includes(scope)) };
+        if (cached.scopes && refreshed.scopes)
+          refreshed = { ...refreshed, scopes: refreshed.scopes.filter((scope: string) => cached.scopes!.includes(scope)) };
+        return commit(refreshed);
+      })(), context.signal);
     } else if (client.flow === "client_credentials") {
-      credential = await this.clientCredentials(context, request, options);
+      credential = await withinBudget(this.clientCredentials(context, request, options).then(commit), context.signal);
     } else {
       if (!options.authorize) error("interactive authorization unavailable");
       if (!metadata.code_challenge_methods_supported?.includes("S256"))
@@ -990,7 +1002,7 @@ const defaults: AuthProvider = {
         error("authorization issuer mismatch");
       if (callback.searchParams.getAll("code").length !== 1)
         error("authorization code missing");
-      credential = await this.exchangeAuthorizationCode(
+      credential = await withinBudget(this.exchangeAuthorizationCode(
         {
           ...request,
           code: string(callback.searchParams.get("code"), "authorization code"),
@@ -999,13 +1011,8 @@ const defaults: AuthProvider = {
         },
         context,
         options,
-      );
+      ).then(commit), context.signal);
     }
-    validateCredential(credential, options);
-    await withinBudget(
-      Promise.resolve(this.setToken(key, credential, context)),
-      context.signal,
-    );
     discoveryCache.set(discoveryKey, discovered);
     if (client.requiredScopes?.some((scope: string) => !credential.scopes?.includes(scope)))
       throw new AuthError("access_denied");

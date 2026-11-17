@@ -155,9 +155,13 @@ rediscover outside store locks, falling back to it during an outage. If the toke
 endpoint provably did not process a renewal (DNS, TCP connect or TLS handshake
 failure, or HTTP 404/410), the stored issuer's metadata is refetched once,
 persisted if the issuer is unchanged, and the renewal retried once; a changed
-issuer or failed refetch is `discovery_failed`, repaired by host `prepare`. A received token response is
-committed under its own budget (`commitTimeoutMs`, default 30s), not the caller's,
-so a late cancellation or slow store never loses a rotated refresh token.
+issuer or failed refetch is `discovery_failed`, repaired by host `prepare`. Caller cancellation is honoured
+only before a token request is sent (approximated as before `policyFetch` is
+called; the caller still gets its abort promptly, but a stalled connect holds the
+grant lock until the commit timeout); receiving the response and committing it run
+under their own budget (`commitTimeoutMs`, default 30s), so a late cancellation or
+slow store never loses a rotated refresh token. On a 401 the rejected token is
+dropped before any discovery, so a discovery failure never leaves it to be resent.
 Ambiguous failures after sending (timeouts, resets, 5xx, non-OAuth bodies) return
 `provider_failed` with no refetch or immediate retry, so a refresh token is never
 replayed.

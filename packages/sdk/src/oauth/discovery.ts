@@ -62,11 +62,20 @@ export async function checkedFetch(
   }
   active(operation);
   if (destination.href !== original) throw new AuthError("untrusted_destination");
+  // Caller cancellation is honoured only before a token request is sent. Receiving its
+  // headers and body is bounded by the commit timeout instead, so an abort mid-flight
+  // never cuts off a response that may carry a rotated refresh token. fetch cannot report
+  // when bytes were written, so "sent" is approximated as "policyFetch was called":
+  // checkDestination and earlier steps stay abortable, and the caller always gets its
+  // abort promptly, but a stalled connect keeps the grant lock until the commit timeout.
+  const transfer: Operation = purpose === "token"
+    ? Object.freeze({ signal: AbortSignal.timeout(options.commitTimeoutMs ?? 30_000), deadline: Date.now() + (options.commitTimeoutMs ?? 30_000) })
+    : operation;
   let response: Response;
   try {
-    response = await options.policyFetch(url, { ...init, redirect: "error", signal: operation.signal }, { purpose, operation });
+    response = await options.policyFetch(url, { ...init, redirect: "error", signal: transfer.signal }, { purpose, operation: transfer });
   } catch (error) {
-    active(operation);
+    if (purpose !== "token") active(operation);
     const classified = classifyAuthError(error);
     throw classified.code === "provider_failed" && preSend(error) ? markTransport(classified) : classified;
   }

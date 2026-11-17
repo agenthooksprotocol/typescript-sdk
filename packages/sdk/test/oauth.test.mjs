@@ -246,12 +246,14 @@ test('[stale-401] A rejection cannot invalidate B', async t => {
   await f.managed.challenge({ ...f.context, credential: a.credential, response: new Response(null, { status: 401 }) }, budget());
   assert.equal((await f.prepare()).credential.token, b.credential.token); assert.equal([...f.store.values.values()][0].rejected, undefined); assert.equal(f.tokens.length, 2);
 });
-test('[deadline-cancel] native cancellation prevents late persistence', async t => {
+test('[deadline-cancel] cancellation after the code exchange is sent returns promptly and still persists the grant', async t => {
   const f = await fixture(t), pending = await f.prepare(); f.state.tokenGate = deferred();
   const controller = new AbortController(), reason = new DOMException('host cancelled', 'AbortError');
   const completion = f.managed.complete(pending, f.callback(pending), budget(controller.signal));
   await f.state.tokenEntered.promise; controller.abort(reason); await assert.rejects(completion, error => error === reason);
-  f.state.tokenGate.resolve(); await new Promise(resolve => setTimeout(resolve, 30)); assert.equal(f.store.values.size, 0); assert.equal(f.store.writes, 0);
+  assert.equal(f.store.writes, 0);
+  // The spent code's tokens must not be lost: the detached exchange commits them.
+  f.state.tokenGate.resolve(); await new Promise(resolve => setTimeout(resolve, 100)); assert.equal(f.store.writes, 1);
 });
 test('[deadline-cancel] deadline is absolute across discovery and exchange', async t => {
   const f = await fixture(t), operation = budget(undefined, 1000), pending = await f.prepare({}, operation); f.state.tokenGate = deferred();
@@ -373,7 +375,7 @@ test('cancel pending login invalidates completion and permits fresh login', asyn
   assert.equal(f.tokens.length, 0); assert.equal(f.store.writes, 0);
 });
 
-test('provider budget cannot disconnect caller context signal during exchange', async t => {
+test('caller context cancellation during a sent exchange returns promptly; the response is still committed', async t => {
   const f = await fixture(t); Object.assign(f.client, { flow: 'client_credentials', clientSecret: 'client-secret' });
   f.state.tokenGate = deferred();
   const controller = new AbortController(), reason = new DOMException('delivery cancelled', 'AbortError');
@@ -381,8 +383,9 @@ test('provider budget cannot disconnect caller context signal during exchange', 
   const getting = provider.credential({ ...f.context, challenged: true, signal: controller.signal });
   await f.state.tokenEntered.promise; controller.abort(reason);
   await assert.rejects(getting, error => error === reason);
-  f.state.tokenGate.resolve(); await new Promise(resolve => setTimeout(resolve, 15));
   assert.equal(f.store.writes, 0);
+  f.state.tokenGate.resolve(); await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(f.store.writes, 1);
 });
 
 test('refresh response without refresh_token retains the previous refresh credential', async t => {

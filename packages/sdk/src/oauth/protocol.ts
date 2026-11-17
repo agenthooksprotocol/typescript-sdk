@@ -56,7 +56,7 @@ function authentication(target: ResolvedTarget): oauth.ClientAuth {
 
 function requestOptions(options: ManagedOAuthOptions, operation: Operation): oauth.TokenEndpointRequestOptions {
   return {
-    signal: operation.signal,
+    // checkedFetch replaces this with the transfer signal once the request is sent.
     [oauth.customFetch]: (url, init) => checkedFetch(url, init, "token", options, operation),
   };
 }

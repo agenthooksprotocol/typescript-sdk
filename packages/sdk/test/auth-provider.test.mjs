@@ -713,3 +713,39 @@ test("[token-validation-failure-clears-in-flight] built-in auth() persists a rot
   await assert.rejects(provider.credential(context));
   assert.equal(cache.get(key).refreshToken, "rotated");
 });
+
+test("[token-validation-failure-clears-in-flight] built-in auth() commits a real HTTP refresh response despite a caller abort", async (t) => {
+  const { createServer } = await import("node:http");
+  const server = createServer((request, response) => { request.resume(); request.on("end", () => {
+    const text = JSON.stringify({ access_token: "n", token_type: "Bearer", expires_in: 3600, refresh_token: "rotated-real", scope: "events" });
+    response.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(text) });
+    response.end(text);
+  }); });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  let live = false, controller;
+  const provider = auth({
+    resolveHostname: async () => ["93.184.216.34"],
+    resolveCredentialReference: () => "client-secret",
+    async fetch(url, init) {
+      if (url.pathname.startsWith("/.well-known/")) {
+        return Response.json({ issuer: "https://identity.example/tenant", token_endpoint: "https://identity.example/token",
+          grant_types_supported: ["client_credentials", "refresh_token"] });
+      }
+      if (!live) return Response.json({ access_token: "a", token_type: "Bearer", expires_in: 3600, refresh_token: "r1", scope: "events" });
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/token`, { method: "POST", headers: init.headers, body: init.body, signal: init.signal });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      controller.abort();
+      return response;
+    },
+  });
+  const cache = new Map();
+  const context = { backendId: "auth.backend", purpose: "event", url: eventUrl, authentication: bindings[2], cache };
+  await provider.credential(context);
+  const [key] = cache.keys();
+  cache.set(key, { ...cache.get(key), expiresAt: 0 });
+  live = true; controller = new AbortController();
+  await assert.rejects(provider.credential({ ...context, signal: controller.signal }), { name: "AbortError" });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(cache.get(key).refreshToken, "rotated-real");
+});

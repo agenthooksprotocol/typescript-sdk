@@ -593,3 +593,127 @@ for (const [kind, response] of [
     assert.equal(f.store.grants()[0].token, undefined);
   });
 }
+
+// A real token endpoint over node:http, reached with undici fetch; the response is
+// re-wrapped only to keep the logical HTTPS URL for the redirect check.
+async function realTokenServer(t, body) {
+  const { createServer } = await import('node:http');
+  const server = createServer((request, response) => { request.resume(); request.on('end', () => {
+    const text = JSON.stringify(body);
+    response.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text) });
+    response.end(text);
+  }); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  return `http://127.0.0.1:${server.address().port}/token`;
+}
+
+test('[token-validation-failure-clears-in-flight] a caller abort after a real HTTP token response still commits the rotated refresh token', async t => {
+  const endpoint = await realTokenServer(t, { access_token: 'acc-new', token_type: 'Bearer', expires_in: 3600, refresh_token: 'rotated-real' });
+  const f = fixture();
+  await f.login(); f.expire();
+  const controller = new AbortController();
+  const oauth = managedOAuth({ ...f.options, async policyFetch(url, init, context) {
+    if (url !== 'https://issuer.example/token') return f.options.policyFetch(url, init, context);
+    assert.notEqual(init.signal, controller.signal, 'the transfer is not bound to the caller');
+    const response = await fetch(endpoint, { method: init.method, headers: init.headers, body: init.body, signal: init.signal });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    controller.abort();
+    return new Response(response.body, { status: response.status, headers: response.headers });
+  } });
+  await assert.rejects(oauth.prepare(f.context, budget(controller.signal)), { name: 'AbortError' });
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(f.store.grants()[0].refreshToken, 'rotated-real');
+});
+
+for (const [kind, configure] of [
+  ['protected-resource metadata 503', (url, broken) => broken && url.includes('oauth-protected-resource') ? new Response('x', { status: 503 }) : undefined],
+  ['issuer metadata 503 without persisted metadata', (url, broken) => broken && url.includes('oauth-authorization-server') ? new Response('x', { status: 503 }) : undefined],
+]) {
+  test(`a 401 drops the rejected token before discovery, even when discovery fails (${kind})`, async () => {
+    const f = fixture();
+    let broken = false;
+    const oauth = managedOAuth({ ...f.options, async policyFetch(url, init, context) {
+      return configure(url, broken) ?? (broken && url.endsWith('/token') ? new Response('down', { status: 503 }) : f.options.policyFetch(url, init, context));
+    } });
+    const { credential } = await f.login(oauth);
+    for (const [key, value] of f.store.values) {
+      if (value.kind === 'binding' && kind.includes('without')) { const { metadata: _metadata, ...rest } = value; f.store.values.set(key, rest); }
+    }
+    broken = true;
+    const provider = oauth.provider({ budget: () => budget() });
+    await assert.rejects(provider.challenge({ ...f.context, credential, response: new Response(null, { status: 401 }) }));
+    assert.equal(f.store.grants()[0].token, undefined, 'the revoked token is not left stored');
+    assert.equal(f.store.grants()[0].refreshToken, 'refresh-1');
+    const next = await provider.credential(f.context).then(value => value?.token, error => error.code);
+    assert.notEqual(next, 'access-1', 'the revoked token is never resent');
+  });
+}
+
+test('challenge handling alone rebinds a moved resource, without any token acquisition', async () => {
+  const f = fixture();
+  const moved = movedIssuer(f, { oldUp: true });
+  const fetch = moved.options.policyFetch;
+  let rebound = false;
+  const options = { ...moved.options, async policyFetch(url, init, context) {
+    // The old resource metadata names the old issuer until the challenge.
+    if (!rebound && url.startsWith('https://api.example/.well-known/')) return Response.json({ resource: f.client.resource, authorization_servers: ['https://issuer.example'] });
+    const response = await fetch(url, init, context);
+    if (!url.endsWith('/token')) return response;
+    const { refresh_token: _refresh, ...body } = await response.json();
+    return Response.json(body);
+  } };
+  const oauth = managedOAuth(options), provider = oauth.provider({ budget: () => budget() });
+  const { credential } = await f.login(oauth);
+  const tokens = f.state.tokenCalls.length;
+  rebound = true;
+  await provider.challenge({ ...f.context, credential, response: new Response(null, { status: 401 }) });
+  assert.equal(f.state.tokenCalls.length, tokens, 'no acquisition ran');
+  assert.equal([...f.store.values.values()].find(value => value.kind === 'binding').issuer, moved.NEW);
+});
+
+test('a host budget failure followed by a store load failure is a classified AuthError', async () => {
+  const f = fixture();
+  const oauth = managedOAuth({ ...f.options, store: { ...f.store, async load() { throw new Error('db down: secret detail'); } } });
+  const provider = oauth.provider({ budget() { throw new Error('no deadline'); } });
+  await assert.rejects(provider.credential(f.context), error => error.code === 'provider_failed' && !String(error).includes('secret detail'));
+});
+
+test('a caller abort while the token request has not completed returns promptly', async () => {
+  const f = fixture();
+  await f.login(); f.expire();
+  const controller = new AbortController();
+  // A stalled connect: policyFetch never settles.
+  const oauth = managedOAuth({ ...f.options, policyFetch: (url, init, context) =>
+    url.endsWith('/token') ? new Promise(() => {}) : f.options.policyFetch(url, init, context) });
+  const preparing = oauth.prepare(f.context, budget(controller.signal));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const started = Date.now();
+  controller.abort();
+  await assert.rejects(preparing, { name: 'AbortError' });
+  assert(Date.now() - started < 100);
+});
+
+test('[token-validation-failure-clears-in-flight] a token body delayed past a caller abort is still read and committed', async t => {
+  const { createServer } = await import('node:http');
+  const server = createServer((request, response) => { request.resume(); request.on('end', () => {
+    const text = JSON.stringify({ access_token: 'late', token_type: 'Bearer', expires_in: 3600, refresh_token: 'rotated-late' });
+    response.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text) });
+    response.flushHeaders();
+    setTimeout(() => response.end(text), 100);
+  }); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const f = fixture();
+  await f.login(); f.expire();
+  const controller = new AbortController();
+  const oauth = managedOAuth({ ...f.options, async policyFetch(url, init, context) {
+    if (url !== 'https://issuer.example/token') return f.options.policyFetch(url, init, context);
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/token`, { method: init.method, headers: init.headers, body: init.body, signal: init.signal });
+    setTimeout(() => controller.abort(), 10); // headers received, body still in flight
+    return new Response(response.body, { status: response.status, headers: response.headers });
+  } });
+  await assert.rejects(oauth.prepare(f.context, budget(controller.signal)), { name: 'AbortError' });
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(f.store.grants()[0].refreshToken, 'rotated-late');
+});

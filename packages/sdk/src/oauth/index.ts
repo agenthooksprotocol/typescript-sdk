@@ -397,6 +397,18 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       if (response.status !== 401 && !insufficient) return;
       const owner = credential ? attempts.get(credential.attempt as object) : undefined;
       if (credential && (!owner || owner.identity !== identity(context))) throw new AuthError("invalid_configuration");
+      if (!insufficient && owner) {
+        // Drop the rejected access token first (keeping refresh material) unless a newer
+        // generation exists, under the commit budget: a later discovery failure or caller
+        // abort must not leave the revoked token stored and resent.
+        const settle = commit();
+        await race(operation.signal, store.coordinate(owner.key, settle.signal, async () => {
+          const current = await read(owner.key, "grant", settle);
+          if (current?.generation !== owner.generation || current.token === undefined) return;
+          const { token: _token, expiresAt: _expiresAt, kind: _kind, generation: _generation, ...rest } = current;
+          await saveGrant(owner.key, current.generation, rest, settle);
+        }));
+      }
       const cached = await read(bindingKey(namespace, context), "binding", operation);
       // Challenge handling runs full discovery, honouring a resource_metadata hint.
       const target = await discoverBinding(context, cached, operation);
@@ -408,14 +420,6 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         if (required.length === 0) throw new AuthError("access_denied");
         if (!within(required, ceilingOf(target.client))) throw new AuthError("access_denied", required);
         if (target.client.flow === "authorization_code_pkce") throw new AuthError("interaction_required", required);
-      } else if (owner) {
-        // Drop the rejected access token (keeping refresh material) unless a newer generation exists.
-        await race(operation.signal, store.coordinate(owner.key, operation.signal, async () => {
-          const current = await read(owner.key, "grant", operation);
-          if (current?.generation !== owner.generation || current.token === undefined) return;
-          const { token: _token, expiresAt: _expiresAt, kind: _kind, generation: _generation, ...rest } = current;
-          await saveGrant(owner.key, current.generation, rest, operation);
-        }));
       }
       // Prepare the next attempt (the replay, or the next notification/upload that is
       // never replayed): discovery and client-credentials acquisition, never a login.
@@ -436,7 +440,10 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         try { budget = host.budget(context); } catch (error) {
           context.signal?.throwIfAborted();
           // Without a budget an unbound endpoint with no stored binding still sends anonymously.
-          if (lookup && await store.load(bindingKey(namespace, context), context.signal ?? new AbortController().signal) === undefined) return undefined;
+          let known: unknown;
+          try { known = await store.load(bindingKey(namespace, context), context.signal ?? new AbortController().signal); }
+          catch (failure) { throw classifyAuthError(failure, "provider_failed", context.signal); }
+          if (lookup && known === undefined) return undefined;
           throw classifyAuthError(error);
         }
         const result = await run(budget, context.signal, operation => acquire(context, operation, lookup ? "lookup" : "delivery"));
