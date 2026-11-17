@@ -37,10 +37,13 @@ test('hostile error accessors and unallowlisted codes fail closed', () => {
   }
 });
 
-test('native abort and timeout identity survives classification', () => {
+test('only the caller signal keeps native cancellation identity; provider aborts are operational', () => {
   for (const name of ['AbortError', 'TimeoutError']) {
     const reason = new DOMException('cancelled', name);
-    assert.throws(() => classifyAuthError(reason), error => error === reason);
+    assert.equal(classifyAuthError(reason).code, 'provider_failed');
+    const controller = new AbortController();
+    controller.abort(reason);
+    assert.throws(() => classifyAuthError(new Error('provider'), 'provider_failed', controller.signal), error => error === reason);
   }
 });
 

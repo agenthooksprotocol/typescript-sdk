@@ -16,12 +16,21 @@ const recovery: Record<AuthErrorCode, AuthRecovery> = {
 export class AuthError extends Error {
   readonly code: AuthErrorCode;
   readonly recovery: AuthRecovery;
-  constructor(code: AuthErrorCode) {
+  /**
+   * Validated scope tokens the failed operation requires, on `interaction_required`
+   * or `access_denied` only. Pass them back to a host `prepare` for step-up consent.
+   */
+  readonly requiredScopes?: readonly string[];
+  constructor(code: AuthErrorCode, requiredScopes?: readonly string[]) {
     const safe = typeof code === "string" && Object.hasOwn(recovery, code) ? code : "provider_failed";
     super(`Authentication failed: ${safe}`);
     this.name = "AuthError";
     this.code = safe;
     this.recovery = recovery[safe];
+    if ((safe === "interaction_required" || safe === "access_denied") && Array.isArray(requiredScopes) &&
+        requiredScopes.length > 0 && requiredScopes.every(scope => typeof scope === "string" && /^[\x21\x23-\x5B\x5D-\x7E]+$/.test(scope))) {
+      this.requiredScopes = Object.freeze([...new Set(requiredScopes)]);
+    }
   }
 }
 

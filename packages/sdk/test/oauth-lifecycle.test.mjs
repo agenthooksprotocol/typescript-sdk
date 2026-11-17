@@ -1,19 +1,22 @@
 import assert from 'node:assert/strict';
-import { getEventListeners } from 'node:events';
 import { test } from 'node:test';
 import { managedOAuth } from '../dist/src/oauth/index.js';
 
 const budget = (signal = new AbortController().signal, ms = 5000) => ({ signal, deadline: Date.now() + ms });
-function fixture() {
-  const values = new Map(), bindings = new Map(), locks = new Map();
-  const state = { tokenCalls: 0, writes: 0 };
-  const store = {
-    async load(key, signal) { signal.throwIfAborted(); return (key.startsWith("ahp.oauth.binding:") ? bindings : values).get(key); },
+
+// A store shared by every "process" (managedOAuth instance) in a test.
+function memoryStore() {
+  const values = new Map(), locks = new Map();
+  return {
+    values,
+    grants: () => [...values].filter(([key]) => key.startsWith('ahp.oauth.grant:')).map(([, value]) => value),
+    pending: () => [...values].filter(([key]) => key.startsWith('ahp.oauth.pending:')).map(([, value]) => value),
+    async load(key, signal) { signal.throwIfAborted(); return structuredClone(values.get(key)); },
     async compareAndSet(key, expected, value, signal) {
       signal.throwIfAborted();
-      const selected = key.startsWith("ahp.oauth.binding:") ? bindings : values;
-      if (selected.get(key)?.generation !== expected) return false;
-      selected.set(key, value); if (selected === values) state.writes++; return true;
+      if (values.get(key)?.generation !== expected) return false;
+      if (value === undefined) values.delete(key); else values.set(key, structuredClone(value));
+      return true;
     },
     async coordinate(key, signal, work) {
       const previous = locks.get(key) ?? Promise.resolve();
@@ -24,103 +27,296 @@ function fixture() {
       finally { release(); if (locks.get(key) === next) locks.delete(key); }
     },
   };
-  const client = { issuer: 'https://issuer.example', resource: 'https://api.example/events',
-    clientId: 'client', flow: 'authorization_code_pkce', scopes: ['deliver'], redirectUri: 'https://app.example/callback' };
-  const context = { backendId: 'backend', purpose: 'event', url: client.resource,
-    authentication: { type: 'oauth', issuer: client.issuer, resource: client.resource,
-      clientId: client.clientId, flow: client.flow, scopes: client.scopes } };
+}
+
+/** In-memory authorization server and receiver metadata; no TLS or sockets. */
+function fixture(overrides = {}) {
+  const store = memoryStore();
+  const state = { tokenCalls: [], metadataCalls: 0, metadataDown: false, tokenStatus: 200, tokenError: undefined, scope: undefined, next: 0 };
+  const client = { issuer: 'https://issuer.example', resource: 'https://api.example/events', clientId: 'client',
+    flow: 'authorization_code_pkce', scopes: ['deliver'], redirectUri: 'https://app.example/callback', ...overrides };
+  const context = { backendId: 'backend', purpose: 'event', url: client.resource };
   const options = {
-    namespace: 'review', store, selectClient: () => client,
+    namespace: 'lifecycle', store, selectClient: () => ({ ...client, scopes: [...client.scopes] }),
     checkDestination: (_url, _purpose, operation) => operation.signal.throwIfAborted(),
-    async policyFetch(url, _init, { operation }) {
+    async policyFetch(url, init, { operation }) {
       operation.signal.throwIfAborted();
-      let body;
       if (url === 'https://issuer.example/token') {
-        state.tokenCalls++;
-        await state.tokenGate;
-        operation.signal.throwIfAborted();
-        body = { access_token: 'access', token_type: 'Bearer', expires_in: 3600, scope: 'deliver' };
-      } else if (url.startsWith('https://api.example/.well-known/')) {
-        body = { resource: client.resource, authorization_servers: [client.issuer] };
-      } else {
-        body = { issuer: client.issuer, authorization_endpoint: 'https://issuer.example/authorize',
-          token_endpoint: 'https://issuer.example/token', response_types_supported: ['code'],
-          code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['none'] };
+        const body = new URLSearchParams(String(init.body));
+        state.tokenCalls.push(body);
+        if (state.tokenStatus !== 200) return Response.json(state.tokenError ?? {}, { status: state.tokenStatus });
+        const n = ++state.next;
+        return Response.json({ access_token: `access-${n}`, token_type: 'Bearer', expires_in: 3600,
+          refresh_token: `refresh-${n}`, scope: state.scope ?? body.get('scope') ?? client.scopes.join(' ') });
       }
-      return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+      state.metadataCalls++;
+      if (state.metadataDown) return new Response('{}', { status: 503 });
+      if (url.startsWith('https://api.example/.well-known/')) return Response.json({ resource: client.resource, authorization_servers: [client.issuer] });
+      return Response.json({ issuer: client.issuer, authorization_endpoint: 'https://issuer.example/authorize',
+        token_endpoint: 'https://issuer.example/token', response_types_supported: ['code'],
+        grant_types_supported: ['authorization_code', 'refresh_token', 'client_credentials'],
+        code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['none', 'client_secret_basic'] });
     },
   };
   const oauth = managedOAuth(options);
-  const callback = pending => `https://app.example/callback?code=code&state=${new URL(pending.authorizationUrl).searchParams.get('state')}`;
-  return { oauth, options, context, values, state, callback };
+  const callback = (pending, extra = {}) => {
+    const url = new URL(client.redirectUri);
+    url.search = new URLSearchParams({ code: 'code', state: new URL(pending.authorizationUrl).searchParams.get('state'), ...extra }).toString();
+    return url.href;
+  };
+  const scopeOf = pending => new URL(pending.authorizationUrl).searchParams.get('scope').split(' ').sort();
+  const expire = () => { for (const [key, value] of store.values) if (value.kind === 'grant') store.values.set(key, { ...value, expiresAt: Date.now() - 1 }); };
+  const login = async (instance = oauth) => {
+    const pending = await instance.prepare({ ...context, challenged: true }, budget());
+    return instance.complete(pending, callback(pending), budget());
+  };
+  return { oauth, options, store, state, client, context, callback, scopeOf, expire, login };
 }
 
-test('pending completion rejects a superseded generation before sending a code', async () => {
+test('[pending-login-cross-process-completion] a serialized handle completes in another process sharing the store', async () => {
   const f = fixture();
-  const operation = budget();
-  const pending = await f.oauth.prepare(f.context, operation);
-  let storedKey;
-  const coordinate = f.options.store.coordinate;
-  f.options.store.coordinate = (key, signal, work) => { storedKey = key; return coordinate(key, signal, work); };
-  assert.equal(await f.oauth.prepare(f.context, operation), pending);
-  f.values.set(storedKey, { token: 'new', expiresAt: Date.now() + 60000, scopes: ['deliver'], generation: 'new' });
-  await assert.rejects(f.oauth.complete(pending, f.callback(pending), budget()), { code: 'invalid_configuration' });
-  assert.equal(f.state.tokenCalls, 0);
-  assert.equal(f.values.get(storedKey).generation, 'new');
+  const pending = await f.oauth.prepare(f.context, budget());
+  const transported = JSON.parse(JSON.stringify(pending));
+  const other = managedOAuth(f.options);
+  assert.equal((await other.complete(transported, f.callback(pending), budget())).credential.token, 'access-1');
+  assert.equal(f.store.pending().length, 0);
 });
 
-test('pending reuse requires its original base generation', async () => {
-  const f = fixture();
-  let key;
-  const coordinate = f.options.store.coordinate;
-  f.options.store.coordinate = (k, signal, work) => { key = k; return coordinate(k, signal, work); };
-  const old = await f.oauth.prepare(f.context, budget());
-  f.values.set(key, { token: 'expired', expiresAt: 0, scopes: ['deliver'], generation: 'replacement' });
-  const fresh = await f.oauth.prepare(f.context, budget());
-  assert.notEqual(fresh, old);
-  await assert.rejects(f.oauth.complete(old, f.callback(old), budget()), { code: 'invalid_configuration' });
-  assert.equal((await f.oauth.complete(fresh, f.callback(fresh), budget())).type, 'ready');
-});
-
-test('aborting an abandoned login releases retained signal listeners immediately', async () => {
-  const f = fixture(), controller = new AbortController();
-  const pending = await f.oauth.prepare(f.context, budget(controller.signal));
-  assert.ok(getEventListeners(controller.signal, 'abort').length > 0);
+test('[pending-login-fixed-lifetime] lifetime is fixed at creation and survives the creating budget', async () => {
+  assert.throws(() => managedOAuth({ ...fixture().options, loginLifetimeMs: 600_001 }), { code: 'invalid_configuration' });
+  const f = fixture(), short = managedOAuth({ ...f.options, loginLifetimeMs: 300 });
+  const controller = new AbortController(), before = Date.now();
+  const pending = await short.prepare(f.context, budget(controller.signal, 50));
+  assert(pending.expiresAt >= before + 300 && pending.expiresAt <= Date.now() + 300);
   controller.abort();
-  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
-  await assert.rejects(f.oauth.complete(pending, f.callback(pending), budget()), { name: 'AbortError' });
+  await new Promise(resolve => setTimeout(resolve, 80));
+  // The creating budget is cancelled and past its deadline; the login is still valid.
+  assert.deepEqual(await short.prepare(f.context, budget(undefined, 10)), pending, 'reuse never extends the lifetime');
+  const ok = await short.complete(pending, f.callback(pending), budget());
+  assert.equal(ok.credential.token, 'access-1');
+  const expiring = await managedOAuth({ ...f.options, loginLifetimeMs: 30 }).prepare({ ...f.context, purpose: 'upload' }, budget());
+  await new Promise(resolve => setTimeout(resolve, 50));
+  await assert.rejects(short.complete(expiring, f.callback(expiring), budget()), { code: 'interaction_required' });
 });
 
-test('prepare lazily prunes expired login listeners without background work', async () => {
-  const f = fixture(), controller = new AbortController();
-  const expired = await f.oauth.prepare(f.context, budget(controller.signal, 200));
-  assert.ok(getEventListeners(controller.signal, 'abort').length > 0);
-  await new Promise(resolve => setTimeout(resolve, 250));
-  await assert.rejects(f.oauth.complete(expired, f.callback(expired), budget()), { name: 'TimeoutError' });
-  const fresh = await f.oauth.prepare(f.context, budget());
-  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
-  await f.oauth.cancel(fresh, budget());
+test('[pending-login-reuse] a later prepare with covered scopes reuses the login regardless of its deadline', async () => {
+  const f = fixture({ allowedScopes: ['deliver', 'audit'] });
+  const pending = await f.oauth.prepare(f.context, budget(undefined, 60_000));
+  const again = await Promise.all(Array.from({ length: 4 }, () => f.oauth.prepare(f.context, budget(undefined, 100))));
+  for (const value of again) assert.deepEqual(value, pending);
+  // Completion consumes the login exactly once.
+  const results = await Promise.allSettled([0, 1].map(() => f.oauth.complete(pending, f.callback(pending), budget())));
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(results.find(result => result.status === 'rejected').reason.code, 'interaction_required');
+  assert.equal(f.state.tokenCalls.length, 1);
 });
 
-test('parallel prepares share a pending login and completion consumes it once', async () => {
-  const f = fixture(), signal = new AbortController().signal;
-  const operation = budget(signal);
-  const pending = await Promise.all(Array.from({ length: 4 }, () => f.oauth.prepare(f.context, operation)));
-  assert.ok(pending.every(value => value === pending[0]));
-  const result = await Promise.allSettled(Array.from({ length: 2 }, () => f.oauth.complete(pending[0], f.callback(pending[0]), budget())));
-  assert.equal(result.filter(value => value.status === 'fulfilled').length, 1);
-  assert.equal(f.state.tokenCalls, 1);
-  assert.equal(f.state.writes, 1);
-  assert.equal(getEventListeners(signal, 'abort').length, 0);
+test('[pending-login-supersede] a different redirect supersedes; the old callback fails interaction_required', async () => {
+  const f = fixture();
+  const first = await f.oauth.prepare(f.context, budget());
+  const firstCallback = f.callback(first);
+  f.client.redirectUri = 'https://app.example/other-callback';
+  const second = await f.oauth.prepare(f.context, budget());
+  assert.notEqual(second.id, first.id);
+  await assert.rejects(f.oauth.complete(first, firstCallback, budget()), { code: 'interaction_required' });
+  assert.equal((await f.oauth.complete(second, f.callback(second), budget())).credential.token, 'access-1');
+});
+
+test('[pending-login-supersede-scope-union] supersede requests the union within the new ceiling so callers converge', async () => {
+  const f = fixture({ scopes: ['deliver'], allowedScopes: ['deliver', 'audit', 'write'] });
+  const first = await f.oauth.prepare(f.context, budget());
+  assert.deepEqual(f.scopeOf(first), ['deliver']);
+  const second = await f.oauth.prepare(f.context, budget(), { requiredScopes: ['audit'] });
+  assert.notEqual(second.id, first.id);
+  assert.deepEqual(f.scopeOf(second), ['audit', 'deliver']);
+  // The original caller is now covered and reuses the superseding login.
+  assert.deepEqual(await f.oauth.prepare(f.context, budget()), second);
+  // A narrower ceiling bounds the union.
+  f.client.allowedScopes = ['deliver', 'write'];
+  const third = await f.oauth.prepare(f.context, budget(), { requiredScopes: ['write'] });
+  assert.deepEqual(f.scopeOf(third), ['deliver', 'write']);
+});
+
+test('[pending-login-end-states] completion, supersede, cancel and expiry each end a login; cancel keeps the grant', async () => {
+  const f = fixture();
+  const completed = await f.oauth.prepare(f.context, budget());
+  await f.oauth.complete(completed, f.callback(completed), budget());
+  await assert.rejects(f.oauth.complete(completed, f.callback(completed), budget()), { code: 'interaction_required' });
+  const upload = { ...f.context, purpose: 'upload' };
+  const cancelled = await f.oauth.prepare(upload, budget());
+  await f.oauth.cancel(cancelled, budget());
+  await assert.rejects(f.oauth.complete(cancelled, f.callback(cancelled), budget()), { code: 'interaction_required' });
+  assert.equal(f.store.grants().length, 1, 'cancel never deletes a stored grant');
+  assert.equal((await f.oauth.prepare(f.context, budget())).type, 'ready');
+  const expired = await managedOAuth({ ...f.options, loginLifetimeMs: 1 }).prepare(upload, budget());
+  await new Promise(resolve => setTimeout(resolve, 10));
+  await assert.rejects(f.oauth.complete(expired, f.callback(expired), budget()), { code: 'interaction_required' });
+});
+
+test('[step-up-required-scopes-round-trip] interaction_required carries required scopes that prepare accepts', async () => {
+  const f = fixture({ allowedScopes: ['deliver', 'audit'] });
+  const first = await f.login();
+  const response = new Response(null, { status: 403, headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="audit"' } });
+  const error = await f.oauth.challenge({ ...f.context, credential: first.credential, response }, budget()).then(() => assert.fail('expected step-up'), error => error);
+  assert.equal(error.code, 'interaction_required');
+  assert.deepEqual(error.requiredScopes, ['audit']);
+  const pending = await f.oauth.prepare(f.context, budget(), { requiredScopes: error.requiredScopes });
+  assert.deepEqual(f.scopeOf(pending), ['audit', 'deliver']);
+  f.state.scope = 'deliver audit';
+  assert.equal((await f.oauth.complete(pending, f.callback(pending), budget())).credential.token, 'access-2');
+  assert.deepEqual([...f.store.grants()[0].scopes].sort(), ['audit', 'deliver']);
+});
+
+test('[prepare-required-outside-ceiling-denied] explicit required scopes outside the ceiling fail access_denied', async () => {
+  const f = fixture({ allowedScopes: ['deliver'] });
+  await assert.rejects(f.oauth.prepare(f.context, budget(), { requiredScopes: ['admin'] }), { code: 'access_denied' });
+  assert.equal(f.store.pending().length, 0);
+  assert.equal(f.state.tokenCalls.length, 0);
+});
+
+test('[scope-ceiling-narrowing-keeps-grant] narrowing hides scopes at use only; refresh and widening keep them', async () => {
+  const f = fixture({ scopes: ['deliver', 'audit'], allowedScopes: ['deliver', 'audit'] });
+  await f.login();
+  Object.assign(f.client, { scopes: ['deliver'], allowedScopes: ['deliver'] });
+  await assert.rejects(f.oauth.prepare(f.context, budget(), { requiredScopes: ['audit'] }), { code: 'access_denied' });
+  assert.equal((await f.oauth.prepare(f.context, budget())).credential.token, 'access-1');
+  f.expire(); f.state.scope = undefined;
+  // The refresh response omits scope: the previous grant (deliver audit) is recorded, not the narrow ceiling.
+  const refreshed = await f.oauth.prepare(f.context, budget());
+  assert.equal(refreshed.credential.token, 'access-2');
+  assert.deepEqual([...f.store.grants()[0].scopes].sort(), ['audit', 'deliver']);
+  Object.assign(f.client, { scopes: ['deliver', 'audit'], allowedScopes: ['deliver', 'audit'] });
+  assert.equal((await f.oauth.prepare(f.context, budget(), { requiredScopes: ['audit'] })).credential.token, 'access-2');
+  assert.equal(f.state.tokenCalls.length, 2, 'widening again needs no new consent');
+});
+
+test('[scope-ceiling-widening-keeps-grant] widening the ceiling finds the existing grant', async () => {
+  const f = fixture();
+  await f.login();
+  f.client.allowedScopes = ['deliver', 'audit', 'write'];
+  assert.equal((await f.oauth.prepare(f.context, budget())).credential.token, 'access-1');
+  assert.equal(f.state.tokenCalls.length, 1);
+});
+
+test('[unbound-lookup-anonymous-fallback] store miss, missing deadline or policy refusal sends anonymously', async () => {
+  const f = fixture();
+  const provider = f.oauth.provider({ budget: () => budget() });
+  assert.equal(await provider.credential(f.context), undefined);
+  const noDeadline = f.oauth.provider({ budget() { throw new Error('no deadline'); } });
+  assert.equal(await noDeadline.credential(f.context), undefined);
+  await f.login();
+  let refuse = true;
+  const refusing = managedOAuth({ ...f.options, selectClient: (...args) => {
+    if (refuse) throw Object.assign(new Error('policy'), { code: 'access_denied' });
+    return f.options.selectClient(...args);
+  } }).provider({ budget: () => budget() });
+  assert.equal(await refusing.credential(f.context), undefined);
+  refuse = false;
+  assert.equal((await refusing.credential(f.context)).token, 'access-1');
+  assert.equal(f.store.pending().length, 0, 'the lookup never creates a login');
+});
+
+test('[unbound-lookup-refreshes-expired-token] the up-front lookup refreshes with cached metadata and no discovery', async () => {
+  const f = fixture();
+  await f.login();
+  f.expire(); f.state.metadataDown = true;
+  const metadata = f.state.metadataCalls;
+  const provider = managedOAuth(f.options).provider({ budget: () => budget() });
+  assert.equal((await provider.credential(f.context)).token, 'access-2');
+  assert.equal(f.state.metadataCalls, metadata);
+  assert.equal(f.state.tokenCalls.at(-1).get('grant_type'), 'refresh_token');
+});
+
+test('[up-front-refresh-failure-no-anonymous-fallback] a known binding whose refresh fails fails the operation', async () => {
+  const f = fixture();
+  await f.login();
+  f.expire();
+  const provider = f.oauth.provider({ budget: () => budget() });
+  Object.assign(f.state, { tokenStatus: 503, tokenError: { error: 'temporarily_unavailable' } });
+  await assert.rejects(provider.credential(f.context), { code: 'provider_failed', recovery: 'retry' });
+  Object.assign(f.state, { tokenStatus: 400, tokenError: { error: 'invalid_grant' } });
+  await assert.rejects(provider.credential(f.context), { code: 'refresh_rejected', recovery: 'login' });
+});
+
+test('[token-validation-failure-clears-in-flight] invalid responses leave no stuck state and a retry recovers', async () => {
+  const f = fixture();
+  const pending = await f.oauth.prepare(f.context, budget());
+  const fetch = f.options.policyFetch;
+  let invalid = true;
+  const options = { ...f.options, async policyFetch(url, init, context) {
+    const response = await fetch(url, init, context);
+    if (!invalid || !url.endsWith('/token')) return response;
+    const body = await response.json();
+    return Response.json({ ...body, expires_in: 0 });
+  } };
+  const oauth = managedOAuth(options);
+  await assert.rejects(oauth.complete(pending, f.callback(pending), budget()), { code: 'provider_failed', recovery: 'retry' });
+  assert.equal(f.store.grants().length, 0, 'an invalid initial exchange persists nothing');
+  assert.equal(f.store.pending().length, 0, 'the claimed login is not left in flight');
+  invalid = false; await f.login(oauth); invalid = true;
+  f.expire();
+  await assert.rejects(oauth.prepare(f.context, budget()), { code: 'provider_failed' });
+  const [grant] = f.store.grants();
+  assert.equal(grant.token, undefined); assert.equal(grant.refreshToken, 'refresh-3', 'valid rotated refresh token persisted');
+  invalid = false;
+  assert.equal((await oauth.prepare(f.context, budget())).credential.token, 'access-4');
+  assert.equal(f.state.tokenCalls.at(-1).get('refresh_token'), 'refresh-3');
+});
+
+test('[insufficient-scope-step-up] only Bearer 403 insufficient_scope steps up; other 403s are denials', async () => {
+  const f = fixture({ allowedScopes: ['deliver', 'audit'] });
+  const { credential } = await f.login();
+  await assert.rejects(f.oauth.challenge({ ...f.context, credential, response: new Response(null, { status: 403 }) }, budget()), { code: 'access_denied' });
+  await assert.rejects(f.oauth.challenge({ ...f.context, credential, response: new Response(null, {
+    status: 403, headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="admin"' } }) }, budget()), { code: 'access_denied' });
+  assert.equal((await f.oauth.prepare(f.context, budget())).credential.token, 'access-1', 'denials never reject the grant');
 });
 
 test('foreign attempts cannot reject credentials and configured bearer does not fall back', async () => {
   const f = fixture();
-  const pending = await f.oauth.prepare(f.context, budget());
-  const { credential } = await f.oauth.complete(pending, f.callback(pending), budget());
+  const { credential } = await f.login();
+  assert.equal(JSON.stringify(credential).includes('access-1'), false, 'token is not enumerable');
   const foreign = managedOAuth(f.options);
   await assert.rejects(foreign.challenge({ ...f.context, credential, response: new Response(null, { status: 401 }) }, budget()), { code: 'invalid_configuration' });
   await assert.rejects(f.oauth.challenge({ ...f.context, purpose: 'upload', credential, response: new Response(null, { status: 401 }) }, budget()), { code: 'invalid_configuration' });
   await assert.rejects(f.oauth.prepare({ ...f.context, authentication: { type: 'bearer', tokenEnv: 'TOKEN' } }, budget()), { code: 'unsupported_binding' });
-  assert.equal(f.state.writes, 1);
+  assert.equal(f.store.grants()[0].token, 'access-1');
+});
+
+test('[narrowed-refresh-scope-inheritance] a refresh without scope inherits the narrowed grant', async () => {
+  const f = fixture({ scopes: ['read', 'write'] });
+  f.state.scope = 'read';
+  await f.login();
+  f.expire(); f.state.scope = undefined;
+  const fetch = f.options.policyFetch;
+  const oauth = managedOAuth({ ...f.options, async policyFetch(url, init, context) {
+    const response = await fetch(url, init, context);
+    if (!url.endsWith('/token')) return response;
+    const { scope: _scope, ...body } = await response.json();
+    return Response.json(body);
+  } });
+  assert.equal((await oauth.prepare(f.context, budget())).credential.token, 'access-2');
+  assert.equal(f.state.tokenCalls[1].get('scope'), 'read');
+  assert.deepEqual(f.store.grants()[0].scopes, ['read']);
+  assert.equal((await oauth.prepare(f.context, budget(), { requiredScopes: ['write'] })).type, 'pending_login', 'write needs new consent, not a refresh');
+});
+
+test('[refresh-broadening-scope-ignored] a broadening refresh records the prior grant and stays usable', async () => {
+  const f = fixture({ scopes: ['read', 'write'] });
+  f.state.scope = 'read';
+  await f.login();
+  f.expire(); f.state.scope = 'read write';
+  const provider = f.oauth.provider({ budget: () => budget() });
+  assert.equal((await provider.credential({ ...f.context, authentication: undefined })).token, 'access-2');
+  assert.deepEqual(f.store.grants()[0].scopes, ['read']);
+  assert.equal(f.store.grants()[0].refreshToken, 'refresh-2');
+  f.client.requiredScopes = ['write'];
+  await assert.rejects(provider.credential({ ...f.context, challenged: true }), { code: 'interaction_required' });
+});
+
+test('[extra-granted-scope-ignored] scopes outside the ceiling are dropped from the recorded grant', async () => {
+  const f = fixture({ allowedScopes: ['deliver'] });
+  f.state.scope = 'deliver openid offline_access admin';
+  assert.equal((await f.login()).credential.token, 'access-1');
+  assert.deepEqual(f.store.grants()[0].scopes, ['deliver']);
 });

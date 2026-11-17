@@ -1,13 +1,17 @@
 import type { Authentication } from "../draft/raw.js";
 import { AuthError, composeAuth, type AuthCompositionOptions, type AuthErrorCode } from "./auth-routing.js";
+import { bearerParameters } from "./challenge.js";
 export { AuthError, normalizeAuthTarget } from "./auth-routing.js";
 export type { AuthErrorCode, AuthRecovery, AuthTarget, AuthCompositionOptions } from "./auth-routing.js";
 
-/** Classify across SDK copies without retaining untrusted messages or causes. */
-export function classifyAuthError(error: unknown, fallback: AuthErrorCode = "provider_failed"): AuthError {
-  let cancellation = false;
-  try { cancellation = error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError"); } catch { /* Untrusted getters are not cancellation. */ }
-  if (cancellation) throw error;
+/**
+ * Classify across SDK copies without retaining untrusted messages or causes.
+ * Only the caller's own aborted `signal` rethrows (its native reason); an
+ * AbortError/TimeoutError raised by a provider is an operational failure.
+ */
+export function classifyAuthError(error: unknown, fallback: AuthErrorCode = "provider_failed", signal?: AbortSignal): AuthError {
+  signal?.throwIfAborted();
+  if (error instanceof AuthError) return error;
   let code: unknown;
   try {
     if (typeof error === "object" && error !== null) code = (error as { code?: unknown }).code;
@@ -467,26 +471,8 @@ function base64url(bytes: Uint8Array): string {
     .replace(/\//g, "_")
     .replace(/=+$/, "");
 }
-function challengeParameter(
-  challenge: string | undefined,
-  name: string,
-): string | undefined {
-  if (!challenge) return undefined;
-  const bearer = /(?:^|,)\s*Bearer\s+/i.exec(challenge);
-  if (!bearer) return undefined;
-  const tail = challenge.slice(bearer.index + bearer[0].length);
-  // Tokenize quoted parameters (commas inside quoted strings are not separators).
-  const parameters = tail.match(/(?:[^,"]|"(?:\\.|[^"\\])*")+/g) ?? [];
-  for (const parameter of parameters) {
-    const match =
-      /^\s*([\w-]+)\s*=\s*(?:"((?:\\.|[^"\\])*)"|([^,\s]+))\s*$/.exec(
-        parameter,
-      );
-    if (!match) break; // Another authentication scheme begins here.
-    if (match[1]?.toLowerCase() === name.toLowerCase())
-      return (match[2] ?? match[3] ?? "").replace(/\\(.)/g, "$1");
-  }
-  return undefined;
+function challengeParameter(challenge: string | undefined, name: string): string | undefined {
+  return bearerParameters(challenge).get(name);
 }
 async function metadataAt(
   urls: string[],
@@ -538,8 +524,17 @@ const defaults: AuthProvider = {
       throw new Error("Invalid authentication credential expiry");
     return credential === undefined ? undefined : { type: "bearer", token: credential.token };
   },
-  // authenticate receives challenged context on the next SDK-controlled attempt.
-  challenge() {},
+  // Drop the rejected access token so neither the replay nor a later delivery
+  // resends it; refresh material survives for the next authenticate.
+  challenge(context) {
+    const rejected = context.credential?.token;
+    if (rejected === undefined || !context.cache) return;
+    for (const [key, cached] of context.cache) {
+      if (cached.token !== rejected) continue;
+      if (cached.refreshToken) context.cache.set(key, { ...cached, expiresAt: 0 });
+      else context.cache.delete(key);
+    }
+  },
   getToken(key, context) {
     return context.cache?.get(key);
   },
@@ -745,9 +740,10 @@ const defaults: AuthProvider = {
     if (body.scope !== undefined && (typeof body.scope !== "string" ||
         !/^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/.test(body.scope)))
       error("invalid token scope");
-    const scopes = [...new Set(body.scope === undefined ? client.scopes ?? [] : (body.scope as string).split(" "))];
-    if (scopes.some(scope => !(client.allowedScopes ?? client.scopes ?? []).includes(scope)))
-      error("token scope mismatch");
+    // Granted = response ∩ local ceiling; extra scopes are ignored, not an error.
+    const ceiling = client.allowedScopes ?? client.scopes ?? [];
+    const scopes = [...new Set(body.scope === undefined ? client.scopes ?? [] : (body.scope as string).split(" "))]
+      .filter(scope => ceiling.includes(scope));
     return validateCredential(
       {
         token: string(body.access_token, "access token"),
@@ -845,23 +841,28 @@ const defaults: AuthProvider = {
         throw new AuthError("access_denied");
       return validateCredential(cached, options);
     }
+    // Step-up requirements are requested with this acquisition but are not identity.
+    const required = client.requiredScopes ?? [];
     const request: TokenRequest = {
-      client,
+      client: { ...client, scopes: [...new Set([...(client.scopes ?? []), ...required])] },
       metadata,
       parameters: new URLSearchParams(),
     };
     let credential: Credential;
-    if (cached?.refreshToken) {
+    // A refresh can never broaden a grant, so skip it when a requirement is missing.
+    if (cached?.refreshToken && required.every((scope: string) => cached.scopes?.includes(scope) ?? true)) {
       await withinBudget(
         Promise.resolve(this.deleteToken(key, context)),
         context.signal,
       );
       credential = await this.refresh(
         context,
-        request,
+        { ...request, client },
         cached.refreshToken,
         options,
       );
+      if (cached.scopes && credential.scopes)
+        credential = { ...credential, scopes: credential.scopes.filter((scope: string) => cached.scopes!.includes(scope)) };
     } else if (client.flow === "client_credentials") {
       credential = await this.clientCredentials(context, request, options);
     } else {
@@ -923,8 +924,8 @@ const defaults: AuthProvider = {
         code_challenge_method: "S256",
       }))
         authorization.searchParams.set(name, value);
-      if (client.scopes?.length)
-        authorization.searchParams.set("scope", client.scopes.join(" "));
+      if (request.client.scopes?.length)
+        authorization.searchParams.set("scope", request.client.scopes.join(" "));
       const callback = new URL(
         await withinBudget(
           Promise.resolve(
@@ -1003,6 +1004,9 @@ export const auth = Object.assign(
       NonNullable<AuthContext["discoveryCache"]>
     >();
     const authenticate = provider.authenticate;
+    const challenge = provider.challenge;
+    provider.challenge = (context) =>
+      challenge.call(provider, { ...context, cache: context.cache ?? cache });
     provider.authenticate = (context, options) => {
       const configured = { ...overrides, ...options };
       const tokens = context.cache ?? cache;
@@ -1032,9 +1036,19 @@ export const auth = Object.assign(
     compose(options: AuthCompositionOptions): DeliveryAuthProvider {
       return composeAuth(options, auth());
     },
-    /** Native bearer resolver; also suitable as the bearer composition route. */
-    bearer(options: Pick<AuthOptions, "resolveEnvironmentVariable" | "resolveCredentialReference"> = {}): AuthProvider {
-      return auth(options);
+    /** Bearer-only resolver for the bearer composition route; other bindings are unsupported. */
+    bearer(options: Pick<AuthOptions, "resolveEnvironmentVariable" | "resolveCredentialReference"> = {}): DeliveryAuthProvider {
+      const provider = auth(options);
+      return {
+        resolveEnvironmentVariable: provider.resolveEnvironmentVariable.bind(provider),
+        resolveCredentialReference: provider.resolveCredentialReference.bind(provider),
+        async credential(context) {
+          if (context.authentication?.type !== "bearer") throw new AuthError("unsupported_binding");
+          return provider.credential(context);
+        },
+        // Each attempt re-resolves the source, so there is no cached token to drop.
+        challenge() {},
+      };
     },
     authenticate(context: AuthContext, options?: AuthOptions) {
       return defaults.authenticate.call(context.provider ?? defaults, context, {

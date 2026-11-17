@@ -1,35 +1,25 @@
 import assert from 'node:assert/strict';
-import { test, before } from 'node:test';
+import { test } from 'node:test';
 import https from 'node:https';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { inspect } from 'node:util';
 import { managedOAuth } from '../dist/src/oauth/index.js';
 
-let tls;
-before(async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'ahp-managed-oauth-'));
-  try {
-    const config = join(dir, 'openssl.cnf');
-    await writeFile(config, '[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n[dn]\nCN=localhost\n[ext]\nsubjectAltName=DNS:localhost\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,digitalSignature,keyEncipherment,keyCertSign\nextendedKeyUsage=serverAuth\n');
-    execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',
-      '-keyout', join(dir, 'key.pem'), '-out', join(dir, 'cert.pem'), '-config', config], { stdio: 'ignore' });
-    tls = { key: await readFile(join(dir, 'key.pem')), cert: await readFile(join(dir, 'cert.pem')) };
-  } finally { await rm(dir, { recursive: true, force: true }); }
-});
+// Static, test-only certificate (testdata is not published).
+const tls = { key: await readFile(new URL('../testdata/tls/key.pem', import.meta.url)), cert: await readFile(new URL('../testdata/tls/cert.pem', import.meta.url)) };
 const budget = (signal = new AbortController().signal, ms = 5000) => ({ signal, deadline: Date.now() + ms });
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 
 // Structural host implementation: atomic generation CAS and abort-aware FIFO locks.
+// values holds grants, bindings holds discovery records and pending holds stored logins.
 class Store {
-  values = new Map(); bindings = new Map(); locks = new Map(); writes = 0;
-  async load(key, signal) { signal.throwIfAborted(); return (key.startsWith("ahp.oauth.binding:") ? this.bindings : this.values).get(key); }
+  values = new Map(); bindings = new Map(); pending = new Map(); locks = new Map(); writes = 0;
+  map(key) { return key.startsWith('ahp.oauth.binding:') ? this.bindings : key.startsWith('ahp.oauth.pending:') ? this.pending : this.values; }
+  async load(key, signal) { signal.throwIfAborted(); return this.map(key).get(key); }
   async compareAndSet(key, generation, value, signal) {
     signal.throwIfAborted();
-    const values = key.startsWith("ahp.oauth.binding:") ? this.bindings : this.values;
+    const values = this.map(key);
     if (values.get(key)?.generation !== generation) return false;
     if (value === undefined) values.delete(key); else values.set(key, value);
     if (values === this.values) this.writes++; return true;
@@ -160,7 +150,7 @@ test('[pkce-completion] TLS exchange binds state, PKCE, issuer and resource', as
   assert.equal(body.get('redirect_uri'), f.client.redirectUri); assert.equal(body.get('code'), 'code-secret');
   assert.equal(createHash('sha256').update(body.get('code_verifier')).digest('base64url'), authorization.searchParams.get('code_challenge'));
   assert.ok(f.checked.some(item => item.purpose === 'authorization'));
-  await assert.rejects(f.managed.complete(pending, f.callback(pending), budget()), classified(['invalid_configuration']));
+  await assert.rejects(f.managed.complete(pending, f.callback(pending), budget()), classified(['interaction_required']));
 });
 for (const [name, changes] of [['state', { state: 'incorrect' }], ['issuer', { iss: 'https://evil.invalid' }]]) {
   test(`[pkce-completion] rejects callback ${name} before exchange`, async t => {
@@ -223,17 +213,34 @@ test('[refresh-single-flight] concurrent instances refresh once and reload', asy
   assert.equal(f.tokens[1].body.get('grant_type'), 'refresh_token'); assert.equal(f.tokens[1].body.get('refresh_token'), 'refresh-1');
   assert.equal(f.tokens[1].body.get('resource'), f.client.resource); assert.equal(f.tokens[1].body.get('scope'), 'deliver');
 });
-for (const [id, error, status] of [['transient-refresh', 'temporarily_unavailable', 503], ['invalid-grant', 'invalid_grant', 400]]) {
-  test(`[${id}] durable refresh recovery state`, async t => {
-    const f = await fixture(t); await f.login(); f.store.expire(); const previous = [...f.store.values.values()][0];
-    Object.assign(f.state, { tokenStatus: status, tokenError: { error, error_description: 'description-secret refresh-1' } });
-    if (id === 'invalid-grant') assert.equal((await f.prepare()).type, 'pending_login');
-    else await assert.rejects(f.prepare(), classified(['provider_failed']));
-    const current = [...f.store.values.values()][0]; assert.equal(current.generation, previous.generation); assert.equal(current.refreshToken, 'refresh-1');
-    if (id === 'transient-refresh') assert.deepEqual(current, previous);
-    else { assert.equal(current.refreshRejected, true); assert.equal((await f.prepare()).type, 'pending_login'); assert.equal(f.tokens.length, 2); }
-  });
-}
+test('[transient-refresh-failure] 503 refresh keeps the stored record and advises retry', async t => {
+  const f = await fixture(t); await f.login(); f.store.expire(); const previous = [...f.store.values.values()][0];
+  Object.assign(f.state, { tokenStatus: 503, tokenError: { error: 'temporarily_unavailable', error_description: 'description-secret refresh-1' } });
+  await assert.rejects(f.prepare(), classified(['provider_failed']));
+  assert.deepEqual([...f.store.values.values()][0], previous);
+});
+test('[refresh-invalid-grant-drops-tokens] definitive invalid_grant removes access and refresh tokens', async t => {
+  const f = await fixture(t); await f.login(); f.store.expire();
+  Object.assign(f.state, { tokenStatus: 400, tokenError: { error: 'invalid_grant', error_description: 'description-secret refresh-1' } });
+  await assert.rejects(f.prepare(), classified(['refresh_rejected']));
+  assert.equal(f.store.values.size, 0);
+  assert.equal((await f.prepare()).type, 'pending_login');
+  assert.equal(f.tokens.length, 2, 'no further refresh with the rejected token');
+});
+test('[refresh-invalid-grant-stale-does-not-wipe] invalid_grant keeps a newer record holding a different refresh token', async t => {
+  const f = await fixture(t); await f.login(); f.store.expire();
+  const key = [...f.store.values.keys()][0];
+  f.state.tokenGate = deferred(); f.state.tokenEntered = deferred();
+  Object.assign(f.state, { tokenStatus: 400, tokenError: { error: 'invalid_grant' } });
+  const refreshing = f.prepare();
+  await f.state.tokenEntered.promise;
+  // Another process already rotated the grant while this refresh was in flight.
+  const newer = { kind: 'grant', generation: 'newer', token: 'newer-access', refreshToken: 'newer-refresh', scopes: ['deliver'], expiresAt: Date.now() + 3_600_000 };
+  f.store.values.set(key, newer);
+  f.state.tokenGate.resolve();
+  await assert.rejects(refreshing, classified(['refresh_rejected']));
+  assert.deepEqual(f.store.values.get(key), newer);
+});
 test('[stale-401] A rejection cannot invalidate B', async t => {
   const f = await fixture(t), a = await f.login(); f.store.expire(); const b = await f.prepare();
   await f.managed.challenge({ ...f.context, credential: a.credential, response: new Response(null, { status: 401 }) }, budget());
@@ -294,28 +301,11 @@ test('malformed advertised resource metadata must not downgrade to fallback', as
   assert.deepEqual(f.requests, ['/advertised']);
 });
 
-test('provider scopes cannot expand local authorization', async t => {
-  const f = await fixture(t, { scope: 'deliver admin' }), pending = await f.prepare();
-  await assert.rejects(f.managed.complete(pending, f.callback(pending), budget()), classified(['access_denied']));
-  assert.equal([...f.store.values.values()][0].refreshToken, 'refresh-1');
-  assert.equal([...f.store.values.values()][0].rejected, true);
-});
-
 test('expired budget performs no discovery, exchange or persistence', async t => {
   const f = await fixture(t);
   await assert.rejects(f.prepare({}, budget(undefined, -1)), error => error.name === 'TimeoutError');
   assert.equal(f.requests.length, 0);
   assert.equal(f.store.writes, 0);
-});
-
-test('[stale-401] current rejection is notification only, next prepare owns refresh', async t => {
-  const f = await fixture(t), ready = await f.login();
-  await f.managed.challenge({ ...f.context, credential: ready.credential, response: new Response(null, { status: 401 }) }, budget());
-  assert.equal(f.tokens.length, 1);
-  assert.equal([...f.store.values.values()][0].rejected, true);
-  assert.equal((await f.prepare()).credential.token, 'access-2');
-  assert.equal(f.tokens.length, 2);
-  assert.ok(f.requests.every(path => path !== '/events'));
 });
 
 for (const field of ['origin', 'resource', 'state', 'code_challenge', 'code_challenge_method']) {
@@ -377,40 +367,11 @@ test('prepare snapshots caller identity and binding before its first await', asy
 test('cancel pending login invalidates completion and permits fresh login', async t => {
   const f = await fixture(t), pending = await f.prepare();
   await f.managed.cancel(pending, budget());
-  await assert.rejects(f.managed.complete(pending, f.callback(pending), budget()), classified(['invalid_configuration']));
+  await assert.rejects(f.managed.complete(pending, f.callback(pending), budget()), classified(['interaction_required']));
   const next = await f.prepare(); assert.notEqual(next, pending);
   assert.notEqual(new URL(next.authorizationUrl).searchParams.get('state'), new URL(pending.authorizationUrl).searchParams.get('state'));
   assert.equal(f.tokens.length, 0); assert.equal(f.store.writes, 0);
 });
-
-test('pending expires at original prepare deadline despite a fresh completion budget', async t => {
-  const f = await fixture(t), operation = budget(undefined, 250), pending = await f.prepare({}, operation);
-  assert.equal(pending.expiresAt, operation.deadline);
-  await new Promise(resolve => setTimeout(resolve, Math.max(0, pending.expiresAt - Date.now() + 10)));
-  await assert.rejects(f.managed.complete(pending, f.callback(pending), budget()), error => error.name === 'TimeoutError');
-  assert.equal(f.tokens.length, 0); assert.equal(f.store.writes, 0);
-});
-
-test('completion in flight cannot extend the original prepare deadline', async t => {
-  const f = await fixture(t), original = budget(undefined, 250), pending = await f.prepare({}, original);
-  f.state.tokenGate = deferred();
-  await assert.rejects(f.managed.complete(pending, f.callback(pending), budget()), error => error.name === 'TimeoutError');
-  assert.ok(f.checked.filter(item => item.purpose === 'token').every(item => item.deadline === original.deadline));
-  f.state.tokenGate.resolve(); await new Promise(resolve => setTimeout(resolve, 15));
-  assert.equal(f.store.writes, 0);
-});
-
-for (const source of ['prepare-budget', 'context']) {
-  test(`pending completion preserves original ${source} cancellation`, async t => {
-    const f = await fixture(t), controller = new AbortController();
-    const pending = await f.prepare(source === 'context' ? { signal: controller.signal } : {},
-      budget(source === 'prepare-budget' ? controller.signal : undefined));
-    const reason = new DOMException('original operation cancelled', 'AbortError');
-    controller.abort(reason);
-    await assert.rejects(f.managed.complete(pending, f.callback(pending), budget()), error => error === reason);
-    assert.equal(f.tokens.length, 0); assert.equal(f.store.writes, 0);
-  });
-}
 
 test('provider budget cannot disconnect caller context signal during exchange', async t => {
   const f = await fixture(t); Object.assign(f.client, { flow: 'client_credentials', clientSecret: 'client-secret' });
@@ -456,56 +417,6 @@ for (const redirectUri of ['https://user:password@example.com/callback', 'http:/
     assert.equal(f.tokens.length, 0); assert.equal(f.store.writes, 0);
   });
 }
-
-for (const source of ['prepare-budget', 'context']) {
-  test(`in-flight completion remains linked to original ${source} signal`, async t => {
-    const f = await fixture(t), controller = new AbortController();
-    const pending = await f.prepare(source === 'context' ? { signal: controller.signal } : {},
-      budget(source === 'prepare-budget' ? controller.signal : undefined));
-    f.state.tokenGate = deferred();
-    const completing = f.managed.complete(pending, f.callback(pending), budget());
-    await f.state.tokenEntered.promise;
-    const reason = new DOMException('original operation cancelled during completion', 'AbortError');
-    controller.abort(reason);
-    await assert.rejects(completing, error => error === reason);
-    f.state.tokenGate.resolve(); await new Promise(resolve => setTimeout(resolve, 15));
-    assert.equal(f.store.writes, 0); assert.equal(f.store.values.size, 0);
-  });
-}
-
-for (const source of ['prepare-budget', 'context']) {
-  test(`aborted pending ${source} signal does not poison a fresh prepare`, async t => {
-    const f = await fixture(t), original = new AbortController();
-    const pending = await f.prepare(source === 'context' ? { signal: original.signal } : {},
-      budget(source === 'prepare-budget' ? original.signal : undefined));
-    original.abort(new DOMException('abandoned login', 'AbortError'));
-    const fresh = await f.prepare({}, budget());
-    assert.equal(fresh.type, 'pending_login'); assert.notEqual(fresh, pending);
-    assert.notEqual(new URL(fresh.authorizationUrl).searchParams.get('state'),
-      new URL(pending.authorizationUrl).searchParams.get('state'));
-    assert.equal((await f.managed.complete(fresh, f.callback(fresh), budget())).credential.token, 'access-1');
-    assert.equal(f.tokens.length, 1); assert.equal(f.store.writes, 1);
-  });
-}
-
-test('mutating supplied budget signal during discovery cannot replace captured completion signal', async t => {
-  const f = await fixture(t), entered = deferred(), release = deferred();
-  const original = new AbortController(), replacement = new AbortController();
-  const supplied = budget(original.signal);
-  const managed = managedOAuth({ ...f.options, async selectClient(...args) {
-    entered.resolve(); await release.promise; return f.options.selectClient(...args);
-  } });
-  const preparing = managed.prepare({ ...f.context, challenged: true }, supplied);
-  await entered.promise;
-  supplied.signal = replacement.signal;
-  release.resolve();
-  const pending = await preparing;
-  const reason = new DOMException('captured original cancelled', 'AbortError');
-  original.abort(reason);
-  assert.equal(replacement.signal.aborted, false);
-  await assert.rejects(managed.complete(pending, f.callback(pending), budget()), error => error === reason);
-  assert.equal(f.tokens.length, 0); assert.equal(f.store.writes, 0);
-});
 
 test('mutable host load object cannot change the expected generation during refresh', async t => {
   const f = await fixture(t); await f.login(); f.store.expire();
@@ -567,8 +478,11 @@ for (const vector of lifecycleVectors.token_responses) {
     Object.assign(f.client, { scopes: vector.requested, allowedScopes: vector.allowed, requiredScopes: vector.required });
     let complete;
     if (vector.exchange === 'refresh') {
+      // The prior grant may predate a narrower ceiling.
+      Object.assign(f.client, { allowedScopes: [...new Set([...vector.allowed, ...vector.requested, ...vector.previous_granted])] });
       f.state.tokenResponse = { access_token: 'initial', token_type: 'Bearer', refresh_token: 'initial-refresh', scope: vector.previous_granted.join(' ') };
       const initial = await f.login();
+      Object.assign(f.client, { allowedScopes: vector.allowed, scopes: vector.requested.filter(scope => vector.allowed.includes(scope)) });
       f.state.tokenResponse = vector.response;
       await f.managed.challenge({ ...f.context, credential: initial.credential, response: new Response(null, { status: 401 }) }, budget());
       complete = f.prepare();
@@ -579,40 +493,34 @@ for (const vector of lifecycleVectors.token_responses) {
     if (vector.usable) assert.equal((await complete).credential.token, vector.response.access_token);
     else await assert.rejects(complete, { code: vector.error ?? 'interaction_required' });
     const stored = [...f.store.values.values()][0];
-    assert.equal(stored.refreshToken, vector.response.refresh_token);
+    if (!vector.accepted && vector.exchange !== 'refresh') assert.equal(stored, undefined, 'an invalid initial exchange persists nothing');
+    if (vector.refresh_preserved) assert.equal(stored.refreshToken, vector.response.refresh_token);
+    else assert.equal(stored?.refreshToken, undefined);
+    if (!vector.accepted) assert.equal(stored?.token, undefined, 'an invalid response is never dispatched');
     if (vector.granted) assert.deepEqual([...stored.scopes].sort(), [...vector.granted].sort());
     if (vector.expiry === 'unknown') assert.equal(stored.expiresAt, undefined);
     else if (vector.expiry === 'known') assert(stored.expiresAt > Date.now());
-    if (!vector.accepted) assert.equal(stored.rejected, true);
+    for (const hidden of (vector.granted ?? []).filter(scope => vector.effective && !vector.effective.includes(scope))) {
+      // Recorded but outside the current ceiling: not effective for this caller.
+      await assert.rejects(f.managed.prepare({ ...f.context, challenged: true }, budget(), { requiredScopes: [hidden] }), { code: 'access_denied' });
+    }
   });
 }
 
-test('invalid callback does not consume pending; valid denial and invalid_grant do', async t => {
+test('[invalid-callback-does-not-consume] invalid callback does not consume pending; valid denial and invalid_grant do', async t => {
   const f = await fixture(t), pending = await f.prepare();
   await assert.rejects(f.managed.complete(pending, f.callback(pending, { state: 'stray' }), budget()), { code: 'access_denied' });
   assert.equal((await f.managed.complete(pending, f.callback(pending), budget())).credential.token, 'access-1');
   const g = await fixture(t), denied = await g.prepare();
   const denial = new URL(g.callback(denied)); denial.searchParams.delete('code'); denial.searchParams.set('error', 'access_denied');
   await assert.rejects(g.managed.complete(denied, denial.href, budget()), { code: 'access_denied' });
-  await assert.rejects(g.managed.complete(denied, g.callback(denied), budget()), { code: 'invalid_configuration' });
+  await assert.rejects(g.managed.complete(denied, g.callback(denied), budget()), { code: 'interaction_required' });
   const h = await fixture(t, { tokenStatus: 400, tokenError: { error: 'invalid_grant' } }), stale = await h.prepare();
   await assert.rejects(h.managed.complete(stale, h.callback(stale), budget()), { code: 'interaction_required' });
   assert.notEqual(await h.prepare(), stale);
 });
 
-test('dispatch cannot create or shorten a host-owned pending login', async t => {
-  const f = await fixture(t), provider = f.managed.provider({ budget: () => budget(undefined, 100) });
-  const context = { ...f.context, challenged: true };
-  await assert.rejects(provider.credential(context), { code: 'interaction_required' });
-  const hostBudget = budget(undefined, 10000), pending = await f.managed.prepare(context, hostBudget);
-  assert.equal(pending.expiresAt, hostBudget.deadline);
-  await assert.rejects(provider.credential(context), { code: 'interaction_required' });
-  assert.equal(await f.managed.prepare(context, budget()), pending);
-  await f.managed.cancel(pending, budget());
-  assert.notEqual(await f.managed.prepare(context, budget()), pending);
-});
-
-test('cached bindings survive recreation and metadata outage; secrets are resolved fresh', async t => {
+test('[cached-token-metadata-outage] cached bindings survive recreation and metadata outage; secrets are resolved fresh', async t => {
   const f = await fixture(t); await f.login();
   f.state.metadataStatus = 503;
   const before = f.requests.length, recreated = managedOAuth(f.options);
@@ -621,7 +529,7 @@ test('cached bindings survive recreation and metadata outage; secrets are resolv
   assert(!JSON.stringify([...f.store.bindings.values()]).includes('clientSecret'));
 });
 
-test('unknown expiry initial and rotating refresh remain usable, including narrowed refresh inheritance', async t => {
+test('[refresh-unknown-expiry-rotation] unknown expiry initial and rotating refresh remain usable, including narrowed refresh inheritance', async t => {
   const f = await fixture(t, { tokenResponse: { access_token: 'unknown', token_type: 'Bearer', refresh_token: 'rotate-1', scope: 'deliver' } });
   const first = await f.login();
   assert.equal((await f.prepare()).credential.token, 'unknown');
@@ -633,7 +541,7 @@ test('unknown expiry initial and rotating refresh remain usable, including narro
   assert.equal((await f.prepare()).credential.token, 'rotated');
 });
 
-test('shared grant partition opts independent bindings into one consent only after local approval', async t => {
+test('[explicit-shared-grant] shared grant partition opts independent bindings into one consent only after local approval', async t => {
   const f = await fixture(t); f.client.grantPartition = 'host-approved';
   await f.login();
   let approved = false;
@@ -661,53 +569,7 @@ test('shared grant partition opts independent bindings into one consent only aft
   assert.equal(f.store.bindings.size, 2);
 });
 
-test('PKCE scope step-up persists requirement for host prepare and rejects forbidden scopes', async t => {
-  const f = await fixture(t); f.client.allowedScopes = ['deliver', 'audit'];
-  const first = await f.login();
-  const challenge = scope => ({ ...f.context, credential: first.credential,
-    response: new Response(null, { status: 403, headers: { 'www-authenticate': `Bearer error="insufficient_scope", scope="${scope}"` } }) });
-  await assert.rejects(f.managed.challenge(challenge('admin'), budget()), { code: 'access_denied' });
-  assert.equal([...f.store.values.values()][0].rejected, undefined);
-  await assert.rejects(f.managed.challenge(challenge('audit'), budget()), { code: 'interaction_required' });
-  const pending = await f.prepare();
-  assert(new URL(pending.authorizationUrl).searchParams.get('scope').split(' ').includes('audit'));
-  assert.equal(f.tokens.length, 1);
-});
-
-test('pending scope context replacement invalidates stale callbacks and keeps replacement ownership', async t => {
-  const f = await fixture(t); f.client.allowedScopes = ['deliver', 'audit'];
-  const oldController = new AbortController(), operation = budget(oldController.signal, 10000);
-  const first = await f.prepare({}, operation);
-  assert.equal(await f.prepare({}, operation), first);
-  f.client.scopes = ['deliver', 'audit'];
-  const replacementBudget = budget(undefined, 9000), second = await f.prepare({}, replacementBudget);
-  assert.notEqual(second, first);
-  await assert.rejects(f.managed.complete(first, f.callback(first), budget()), { code: 'invalid_configuration' });
-  oldController.abort();
-  assert.equal(await f.prepare({}, replacementBudget), second);
-  f.client.requiredScopes = ['deliver'];
-  const third = await f.prepare({}, replacementBudget);
-  assert.notEqual(third, second, 'explicit requirements are part of pending eligibility');
-  const thirdCallback = f.callback(third);
-  f.client.redirectUri = `${f.origin}/other-callback`;
-  const fourth = await f.prepare({}, replacementBudget);
-  assert.notEqual(fourth, third, 'exact redirect identity is part of pending eligibility');
-  await assert.rejects(f.managed.complete(third, thirdCallback, budget()), { code: 'invalid_configuration' });
-  await f.managed.cancel(fourth, budget());
-});
-
-test('pending budget replacement does not borrow or extend prior login lifetime', async t => {
-  const f = await fixture(t), short = budget(undefined, 1000);
-  const first = await f.prepare({}, short);
-  const long = budget(undefined, 10000), second = await f.prepare({}, long);
-  assert.notEqual(second, first);
-  assert.equal(second.expiresAt, long.deadline);
-  await assert.rejects(f.managed.complete(first, f.callback(first), budget()), { code: 'invalid_configuration' });
-  assert.equal(await f.prepare({}, long), second);
-  assert.equal(await f.prepare({}, short), second, 'a covered shorter budget can poll the same host operation');
-});
-
-test('scope challenge without required scope denies without changing grant; explicit host requirement permits step-up', async t => {
+test('[scope-challenge-without-required-scope] scope challenge without required scope denies without changing grant; explicit host requirement permits step-up', async t => {
   const f = await fixture(t); f.client.allowedScopes = ['deliver', 'audit'];
   const initial = await f.login();
   const challenge = { ...f.context, credential: initial.credential, response: new Response(null, {
@@ -722,7 +584,7 @@ test('scope challenge without required scope denies without changing grant; expl
   assert.equal(f.tokens.length, 1);
 });
 
-test('client credentials transient reissue retries without login or discarding current credentials', async t => {
+test('[client-credentials-transient-reissue] client credentials transient reissue retries without login or discarding current credentials', async t => {
   const f = await fixture(t); Object.assign(f.client, { flow: 'client_credentials', clientSecret: 'client-secret' });
   const first = await f.prepare(); assert.equal(first.type, 'ready');
   f.store.expire(); f.state.tokenStatus = 503; f.state.tokenError = { error: 'temporarily_unavailable' };
@@ -745,7 +607,7 @@ test('transient rotating refresh retains old material and a later native HTTP re
   assert.equal([...f.store.values.values()][0].refreshToken, 'refresh-3');
 });
 
-test('metadata and secret rotation rebuild outside grant lock and never persist client secret', async t => {
+test('[metadata-and-secret-rotation] metadata and secret rotation rebuild outside grant lock and never persist client secret', async t => {
   const f = await fixture(t, { authorizationMetadata: { grant_types_supported: ['authorization_code'] } });
   f.client.clientSecret = 'old-client-secret'; await f.login();
   const firstKey = [...f.store.values.keys()][0];
@@ -764,7 +626,7 @@ test('metadata and secret rotation rebuild outside grant lock and never persist 
   assert(!persisted.includes('old-client-secret')); assert(!persisted.includes('new-client-secret'));
 });
 
-test('configured preset never requests protected-resource metadata', async t => {
+test('[configured-preset-no-protected-resource-metadata] configured preset never requests protected-resource metadata', async t => {
   const f = await fixture(t);
   const authentication = { type: 'oauth', issuer: f.client.issuer, resource: f.client.resource,
     clientId: f.client.clientId, flow: f.client.flow, scopes: [...f.client.scopes] };
@@ -775,7 +637,7 @@ test('configured preset never requests protected-resource metadata', async t => 
 });
 
 for (const redirect of ['http://127.0.0.1:42819/callback', 'http://127.0.0.2:42819/callback', 'http://[::1]:42819/callback', 'http://[0:0:0:0:0:0:0:1]:42819/callback']) {
-  test(`literal loopback redirect completes through native HTTPS token endpoint: ${redirect}`, async t => {
+  test(`[loopback-redirect] literal loopback redirect completes through native HTTPS token endpoint: ${redirect}`, async t => {
     const f = await fixture(t); f.client.redirectUri = redirect;
     const pending = await f.prepare();
     assert.equal((await f.managed.complete(pending, f.callback(pending), budget())).credential.token, 'access-1');
@@ -786,79 +648,50 @@ test('HTTP localhost hostname redirect is not literal loopback', async t => {
   await assert.rejects(f.prepare(), { code: 'invalid_configuration' });
 });
 
-test('anonymous 401 learns trusted binding and advises PKCE host without creating pending login', async t => {
-  const f = await fixture(t), provider = f.managed.provider({ budget: () => budget(undefined, 100) });
+test('[delivery-never-creates-pending-login] anonymous 401 learns the binding; delivery and challenge paths never create a login', async t => {
+  const f = await fixture(t), provider = f.managed.provider({ budget: () => budget(undefined, 1000) });
   assert.equal(await provider.credential(f.context), undefined);
   assert.equal(f.requests.length, 0);
   const response = new Response(null, { status: 401, headers: { 'www-authenticate': 'Bearer' } });
-  await assert.rejects(provider.challenge({ ...f.context, response, credential: undefined }), { code: 'interaction_required' });
-  assert.equal(f.tokens.length, 0);
+  await provider.challenge({ ...f.context, response, credential: undefined });
   assert.equal(f.store.bindings.size, 1);
-  const hostBudget = budget(undefined, 10000), pending = await f.managed.prepare(f.context, hostBudget);
-  assert.equal(pending.expiresAt, hostBudget.deadline);
+  await assert.rejects(provider.credential({ ...f.context, challenged: true, challenge: 'Bearer' }), { code: 'interaction_required' });
+  assert.equal(await provider.credential(f.context), undefined, 'the up-front lookup stays anonymous without a grant');
+  assert.equal(f.store.pending.size, 0); assert.equal(f.tokens.length, 0);
+  const before = Date.now(), pending = await f.managed.prepare(f.context, budget(undefined, 1000));
+  assert.equal(pending.type, 'pending_login'); assert.equal(f.store.pending.size, 1);
+  assert(pending.expiresAt >= before + 600_000, 'default lifetime is ten minutes, not the prepare budget');
 });
 
-test('anonymous 401 acquires client credentials noninteractively for the next unsafe delivery', async t => {
+test('[unreplayed-challenge-prepares-next-attempt] anonymous 401 on an unreplayed request acquires client credentials for the next attempt', async t => {
   const f = await fixture(t); Object.assign(f.client, { flow: 'client_credentials', clientSecret: 'secret' });
   const provider = f.managed.provider({ budget: () => budget() });
   assert.equal(await provider.credential(f.context), undefined);
   await provider.challenge({ ...f.context, credential: undefined, response: new Response(null, {
     status: 401, headers: { 'www-authenticate': 'Bearer' } }) });
-  assert.equal(f.tokens.length, 1);
-  assert.equal((await provider.credential(f.context)).token, 'access-1');
+  assert.equal(f.tokens.length, 1); assert.equal(f.store.pending.size, 0);
+  const requests = f.requests.length;
+  assert.equal((await managedOAuth(f.options).provider({ budget: () => budget() }).credential(f.context)).token, 'access-1');
+  assert.equal(f.requests.length, requests, 'the up-front lookup performs no network I/O for a usable grant');
 });
 
-test('refresh cannot broaden prior grant; rotated refresh persists quarantined before denial', async t => {
-  const f = await fixture(t); f.client.allowedScopes = ['deliver', 'audit'];
-  const initial = await f.login();
-  f.state.tokenResponse = { access_token: 'too-broad', token_type: 'Bearer', scope: 'deliver audit', refresh_token: 'quarantined-rotation' };
-  await f.managed.challenge({ ...f.context, credential: initial.credential, response: new Response(null, { status: 401 }) }, budget());
-  await assert.rejects(f.prepare(), { code: 'access_denied' });
-  assert.equal(f.tokens[1].body.get('scope'), 'deliver');
-  const stored = [...f.store.values.values()][0];
-  assert.equal(stored.refreshToken, 'quarantined-rotation');
-  assert.equal(stored.rejected, true); assert.equal(stored.refreshQuarantined, true);
-  assert.equal((await f.prepare()).type, 'pending_login');
-  assert.equal(f.tokens.length, 2, 'quarantined grant cannot refresh into broader permissions');
-  await assert.rejects(f.managed.provider({ budget: () => budget() }).credential(f.context), { code: 'interaction_required' });
-  const recreated = managedOAuth(f.options);
-  await assert.rejects(recreated.provider({ budget: () => budget() }).credential(f.context), { code: 'interaction_required' });
-  assert.equal(f.tokens.length, 2, 'recreated provider cannot use or refresh a quarantined broader grant');
-  assert.equal([...f.store.values.values()][0].refreshToken, 'quarantined-rotation');
-});
-
-test('concurrent scope challenges merge requirements even after rejection', async t => {
-  const f = await fixture(t); f.client.allowedScopes = ['deliver', 'audit', 'write'];
-  const initial = await f.login();
-  const challenge = scope => f.managed.challenge({ ...f.context, credential: initial.credential,
-    response: new Response(null, { status: 403, headers: { 'www-authenticate': `Bearer error="insufficient_scope", scope="${scope}"` } }) }, budget());
-  const results = await Promise.allSettled([challenge('audit'), challenge('write')]);
-  for (const result of results) { assert.equal(result.status, 'rejected'); assert.equal(result.reason.code, 'interaction_required'); }
-  assert.deepEqual([...f.store.values.values()][0].requiredScopes.sort(), ['audit', 'write']);
-  const pending = await f.prepare();
-  assert.deepEqual(new URL(pending.authorizationUrl).searchParams.get('scope').split(' ').sort(), ['audit', 'deliver', 'write']);
-});
-
-test('anonymous insufficient scope persists binding requirement for recreated host prepare', async t => {
-  const f = await fixture(t); f.client.allowedScopes = ['deliver', 'audit'];
-  await assert.rejects(f.managed.challenge({ ...f.context, credential: undefined,
-    response: new Response(null, { status: 403, headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="audit"' } }) }, budget()), { code: 'interaction_required' });
-  assert.equal(f.tokens.length, 0);
-  const pending = await managedOAuth(f.options).prepare(f.context, budget());
-  assert.deepEqual(new URL(pending.authorizationUrl).searchParams.get('scope').split(' ').sort(), ['audit', 'deliver']);
-});
-
-test('anonymous insufficient scope acquires CC approved scopes without human login', async t => {
-  const f = await fixture(t, { scope: 'deliver audit' });
+test('[step-up-requirement-operation-scoped] client-credentials step-up applies to the challenged operation only', async t => {
+  const f = await fixture(t);
   Object.assign(f.client, { flow: 'client_credentials', clientSecret: 'secret', allowedScopes: ['deliver', 'audit'] });
   const provider = f.managed.provider({ budget: () => budget() });
-  assert.equal(await provider.credential(f.context), undefined);
-  await provider.challenge({ ...f.context, credential: undefined, response: new Response(null, { status: 403,
-    headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="audit"' } }) });
-  assert.equal(f.tokens.length, 1);
-  assert(f.tokens[0].body.get('scope').split(' ').includes('audit'));
-  assert.equal((await provider.credential(f.context)).token, 'access-1');
-  assert.deepEqual([...f.store.bindings.values()][0].requiredScopes, ['audit']);
+  const first = await f.prepare(); assert.equal(f.tokens.length, 1);
+  const header = 'Bearer error="insufficient_scope", scope="audit"';
+  f.state.scope = 'deliver audit';
+  await provider.challenge({ ...f.context, credential: first.credential, response: new Response(null, { status: 403, headers: { 'www-authenticate': header } }) });
+  // Challenge handling acquires with the operation's requirement; the replay finds that grant.
+  const replay = await provider.credential({ ...f.context, challenged: true, challenge: header });
+  assert.equal(f.tokens.length, 2);
+  assert(f.tokens[1].body.get('scope').split(' ').includes('audit'));
+  assert.equal(replay.token, 'access-2');
+  for (const record of [...f.store.bindings.values(), ...f.store.values.values()]) assert.equal(record.requiredScopes, undefined);
+  // Later operations use the stored grant's effective scopes, including the step-up.
+  assert.equal((await provider.credential(f.context)).token, 'access-2');
+  assert.equal(f.tokens.length, 2);
 });
 
 for (const redirect of ['http://127.1/callback', 'http://127.00.0.1/callback', 'http://2130706433/callback',
@@ -869,8 +702,7 @@ for (const redirect of ['http://127.1/callback', 'http://127.00.0.1/callback', '
   });
 }
 
-
-test('unexpired grant missing new host-required scopes renews issuer metadata outside store locks', async t => {
+test('[metadata-and-secret-rotation] stale metadata is renewed outside store locks for a widened requirement without orphaning the grant', async t => {
   const f = await fixture(t);
   Object.assign(f.client, { flow: 'client_credentials', clientSecret: 'secret', allowedScopes: ['deliver', 'audit'] });
   await f.prepare();
@@ -883,7 +715,7 @@ test('unexpired grant missing new host-required scopes renews issuer metadata ou
   f.state.tokenEndpoint = `${f.origin}/rotated-token`;
   f.state.authorizationMetadata = { token_endpoint_auth_methods_supported: ['client_secret_post'] };
   const checkDestination = f.options.checkDestination;
-  const renewed = managedOAuth({ ...f.options, checkDestination(url, purpose, operation) {
+  const renewed = managedOAuth({ ...f.options, metadataMaxAgeMs: 0, checkDestination(url, purpose, operation) {
     if (purpose === 'metadata') assert.equal(f.store.locks.size, 0, 'renewal discovery must run outside host-store locks');
     return checkDestination(url, purpose, operation);
   } });
@@ -895,48 +727,6 @@ test('unexpired grant missing new host-required scopes renews issuer metadata ou
   assert.equal([...f.store.values.keys()][0], originalKey);
   assert.notEqual([...f.store.values.values()][0].generation, previous.generation);
 });
-
-test('persisted network requirements cannot authorize a scope-less challenge as host policy', async t => {
-  const f = await fixture(t, { scope: 'deliver audit' });
-  f.client.allowedScopes = ['deliver', 'audit'];
-  const response = scope => new Response(null, { status: 403, headers: {
-    'www-authenticate': `Bearer error="insufficient_scope"${scope === undefined ? '' : `, scope="${scope}"`}`,
-  } });
-  await assert.rejects(f.managed.challenge({ ...f.context, credential: undefined, response: response('audit') }, budget()),
-    { code: 'interaction_required' });
-  assert.deepEqual([...f.store.bindings.values()][0].requiredScopes, ['audit']);
-  const recreated = managedOAuth(f.options), hostBudget = budget(undefined, 10000);
-  const pending = await recreated.prepare(f.context, hostBudget);
-  const bindingBefore = structuredClone([...f.store.bindings.values()][0]);
-  await assert.rejects(recreated.challenge({ ...f.context, credential: undefined, response: response() }, budget()),
-    { code: 'access_denied' });
-  assert.equal(await recreated.prepare(f.context, hostBudget), pending, 'denial must not replace pending host consent');
-  assert.deepEqual([...f.store.bindings.values()][0], bindingBefore);
-  const ready = await recreated.complete(pending, f.callback(pending), budget());
-  const credentialBefore = structuredClone([...f.store.values.values()][0]);
-  await assert.rejects(recreated.challenge({ ...f.context, credential: ready.credential, response: response() }, budget()),
-    { code: 'access_denied' });
-  assert.deepEqual([...f.store.values.values()][0], credentialBefore, 'denial must not reject an otherwise usable credential');
-  assert.equal((await recreated.prepare(f.context, budget())).credential.token, ready.credential.token);
-  assert.equal(f.tokens.length, 1);
-});
-
-
-test('pending reuse compares explicit host requirements even when network requirements already match', async t => {
-  const f = await fixture(t); f.client.allowedScopes = ['deliver', 'audit'];
-  await assert.rejects(f.managed.challenge({ ...f.context, credential: undefined, response: new Response(null, {
-    status: 403, headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="audit"' },
-  }) }, budget()), { code: 'interaction_required' });
-  const hostBudget = budget(undefined, 10000);
-  const first = await f.prepare({}, hostBudget);
-  f.client.requiredScopes = ['audit'];
-  const replacement = await f.prepare({}, hostBudget);
-  assert.notEqual(replacement, first, 'equal merged scopes must not hide a changed explicit host requirement');
-  await assert.rejects(f.managed.complete(first, f.callback(first), budget()), { code: 'invalid_configuration' });
-  f.state.scope = 'deliver audit';
-  assert.equal((await f.managed.complete(replacement, f.callback(replacement), budget())).credential.token, 'access-1');
-});
-
 
 test('code completion resolves a rotated client secret outside coordination without replacing consent', async t => {
   const f = await fixture(t); f.client.clientSecret = 'revoked-secret';
@@ -954,7 +744,6 @@ test('code completion resolves a rotated client secret outside coordination with
   assert.equal(f.tokens.length, 1, 'revoked secret must never reach the token endpoint');
   assert.equal(decodeURIComponent(Buffer.from(f.tokens[0].authorization.slice(6), 'base64').toString()), 'client:rotated-secret');
   assert.equal(createHash('sha256').update(f.tokens[0].body.get('code_verifier')).digest('base64url'), authorization.searchParams.get('code_challenge'));
-  assert.equal(pending.expiresAt, hostBudget.deadline);
   const persisted = JSON.stringify([...f.store.values.values(), ...f.store.bindings.values()]);
   assert(!persisted.includes('revoked-secret')); assert(!persisted.includes('rotated-secret'));
 });
@@ -965,9 +754,6 @@ for (const [field, changed] of [
   ['clientId', () => 'other-client'],
   ['flow', () => 'client_credentials'],
   ['redirectUri', client => `${client.redirectUri}/other`],
-  ['scopes', () => ['deliver', 'audit']],
-  ['requiredScopes', () => ['deliver']],
-  ['allowedScopes', () => ['deliver']],
   ['grantPartition', () => 'other-partition'],
 ]) {
   test(`code completion denies incompatible current ${field} without consuming original consent`, async t => {
@@ -980,7 +766,6 @@ for (const [field, changed] of [
     assert.equal((await f.managed.complete(pending, callback, budget())).credential.token, 'access-1');
   });
 }
-
 
 test('host credential lookup failure before callback claim preserves the original pending consent', async t => {
   const f = await fixture(t); f.client.clientSecret = 'secret';
@@ -1017,18 +802,6 @@ test('completion cancellation during current-client selection does not claim or 
   assert.equal((await managed.complete(pending, callback, budget())).credential.token, 'access-1');
 });
 
-
-test('pending reuse compares original host-requested scopes even when expanded consent scopes match', async t => {
-  const f = await fixture(t); Object.assign(f.client, { allowedScopes: ['deliver', 'audit'], requiredScopes: ['audit'] });
-  const hostBudget = budget(undefined, 30000), first = await f.prepare({}, hostBudget);
-  f.client.scopes = ['deliver', 'audit'];
-  const replacement = await f.prepare({}, budget(undefined, 10000));
-  assert.notEqual(replacement, first);
-  await assert.rejects(f.managed.complete(first, f.callback(first), budget()), { code: 'invalid_configuration' });
-  f.state.scope = 'deliver audit';
-  assert.equal((await f.managed.complete(replacement, f.callback(replacement), budget())).credential.token, 'access-1');
-});
-
 test('valid consent denial is claimed once without resolving unavailable runtime client credentials', async t => {
   const f = await fixture(t); let unavailable = false, selections = 0;
   const managed = managedOAuth({ ...f.options, selectClient(...args) {
@@ -1040,5 +813,5 @@ test('valid consent denial is claimed once without resolving unavailable runtime
   unavailable = true;
   await assert.rejects(managed.complete(pending, denied.href, budget()), { code: 'access_denied' });
   assert.equal(selections, 1); assert.equal(f.tokens.length, 0);
-  await assert.rejects(managed.complete(pending, denied.href, budget()), { code: 'invalid_configuration' });
+  await assert.rejects(managed.complete(pending, denied.href, budget()), { code: 'interaction_required' });
 });

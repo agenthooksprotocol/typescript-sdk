@@ -223,11 +223,16 @@ attachment bodies are immutable and are not text-edit targets.
 
 `HooksOptions.auth` accepts a small `DeliveryAuthProvider`: `credential(context)`
 returns `{ type: "bearer", token, attempt? }`, and `challenge(context)` handles an
-actual 401 response before the one bounded retry. Context includes the selected
+actual 401 or Bearer 403 `insufficient_scope` response. Context includes the selected
 registration authentication binding, backend ID, destination URL, event/upload
 purpose, and operation signal. Challenge context also contains the exact attempted
 credential, including its opaque identity, for stale-token rejection handling.
-Requests retain their identity and prepared body across recovery.
+After the provider handles the challenge, Hooks replays `hooks/intercept`,
+`hooks/configuration` and `hooks/capabilities` at most once, with the same JSON-RPC
+id and buffered body; a second rejection fails the operation. Observe notifications
+and uploads are never replayed, but their challenge still runs so the next request
+sends a credential. A provider must actually recover in `challenge`: the built-in
+`auth()` provider drops the rejected cached token, so it is never resent.
 
 The provider owns secret lookup, discovery/trust policy, OAuth login/exchange,
 rotation, shared coordination and persistence. Callbacks must honor their signal;

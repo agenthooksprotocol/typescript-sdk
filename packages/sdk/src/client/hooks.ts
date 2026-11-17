@@ -37,7 +37,7 @@ import { composeResponseAsync, normalizeEffects, type ComposedEffect } from "./c
 import { runtimeInteger } from "../runtime-integer.js";
 import { admitContracts, decodeContract, encodeContract, freezeContractValue, type ToolBeforeInput, type ToolBeforeResult } from "./contracts.js";
 import { auth } from "./auth.js";
-import { bearerParameters } from "../oauth/discovery.js";
+import { bearerParameters } from "./challenge.js";
 import { isEventType, validateWire } from "./validation.js";
 import {
   ConfigurationError,
@@ -103,6 +103,7 @@ type Route = {
   index: number;
   transport: BackendTransport;
 };
+const REPLAYABLE: ReadonlySet<unknown> = new Set(["hooks/intercept", "hooks/configuration", "hooks/capabilities"]);
 const eventTypes: readonly EventType[] = Object.values(events).filter(
   (event): event is EventType => typeof event === "string" && !event.includes("*"),
 );
@@ -435,14 +436,16 @@ export class Hooks {
       ? await raceAbort(resolveHeaders(entries, this.provider, { ...context, signal }), signal)
       : new Headers();
     const explicitAuthorization = configured.has("authorization");
-    // Only the read-only configuration request is replayable. Event delivery,
-    // notifications and uploads may be effectful even when auth was rejected.
+    // Challenged replay: after the provider handles a 401 or Bearer 403
+    // insufficient_scope, replay once with the same id and buffered body, only
+    // for requests that expect a response. Notifications and uploads are never
+    // replayed; they rely on credentials sent on the first attempt.
     let replaySafe = false;
     if (purpose === "event" && typeof init.body === "string") {
       try {
         const message: unknown = JSON.parse(init.body);
         replaySafe = typeof message === "object" && message !== null &&
-          (message as { method?: unknown }).method === "hooks/configuration" &&
+          REPLAYABLE.has((message as { method?: unknown }).method) &&
           Object.hasOwn(message, "id");
       } catch { /* Unknown request bodies are never replayed. */ }
     }
@@ -510,11 +513,7 @@ export class Hooks {
           throw error;
         }
       }
-      if (explicitAuthorization || !authRejected || !replaySafe || attempt === 1) {
-        delete context.challenge;
-        delete context.challenged;
-        return response;
-      }
+      if (explicitAuthorization || !authRejected || !replaySafe || attempt === 1) return response;
       context.challenged = true;
       context.challenge = response.headers.get("www-authenticate") ?? undefined;
       void response.body?.cancel().catch(() => {});

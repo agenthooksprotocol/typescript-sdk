@@ -664,7 +664,7 @@ test("headers do not reach non-event requests or another transport", async () =>
   assert.equal(seen[1].has("x-key"), false);
 });
 
-test("Hooks resolves headers once per dispatch without unsafe auth replay and rotates next dispatch", async () => {
+test("Hooks resolves headers once per dispatch, reuses them for the challenged replay and rotates next dispatch", async () => {
   let resolutions = 0;
   let calls = 0;
   const seen = [];
@@ -688,11 +688,11 @@ test("Hooks resolves headers once per dispatch without unsafe auth replay and ro
     await h.initialized;
     await h.dispatch("tool.before", input());
     await h.dispatch("tool.before", input());
-    assert.equal(calls, 2);
+    assert.equal(calls, 3);
     assert.equal(resolutions, 2);
     assert.deepEqual(
       seen.map((h) => h.get("x-key")),
-      ["secret-1", "secret-2"],
+      ["secret-1", "secret-1", "secret-2"],
     );
     assert.ok(seen.every((h) => h.get("authorization") === "Bearer auth-only"));
   } finally {

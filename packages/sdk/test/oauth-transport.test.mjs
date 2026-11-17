@@ -1,23 +1,13 @@
 import assert from 'node:assert/strict';
-import { before, after, test } from 'node:test';
+import { test } from 'node:test';
 import https from 'node:https';
-import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { auth, Hooks, Attachment } from 'agenthooksprotocol/client';
 import { managedOAuth } from 'agenthooksprotocol/oauth';
 
-let tls;
-let certificates;
-before(async () => {
-  certificates = await mkdtemp(join(tmpdir(), 'ahp-tls-'));
-  await writeFile(join(certificates, 'config'), '[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n[dn]\nCN=localhost\n[ext]\nsubjectAltName=DNS:localhost\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,digitalSignature,keyEncipherment,keyCertSign\nextendedKeyUsage=serverAuth\n');
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-config', join(certificates, 'config'), '-keyout', join(certificates, 'key.pem'), '-out', join(certificates, 'cert.pem')], { stdio: 'ignore' });
-  tls = { key: await readFile(join(certificates, 'key.pem')), cert: await readFile(join(certificates, 'cert.pem')) };
-});
-after(async () => { if (certificates) await rm(certificates, { recursive: true, force: true }); });
+// Static, test-only certificate (testdata is not published).
+const tls = { key: await readFile(new URL('../testdata/tls/key.pem', import.meta.url)), cert: await readFile(new URL('../testdata/tls/cert.pem', import.meta.url)) };
 
 class MemoryStore {
   values = new Map();
@@ -68,7 +58,8 @@ async function environment(t) {
       response.end(JSON.stringify({ ref: 'urn:test:upload', size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }));
     } else {
       state.deliveries.push({ authorization: request.headers.authorization, message: JSON.parse(body) });
-      if (state.challenge) {
+      // Only the original, narrower token is rejected.
+      if (state.challenge && request.headers.authorization === 'Bearer access-1') {
         response.writeHead(403, { 'www-authenticate': 'Bearer error="insufficient_scope", scope="audit"' });
         response.end('{}');
       } else {
@@ -125,26 +116,26 @@ test('recreated managed provider sends cached unbound credentials through real H
   } finally { await hooks.close(); }
 });
 
-test('allowed insufficient-scope challenge updates consent requirements without replaying an effectful delivery', async t => {
+test('[challenged-replay-once] insufficient_scope on an intercept steps up client credentials and replays once over real HTTPS', async t => {
   const f = await environment(t);
   const managed = managedOAuth(f.options);
   await managed.prepare(f.context, budget());
   const hooks = f.hooks(managed);
   try {
     f.state.challenge = true;
-    await hooks.dispatch('tool.before', input());
-    assert.equal(f.state.deliveries.length, 1, 'intercept delivery must not be replayed');
-    f.state.challenge = false;
-    await hooks.dispatch('tool.before', input());
-    assert.equal(f.state.deliveries.length, 2);
+    const result = await hooks.dispatch('tool.before', input());
+    assert.deepEqual(result.diagnostics.filter(item => item.phase !== 'observation'), []);
+    assert.equal(f.state.deliveries.length, 2, 'replayed exactly once');
+    assert.deepEqual(f.state.deliveries[1].message, f.state.deliveries[0].message, 'same JSON-RPC id and body');
     assert.equal(f.state.grants.length, 2);
     assert(new Set(f.state.grants[1].get('scope').split(' ')).has('audit'));
+    assert.equal(f.state.deliveries[0].authorization, 'Bearer access-1');
     assert.equal(f.state.deliveries[1].authorization, 'Bearer access-2');
   } finally { await hooks.close(); }
 });
 
 
-test('independently prepared upload binding sends cached OAuth upfront through real upload transport', async t => {
+test('[unbound-preemptive-unsafe-delivery] independently prepared upload binding sends cached OAuth upfront through real upload transport', async t => {
   const f = await environment(t);
   const uploadUrl = `${f.context.url}/upload`;
   let uploadApproved = false;
@@ -177,7 +168,7 @@ test('independently prepared upload binding sends cached OAuth upfront through r
 });
 
 
-test('cached unbound OAuth authenticates observation notifications upfront and never replays a rejected notification', async t => {
+test('[unreplayed-challenge-prepares-next-attempt] a rejected notification is not replayed but the next one sends a credential', async t => {
   const f = await environment(t);
   await managedOAuth(f.options).prepare(f.context, budget());
   const before = f.state.metadata;
@@ -194,6 +185,10 @@ test('cached unbound OAuth authenticates observation notifications upfront and n
     await hooks.dispatch('tool.before', input());
     assert.equal(f.state.deliveries.length, 2, 'rejected notification must not be replayed');
     assert.equal(f.state.deliveries[1].authorization, 'Bearer access-1');
-    assert.equal(f.state.metadata, before);
+    // Challenge handling acquired client credentials (with the required scope) for the next attempt.
+    f.state.metadataAvailable = true;
+    await hooks.dispatch('tool.before', input());
+    assert.equal(f.state.deliveries.length, 3);
+    assert.equal(f.state.deliveries[2].authorization, 'Bearer access-2');
   } finally { await hooks.close(); }
 });

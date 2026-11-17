@@ -11,6 +11,7 @@ export interface ClientConfig {
   readonly issuer: string; readonly resource: string; readonly clientId: string;
   readonly flow: "authorization_code_pkce" | "client_credentials";
   readonly scopes: readonly string[];
+  /** Local ceiling; defaults to `scopes`. Not part of the grant key. */
   readonly allowedScopes?: readonly string[];
   readonly requiredScopes?: readonly string[];
   readonly grantPartition?: string;
@@ -19,35 +20,60 @@ export interface ClientConfig {
 export interface ResolvedTarget {
   readonly client: ClientConfig;
   readonly metadata: AuthorizationServer;
-  /** Current host policy only; never inferred from a challenge or cached requirements. */
+  /** Current host policy only; never inferred from a challenge. */
   readonly hostRequiredScopes?: readonly string[];
 }
 export interface TokenValue {
-  readonly token: string; readonly expiresAt?: number | undefined;
+  readonly token: string; readonly expiresAt?: number;
   readonly refreshToken?: string; readonly scopes: readonly string[];
-  readonly requiredScopes?: readonly string[];
-  readonly rejected?: boolean;
 }
-export interface StoredCredential extends TokenValue {
+
+/** One OAuth grant. `token` is absent after a rejection or an invalid token response. */
+export interface StoredGrant {
+  readonly kind: "grant";
   readonly generation: string;
-  readonly rejected?: boolean;
-  readonly refreshRejected?: boolean;
-  /** A rotated credential is retained, but requires explicit host consent/repair. */
-  readonly refreshQuarantined?: boolean;
-  /** Internal non-secret discovery cache, stored under the separate binding key. */
-  readonly bindingMetadata?: ResolvedTarget;
-  readonly requiredScopes?: readonly string[];
+  readonly token?: string;
+  readonly expiresAt?: number;
+  readonly refreshToken?: string;
+  /** Recorded granted scopes; re-intersected with the current ceiling at use. */
+  readonly scopes: readonly string[];
 }
+/** Non-secret discovery result for one destination, stored under its binding key. */
+export interface StoredBinding {
+  readonly kind: "binding";
+  readonly generation: string;
+  readonly issuer: string;
+  readonly resource: string;
+  readonly metadata: AuthorizationServer;
+  /** Unix milliseconds; metadata older than `metadataMaxAgeMs` is renewed before acquisition. */
+  readonly discoveredAt: number;
+}
+/** A host-created login awaiting its callback. Completable from any process sharing the store. */
+export interface StoredPendingLogin {
+  readonly kind: "pending_login";
+  readonly generation: string;
+  readonly id: string;
+  readonly grantKey: string;
+  readonly expiresAt: number;
+  readonly authorizationUrl: string;
+  readonly state: string;
+  readonly verifier: string;
+  /** Requested plus required scopes and the creating caller's ceiling, without client secrets. */
+  readonly client: Omit<ClientConfig, "clientSecret">;
+  readonly metadata: AuthorizationServer;
+  readonly context: Pick<DeliveryAuthContext, "backendId" | "purpose" | "url" | "authentication">;
+}
+export type StoredRecord = StoredGrant | StoredBinding | StoredPendingLogin;
+
 /** Host implements cross-instance coordination and atomic generation checks.
  * coordinate must serialize work for a key across all instances sharing this store,
  * hold the lock until work settles, and never start an aborted waiter. Store writes
- * must check signal before committing. New credentials use fresh generations;
- * rejection-only updates preserve the credential generation.
+ * must check signal before committing. Every write uses a fresh generation.
  */
 export interface TokenStore {
-  load(key: string, signal: AbortSignal): Promise<StoredCredential | undefined>;
+  load(key: string, signal: AbortSignal): Promise<StoredRecord | undefined>;
   compareAndSet(key: string, expectedGeneration: string | undefined,
-    value: StoredCredential | undefined, signal: AbortSignal): Promise<boolean>;
+    value: StoredRecord | undefined, signal: AbortSignal): Promise<boolean>;
   coordinate<T>(key: string, signal: AbortSignal, work: () => Promise<T>): Promise<T>;
 }
 export interface ManagedOAuthOptions {
@@ -59,4 +85,8 @@ export interface ManagedOAuthOptions {
   /** Local trust/identity/scope policy, never inferred from advertised metadata. */
   readonly selectClient: (issuers: readonly string[], resource: string,
     context: DeliveryAuthContext, operation: Operation) => ClientConfig | Promise<ClientConfig>;
+  /** Pending login lifetime, fixed at creation. Default and maximum 600000 (10 minutes). */
+  readonly loginLifetimeMs?: number;
+  /** Cached authorization-server metadata age before renewal for acquisition. Default 3600000. */
+  readonly metadataMaxAgeMs?: number;
 }

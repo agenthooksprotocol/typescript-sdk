@@ -200,3 +200,15 @@ test('consumer outcome exposes a single typed representation for each settled fa
       assert.equal(Object.hasOwn(result, field), false, field);
   } finally { await hooks.close(); }
 });
+
+test('importing agenthooksprotocol/client does not load oauth4webapi', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const hooks = 'export async function resolve(s, c, n) { if (s === "oauth4webapi") throw new Error("oauth4webapi loaded"); return n(s, c); }';
+  const register = `import { register } from "node:module"; register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(hooks)}`)});`;
+  const run = specifier => execFileSync(process.execPath, ['--import', `data:text/javascript,${encodeURIComponent(register)}`,
+    '--input-type=module', '-e', `await import(${JSON.stringify(specifier)})`], { cwd: new URL('..', import.meta.url), stdio: 'pipe' });
+  run('agenthooksprotocol/client');
+  run('agenthooksprotocol');
+  // Positive control: the guard does detect the OAuth subpath.
+  assert.throws(() => run('agenthooksprotocol/oauth'), /oauth4webapi loaded/);
+});

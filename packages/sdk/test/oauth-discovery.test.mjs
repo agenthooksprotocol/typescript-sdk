@@ -11,6 +11,7 @@ const target = {
   client: { issuer, resource, clientId: 'client', clientSecret: 'secret', flow: 'client_credentials', scopes: ['deliver'] },
   metadata: { issuer, token_endpoint: 'https://issuer.example/token', grant_types_supported: ['client_credentials'] },
 };
+const cached = { issuer, resource, metadata: target.metadata };
 const options = policyFetch => ({ checkDestination() {}, policyFetch, selectClient: () => target.client });
 
 for (const fallback of [false, true]) {
@@ -186,12 +187,12 @@ test('cached discovery revalidates local client policy and current secrets witho
   const resolved = await resolveTarget({ url: resource, authentication: preset }, {
     ...options(() => assert.fail('valid cached metadata must not require network')),
     selectClient: () => ({ ...target.client, scopes: ['deliver', 'deliver'], clientSecret: 'rotated-secret' }),
-  }, operation(), target);
+  }, operation(), cached);
   assert.equal(resolved.client.clientSecret, 'rotated-secret');
   assert.deepEqual(resolved.client.scopes, ['deliver']);
 });
 
 test('cached discovery cannot bypass current local destination policy', async () => {
   await assert.rejects(resolveTarget({ url: 'https://other.example/events', authentication: preset },
-    options(() => assert.fail('forbidden destination must not fetch metadata')), operation(), target), { code: 'discovery_failed' });
+    options(() => assert.fail('forbidden destination must not fetch metadata')), operation(), cached), { code: 'discovery_failed' });
 });

@@ -220,7 +220,7 @@ test("binding snapshot: reordered properties and scope sets match but restore im
   await routing.challenge({ ...context(equivalent), credential, response: new Response(null, { status: 401 }) });
 });
 
-test("unconfigured-challenge: real HTTP records auth state without replaying effectful delivery", async () => {
+test("[challenged-replay-once] unconfigured challenge over real HTTP replays the intercept once with discovered credentials", async () => {
   const calls = [];
   const routing = auth.compose({ discover: provider((ctx) => {
     if (!ctx.challenged) return undefined;
@@ -237,9 +237,10 @@ test("unconfigured-challenge: real HTTP records auth state without replaying eff
       assert.equal(await routing.credential(context(null)), undefined);
       assert.deepEqual(calls, []);
       const result = await unconfigured.dispatch("tool.before", input());
-      assert.ok(result.diagnostics.some(d => d.phase !== "observation"));
-      assert.deepEqual(calls, ["challenge"]);
-      assert.deepEqual(requests.map((r) => r.authorization), [undefined]);
+      assert.deepEqual(result.diagnostics.filter(d => d.phase !== "observation"), []);
+      assert.deepEqual(calls, ["challenge", "credential"]);
+      assert.deepEqual(requests.map((r) => r.authorization), [undefined, "Bearer discovered-token"]);
+      assert.deepEqual(requests[1].body, requests[0].body);
     } finally { await unconfigured.close(); }
   });
 });

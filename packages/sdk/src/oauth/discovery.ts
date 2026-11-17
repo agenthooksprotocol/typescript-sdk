@@ -1,8 +1,12 @@
 import { AuthError, classifyAuthError, type DeliveryAuthContext } from "../client/auth.js";
+import { bearerParameters } from "../client/challenge.js";
 import { processDiscoveryResponse, type AuthorizationServer } from "oauth4webapi";
-import type { ClientConfig, ManagedOAuthOptions, NetworkPurpose, Operation, ResolvedTarget } from "./types.js";
+import type { ClientConfig, ManagedOAuthOptions, NetworkPurpose, Operation, ResolvedTarget, StoredBinding } from "./types.js";
 
-function active(operation: Operation): void {
+export type CachedBinding = Pick<StoredBinding, "issuer" | "resource" | "metadata">;
+
+/** Cancellation and deadlines keep native identity: AbortError reason or TimeoutError. */
+export function active(operation: Operation): void {
   operation.signal.throwIfAborted();
   if (Date.now() >= operation.deadline) throw new DOMException("OAuth operation deadline exceeded", "TimeoutError");
 }
@@ -85,47 +89,6 @@ async function metadataAt(urls: readonly string[], options: ManagedOAuthOptions,
   throw new AuthError("discovery_failed");
 }
 
-/** Split challenges without interpreting commas or scheme names inside quoted strings. */
-export function bearerParameters(header: string | undefined): Map<string, string> {
-  const result = new Map<string, string>();
-  if (header === undefined || header === "") return result;
-  if (header.length > 16384 || /[\r\n\0]/.test(header)) throw new AuthError("discovery_failed");
-  const parts: string[] = [];
-  let start = 0, quoted = false, escaped = false;
-  for (let i = 0; i < header.length; i++) {
-    const c = header[i];
-    if (escaped) { escaped = false; continue; }
-    if (quoted && c === "\\") { escaped = true; continue; }
-    if (c === '"') quoted = !quoted;
-    if (c === "," && !quoted) { parts.push(header.slice(start, i)); start = i + 1; }
-  }
-  if (quoted || escaped) throw new AuthError("discovery_failed");
-  parts.push(header.slice(start));
-  let bearer = false, seenBearer = false;
-  const token = "[!#$%&'*+.^_`|~0-9A-Za-z-]+";
-  const scheme = new RegExp(`^(${token})(?:[ \\t]+(.*))?$`);
-  const parameter = new RegExp(`^(${token})[ \\t]*=[ \\t]*(?:\"((?:[^\"\\\\]|\\\\.)*)\"|(${token}))[ \\t]*$`);
-  for (const part of parts) {
-    let text = part.trim();
-    const beginning = scheme.exec(text);
-    if (beginning && !parameter.test(text)) {
-      bearer = beginning[1]?.toLowerCase() === "bearer";
-      if (bearer && seenBearer) throw new AuthError("discovery_failed");
-      if (bearer) seenBearer = true;
-      text = beginning[2] ?? "";
-    }
-    if (!bearer || text === "") continue;
-    // RFC 7235 token68 is not an auth-param list, including padded payloads.
-    if (/^[A-Za-z0-9._~+\/-]+=*$/.test(text)) continue;
-    const match = parameter.exec(text);
-    if (!match) throw new AuthError("discovery_failed");
-    const name = match[1]!.toLowerCase();
-    if (result.has(name)) throw new AuthError("discovery_failed");
-    result.set(name, match[2] !== undefined ? match[2].replace(/\\(.)/g, "$1") : match[3]!);
-  }
-  return result;
-}
-
 function resourceCovers(resource: string, endpoint: string): void {
   const base = https(resource), target = https(endpoint);
   if ((resource.includes("?") && resource !== endpoint) || base.origin !== target.origin ||
@@ -146,20 +109,20 @@ function validateClient(client: ClientConfig): void {
   }
 }
 
-export async function resolveTarget(context: DeliveryAuthContext, options: ManagedOAuthOptions, operation: Operation, cachedTarget?: ResolvedTarget): Promise<ResolvedTarget> {
+/** With `cached`, performs no network I/O: only local client policy runs. */
+export async function resolveTarget(context: DeliveryAuthContext, options: ManagedOAuthOptions, operation: Operation, cached?: CachedBinding): Promise<ResolvedTarget> {
   try {
-    return await discover(context, options, operation, cachedTarget);
+    return await discover(context, options, operation, cached);
   } catch (error) {
     active(operation);
     throw classifyAuthError(error, "discovery_failed");
   }
 }
 
-async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptions, operation: Operation, cachedTarget?: ResolvedTarget): Promise<ResolvedTarget> {
+async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptions, operation: Operation, cached?: CachedBinding): Promise<ResolvedTarget> {
   active(operation);
   const binding = context.authentication;
   if (binding !== undefined && binding.type !== "oauth") throw new AuthError("unsupported_binding");
-  if (!binding && !cachedTarget && context.challenged !== true) throw new AuthError("credential_unavailable");
   const endpoint = https(context.url);
   const challenge = bearerParameters(context.challenge);
   const advertised = challenge.get("resource_metadata");
@@ -175,7 +138,7 @@ async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptio
   // A preset already fixes the principal; PRM must not override or gate it.
   const protectedResource: Record<string, unknown> = binding
     ? { resource: binding.resource, authorization_servers: [binding.issuer] }
-    : cachedTarget ? { resource: cachedTarget.client.resource, authorization_servers: [cachedTarget.client.issuer] }
+    : cached ? { resource: cached.resource, authorization_servers: [cached.issuer] }
     : await metadataAt(advertised !== undefined ? [advertised] : [specific, root], options, operation, expected);
   if (typeof protectedResource.resource !== "string") throw new AuthError("discovery_failed");
   const resource = protectedResource.resource;
@@ -227,7 +190,7 @@ async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptio
   const issuer = https(client.issuer);
   // RFC 8414 section 3.1 removes a terminating slash for metadata lookup only.
   const issuerPath = issuer.pathname.replace(/\/$/, "");
-  const metadata = cachedTarget?.metadata ?? await metadataAt([
+  const metadata = cached && cached.issuer === client.issuer ? cached.metadata as unknown as Record<string, unknown> : await metadataAt([
     `${issuer.origin}/.well-known/oauth-authorization-server${issuerPath}`,
     `${issuer.origin}/.well-known/openid-configuration${issuerPath}`,
     `${issuer.origin}${issuerPath.replace(/\/$/, "")}/.well-known/openid-configuration`,

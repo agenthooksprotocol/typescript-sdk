@@ -28,17 +28,15 @@ Supply all of these capabilities:
   `coordinate(key, signal, work)`. Coordination must serialize the full callback
   across all instances sharing the store (including processes where applicable).
   Waiting and storage operations must honor cancellation; do not invoke queued
-  work after cancellation. Never expose store keys or values in logs. Keys include
-  namespace, backend, purpose and full endpoint in the binding key. Grant keys
-  additionally include trusted issuer, resource, client, flow and the locally
-  allowed scope ceiling. Keep namespaces stable and separate tenants. Secrets,
-  metadata and granted/requested scopes are not grant identity. Default grants
-  are isolated per binding; an explicit `grantPartition` shares consent only
-  after each destination and purpose independently passes local approval.
-  Preserve the complete `StoredCredential` record, including non-secret
-  `bindingMetadata` entries under the binding keyspace and rejection/quarantine
-  flags. Binding metadata records are not bearer credentials. Expiry is optional;
-  do not require an `expiresAt` field in the store serializer.
+  work after cancellation. Never expose store keys or values in logs. Records are
+  `StoredRecord`s with a `kind`: a `binding` (non-secret discovery result under the
+  binding key: namespace, backend, purpose, full endpoint), a `grant` (under the
+  grant key: namespace, issuer, resource, client, flow and partition) and a
+  `pending_login`. The allowed ceiling, secrets, token-endpoint auth method and
+  scope sets are not identity: widening or narrowing the ceiling never orphans a
+  grant. Default grants are isolated per binding; an explicit `grantPartition`
+  shares consent only after each destination and purpose independently passes
+  local approval. Preserve records verbatim; expiry is optional.
 
 The adapter rejects redirects, URL credentials, non-HTTPS network endpoints,
 resource/issuer mismatches and broader-than-permitted scopes. It does not register
@@ -81,12 +79,14 @@ const provider = auth.compose({
 `host` is application-owned infrastructure, not an exported SDK implementation.
 Its budget returns `{ signal, deadline }`, with an absolute Unix-millisecond
 deadline that does not extend the enclosing delivery. Provider integration never
-opens UI: it throws `interaction_required` when login is needed. Hooks keeps its
-existing bounded, protocol-safe retry rules and explicit Authorization precedence.
-Unknown endpoints remain anonymous until challenged or explicitly prepared.
-After a trusted binding is stored, cached credentials are sent up front, including
-for uploads and notifications that cannot be replayed. Uploads use their own
-bindings and isolated storage keys by default.
+opens UI or creates a login: it throws `interaction_required` when login is needed.
+Unknown endpoints are anonymous until challenged or explicitly prepared. Once a
+binding is stored, the up-front lookup sends its stored token on the first
+attempt, including for uploads and notifications that are never replayed. That
+lookup performs no discovery; it may refresh an expired token with cached
+metadata, and a failed refresh fails the operation. It is anonymous only on a
+store miss or a host policy refusal (`selectClient` throwing). Uploads use their
+own bindings and isolated storage keys by default.
 
 ## Host-driven PKCE
 
@@ -101,62 +101,58 @@ if (result.type === "pending_login") {
 }
 ```
 
-`PendingLogin` is a frozen opaque handle with an authorization URL and `expiresAt`.
-Keep it private: the URL contains OAuth state. The host can call
-`oauth.cancel(pending, budget)` to discard it. Pending state is in-memory per
-adapter instance and is not restart-persistent; keep that instance alive through
-completion. Preparation deduplicates live pending logins per identity in that
-instance only when requested/required scopes, redirect and consent budget are
-compatible. Replacing an incompatible pending operation invalidates its old
-handle. Reuse the same consent budget when polling an eligible operation.
-Callbacks are single-use, validate state/issuer/redirect binding through
-the library, and cannot outlive the original budget or ten minutes. Completion
-has its own cancellable budget, capped by that original deadline. Tokens are
-written only under the original CAS generation, so another completed login cannot
-be overwritten. Completion reselects current host client authentication outside store coordination
-before it claims the callback. Secret rotation does not require new consent;
-principal, redirect, requested scopes and explicit host requirements must remain
-compatible with the pending operation. Pending records do not retain client
-secrets. Completion also checks the current generation before sending the code,
-so a stale pending login cannot consume a code after another login has replaced
-its credential. Cancellation releases retained login secrets immediately; expired
-records are pruned on the next prepare call, with expiry enforced on every use.
-After abandoned/expired login, prepare again; no worker cleans up in the background.
+`PendingLogin` is a plain-data handle with an authorization URL and `expiresAt`.
+Keep it private: the URL contains OAuth state. The login is a stored record, so
+the handle may be serialized and completed or cancelled from any process sharing
+the store. Its lifetime is fixed at creation by `loginLifetimeMs` (default and
+maximum ten minutes), independent of the creating budget or its cancellation.
+A later `prepare` reuses it when the grant key and redirect match and the new
+requested plus required scopes are covered; otherwise it supersedes it with a
+login for (old ∪ new requested ∪ new required) ∩ the new ceiling. A login ends by
+completion (a claimed valid callback, including consent denial), supersede,
+`cancel` or expiry; a callback for an ended login fails `interaction_required`.
+Redirect, state and issuer are validated before the login is claimed, so a stray
+callback cannot burn it. Completion reselects current host client authentication
+outside store coordination before it claims the callback; secret rotation does
+not require new consent. Records never contain client secrets.
+
+For step-up, an `interaction_required` from a 403 `insufficient_scope` carries
+`requiredScopes`; pass them back with `oauth.prepare(context, budget, { requiredScopes })`.
+Required scopes outside the caller's ceiling fail `access_denied`.
 
 For unattended use, return a `ClientConfig` with `flow: "client_credentials"`,
 a locally resolved `clientSecret`, and permitted `scopes`. `prepare` returns
-`ready` after the library exchange and never requests UI. Both grants and refresh
-send the RFC 8707 `resource` parameter. Tokens need bearer type and valid values. Absent expiry means the token remains
-usable until rejected; positive expiry is enforced when provided. Requested
-scopes, the locally allowed ceiling and explicit operation requirements are
-distinct: servers may narrow requested scopes or grant additional locally
-allowed scopes. A token must satisfy the explicit requirements of its operation.
+`ready` and never requests UI. Grants and refresh send the RFC 8707 `resource`
+parameter. Tokens need bearer type and valid values; `expires_in` must be a
+positive integer (or digit string). Absent expiry means the token remains usable
+until rejected. An initial exchange records `granted = response ∩ acquisition
+ceiling` (the ceiling stored on the login, or the client-credentials caller's);
+a refresh records `response ∩ previous grant`. Extra scopes are ignored. At use,
+effective scopes are the grant ∩ the current ceiling, and only explicit or
+challenge requirements are mandatory. The ceiling governs what the SDK requests
+and records; it does not constrain what an issued token can do.
 
 ## Rotation, rejection and failure
 
 Refresh runs inside host coordination, reloads the latest generation, and uses
-CAS for replacement. Concurrent callers reuse the refreshed generation. Missing
-refresh-token rotation retains the previous refresh token. Transient failures
-preserve stored credentials and return retry advice. An ambiguous rotating
-refresh cannot be rolled back at the authorization server: retry can subsequently
-receive `invalid_grant`. A refresh response that broadens the prior grant is
-quarantined: its rotated refresh material is retained, but the access token is
-not usable and a fresh grant is needed. Definitive PKCE refresh `invalid_grant` reports
-`refresh_rejected` and requires fresh login. Client credentials reacquire
-noninteractively and never request human login. A stale 401 cannot invalidate a newer
-generation. Challenge never independently replays HTTP requests.
+CAS for replacement; concurrent callers reuse the refreshed grant. Refresh uses
+cached authorization-server metadata, renewed after `metadataMaxAgeMs` or a
+challenge, outside store locks; an outage falls back to the cached metadata.
+Missing refresh-token rotation retains the previous refresh token. Transient
+failures preserve stored credentials and advise retry. An invalid token response
+is never dispatched and fails `provider_failed`: an initial exchange persists
+nothing, while a refresh keeps a valid rotated refresh token. A definitive refresh
+`invalid_grant` returns `refresh_rejected` and deletes the grant only if it still
+holds the presented refresh token. Client credentials reacquire noninteractively.
+A 401 drops the rejected access token unless a newer generation exists.
 
 Public failures are redacted `AuthError`s with safe codes/recovery and no raw
-provider messages, token bodies or cause chains. Native cancellation (including
-the caller's reason) is preserved. Budgets stop waiting, but cannot undo a host
-connector/store that violates its cancellation contract; no store or network
-adapter should detach work. There is no automatic anonymous/alternate-provider
-fallback after configured authentication fails.
+provider messages, token bodies or cause chains. `Ready.credential.token` is not
+enumerable. Native cancellation (the caller's reason, or `TimeoutError` at the
+deadline) is preserved. There is no anonymous/alternate-provider fallback after
+configured authentication fails.
 
 A Bearer `403 insufficient_scope` challenge permits step-up only within the
-locally allowed ceiling. Without a challenge scope, supply explicit host-required
-scopes or treat the challenge as denied; the SDK does not invent permissions. PKCE returns login advice for a subsequent host-owned
-`prepare`; dispatch never creates consent state or borrows the delivery budget
-for login. Client credentials can acquire the permitted scopes automatically.
-Only the transport may perform its existing single safe retry: authentication
-never replays effectful deliveries, notifications or uploads.
+locally allowed ceiling, and only for the challenged operation: requirements are
+never persisted. Without a challenge scope, supply explicit host-required scopes
+or the challenge is denied. Hooks alone decides replay (see the README).

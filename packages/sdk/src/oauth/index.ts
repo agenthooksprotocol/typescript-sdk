@@ -1,33 +1,39 @@
 import { AuthError, normalizeAuthTarget, classifyAuthError } from "../client/auth.js";
 import type { AuthChallengeContext, DeliveryAuthContext, DeliveryAuthProvider, DeliveryCredential } from "../client/auth.js";
-import { resolveTarget, bearerParameters } from "./discovery.js";
+import { bearerParameters } from "../client/challenge.js";
+import { resolveTarget, type CachedBinding } from "./discovery.js";
 import { acquireClientCredentials, exchangeCode, refreshCredential, startLogin, validateCallback } from "./protocol.js";
-import type { LoginState } from "./protocol.js";
-import type { ManagedOAuthOptions, Operation, ResolvedTarget, StoredCredential, TokenValue } from "./types.js";
-export type { ClientConfig, ManagedOAuthOptions, NetworkPurpose, Operation, PolicyFetch, StoredCredential, TokenStore, TokenValue } from "./types.js";
+import type { TokenResult } from "./protocol.js";
+import type {
+  ClientConfig, ManagedOAuthOptions, Operation, ResolvedTarget, StoredBinding, StoredGrant, StoredPendingLogin, StoredRecord, TokenValue,
+} from "./types.js";
+export type {
+  ClientConfig, ManagedOAuthOptions, NetworkPurpose, Operation, PolicyFetch, StoredBinding, StoredGrant, StoredPendingLogin,
+  StoredRecord, TokenStore, TokenValue,
+} from "./types.js";
 
-export type PendingLogin = Readonly<{ type: "pending_login"; authorizationUrl: string; expiresAt: number }>;
+/**
+ * Plain-data handle for a stored pending login. It may be serialized and passed to
+ * `complete` or `cancel` in any process sharing the store. Keep it private: the
+ * authorization URL carries OAuth state.
+ */
+export type PendingLogin = Readonly<{ type: "pending_login"; authorizationUrl: string; expiresAt: number; key: string; id: string }>;
+/** `credential.token` is non-enumerable, so it is absent from JSON and inspection output. */
 export type Ready = Readonly<{ type: "ready"; credential: DeliveryCredential }>;
 export type PrepareResult = Ready | PendingLogin;
-interface PendingRecord {
-  readonly key: string;
-  readonly target: ResolvedTarget;
-  readonly context: DeliveryAuthContext;
-  readonly requestedScopes: readonly string[];
-  readonly identity: string;
-  readonly baseGeneration: string | undefined;
-  readonly expiresAt: number;
-  readonly signals: readonly AbortSignal[];
-  login?: LoginState;
-  pending?: PendingLogin;
-  cleanup?: () => void;
+export interface PrepareOptions {
+  /** Explicit operation requirements, such as `AuthError.requiredScopes` from a step-up challenge. */
+  readonly requiredScopes?: readonly string[];
 }
-interface Attempt { readonly key: string; readonly generation: string; readonly identity: string }
 
-function identity(context: DeliveryAuthContext): string {
-  const target = normalizeAuthTarget(context);
-  return frame("ahp.oauth.binding:", ["", target.backendId, target.purpose, target.url]);
-}
+const MAX_LOGIN_LIFETIME = 600_000;
+const EXPIRY_SKEW = 30_000;
+const SCOPE = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
+type Mode = "host" | "delivery" | "lookup";
+interface Attempt { readonly key: string; readonly generation: string; readonly identity: string }
+/** Up-front lookup outcome for a store miss or host policy refusal: send anonymously. */
+const LOOKUP_MISS = Object.freeze({ type: "lookup_miss" as const });
+
 /** Canonical UTF-8 framed SDK storage identity. */
 export function frame(prefix: string, fields: readonly string[]): string {
   const encoder = new TextEncoder();
@@ -37,11 +43,25 @@ export function bindingKey(namespace: string, context: DeliveryAuthContext): str
   normalizeAuthTarget(context);
   return frame("ahp.oauth.binding:", [namespace, context.backendId, context.purpose, context.url]);
 }
+/** Grant identity: no ceiling, secrets, token-endpoint auth method or scope sets. */
+export function grantKey(namespace: string, context: DeliveryAuthContext, client: ClientConfig): string {
+  if (client.grantPartition !== undefined && (typeof client.grantPartition !== "string" || !client.grantPartition)) {
+    throw new AuthError("invalid_configuration");
+  }
+  return frame("ahp.oauth.grant:", [namespace, client.issuer, client.resource, client.clientId, client.flow,
+    client.grantPartition === undefined ? `binding:${bindingKey(namespace, context)}` : `shared:${client.grantPartition}`]);
+}
+function pendingKey(namespace: string, context: DeliveryAuthContext): string {
+  return frame("ahp.oauth.pending:", [bindingKey(namespace, context)]);
+}
 function scopes(values: readonly string[]): string[] {
-  if (!Array.isArray(values) || values.some(value => typeof value !== "string" ||
-      !/^[\x21\x23-\x5B\x5D-\x7E]+$/.test(value))) throw new AuthError("invalid_configuration");
+  if (!Array.isArray(values) || values.some(value => typeof value !== "string" || !SCOPE.test(value))) {
+    throw new AuthError("invalid_configuration");
+  }
   return [...new Set(values)].sort();
 }
+const ceilingOf = (client: ClientConfig) => client.allowedScopes ?? client.scopes;
+const within = (values: readonly string[], set: readonly string[]) => values.every(value => set.includes(value));
 function snapshotContext(context: DeliveryAuthContext): DeliveryAuthContext {
   normalizeAuthTarget(context);
   const { authentication, ...rest } = context;
@@ -52,57 +72,33 @@ function snapshotContext(context: DeliveryAuthContext): DeliveryAuthContext {
   });
   return Object.freeze({ ...rest, authentication: binding });
 }
-export function grantKey(namespace: string, context: DeliveryAuthContext, client: import("./types.js").ClientConfig): string {
-  if (client.grantPartition !== undefined && (typeof client.grantPartition !== "string" || !client.grantPartition)) {
-    throw new AuthError("invalid_configuration");
-  }
-  return frame("ahp.oauth.grant:", [namespace, client.issuer, client.resource, client.clientId,
-    client.flow, scopes(client.allowedScopes ?? client.scopes).join(" "),
-    client.grantPartition === undefined ? `binding:${bindingKey(namespace, context)}` : `shared:${client.grantPartition}`]);
+/** The durable part of a delivery context: no signal, challenge or caches. */
+function durableContext(context: DeliveryAuthContext): StoredPendingLogin["context"] {
+  return { backendId: context.backendId, purpose: context.purpose, url: context.url,
+    ...(context.authentication ? { authentication: structuredClone(context.authentication) } : {}) };
 }
-async function step<T>(operation: Operation, work: Promise<T>): Promise<T> {
-  const signal = operation.signal;
-  let abort: (() => void) | undefined;
-  try {
-    const cancelled = new Promise<never>((_, reject) => {
-      abort = () => reject(signal.reason);
-      signal.addEventListener("abort", abort, { once: true });
-      if (signal.aborted) abort();
-    });
-    const value = await Promise.race([work, cancelled]);
-    signal.throwIfAborted();
-    return value;
-  } finally { if (abort) signal.removeEventListener("abort", abort); }
-}
-async function bounded<T>(input: Operation, work: (operation: Operation) => Promise<T>, upstream: readonly AbortSignal[] = []): Promise<T> {
-  const budget = Object.freeze({ signal: input.signal, deadline: input.deadline });
-  if (!budget.signal || typeof budget.signal.throwIfAborted !== "function") throw new AuthError("invalid_configuration");
-  budget.signal.throwIfAborted();
-  if (!Number.isFinite(budget.deadline)) throw new AuthError("invalid_configuration");
-  const remaining = budget.deadline - Date.now();
-  if (remaining <= 0) throw new DOMException("Operation deadline exceeded", "TimeoutError");
-  const controller = new AbortController();
-  const sources = [...new Set([budget.signal, ...upstream])];
-  for (const signal of sources) signal.throwIfAborted();
-  const listeners = sources.map(signal => {
-    const abort = () => controller.abort(signal.reason);
+/** Settle on work or abort, whichever comes first; host callbacks may ignore signals. */
+function race<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
     signal.addEventListener("abort", abort, { once: true });
-    return { signal, abort };
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
   });
-  const timer = setTimeout(() => controller.abort(new DOMException("Operation deadline exceeded", "TimeoutError")), Math.min(remaining, 2_147_483_647));
-  const operation = Object.freeze({ signal: controller.signal, deadline: budget.deadline });
+}
+/** One cancellation boundary: caller budget, optional context signal and absolute deadline. */
+async function run<T>(budget: Operation, extra: AbortSignal | undefined, work: (operation: Operation) => Promise<T>): Promise<T> {
+  const { signal: input, deadline } = budget ?? {};
+  if (!input || typeof input.throwIfAborted !== "function" || !Number.isFinite(deadline)) throw new AuthError("invalid_configuration");
+  input.throwIfAborted();
+  extra?.throwIfAborted();
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new DOMException("Operation deadline exceeded", "TimeoutError");
+  const signal = AbortSignal.any([input, ...(extra ? [extra] : []), AbortSignal.timeout(Math.min(remaining, 2_147_483_647))]);
   try {
-    return await step(operation, Promise.resolve().then(() => {
-      operation.signal.throwIfAborted();
-      return work(operation);
-    }));
+    return await race(signal, Promise.resolve().then(() => work(Object.freeze({ signal, deadline }))));
   } catch (error) {
-    for (const signal of sources) signal.throwIfAborted();
-    operation.signal.throwIfAborted();
-    throw classifyAuthError(error);
-  } finally {
-    clearTimeout(timer);
-    for (const { signal, abort } of listeners) signal.removeEventListener("abort", abort);
+    throw classifyAuthError(error, "provider_failed", signal);
   }
 }
 
@@ -116,310 +112,290 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       typeof configuration.checkDestination !== "function" ||
       typeof configuration.selectClient !== "function") throw new AuthError("invalid_configuration");
   const options = { ...configuration };
-  const store = options.store;
-  const pendingByKey = new Map<string, PendingRecord>();
-  const pendingRecords = new WeakMap<PendingLogin, PendingRecord>();
+  const { store, namespace } = options;
+  const loginLifetime = options.loginLifetimeMs ?? MAX_LOGIN_LIFETIME;
+  const metadataMaxAge = options.metadataMaxAgeMs ?? 3_600_000;
+  if (!Number.isFinite(loginLifetime) || loginLifetime <= 0 || loginLifetime > MAX_LOGIN_LIFETIME ||
+      !Number.isFinite(metadataMaxAge) || metadataMaxAge < 0) throw new AuthError("invalid_configuration");
   const attempts = new WeakMap<object, Attempt>();
-  const ended = new WeakMap<PendingLogin, { readonly expiresAt: number; readonly signal: AbortSignal | undefined }>();
-  function forget(record: PendingRecord): void {
-    record.cleanup?.();
-    if (record.pending) pendingRecords.delete(record.pending);
-    if (pendingByKey.get(record.key) === record) pendingByKey.delete(record.key);
-  }
-  function retire(record: PendingRecord): void {
-    if (record.pending) ended.set(record.pending, {
-      expiresAt: record.expiresAt, signal: record.signals.find(signal => signal.aborted),
-    });
-    forget(record);
-  }
-  function retain(record: PendingRecord): void {
-    const expire = () => retire(record);
-    record.cleanup = () => {
-      for (const signal of record.signals) signal.removeEventListener("abort", expire);
-    };
-    for (const signal of record.signals) signal.addEventListener("abort", expire, { once: true });
-    if (record.signals.some(signal => signal.aborted)) expire();
-  }
-  function ready(value: StoredCredential, key: string, binding: string): Ready {
-    if (!/^[A-Za-z0-9\-._~+/]+=*$/.test(value.token) || (value.expiresAt !== undefined && (!Number.isFinite(value.expiresAt) || value.expiresAt <= Date.now())) || !value.generation) throw new AuthError("credential_unavailable");
-    const attempt = Object.freeze({});
-    attempts.set(attempt, { key, generation: value.generation, identity: binding });
-    return Object.freeze({ type: "ready", credential: Object.freeze({ type: "bearer", token: value.token, attempt }) });
-  }
-  function reusable(value: StoredCredential | undefined): value is StoredCredential {
-    return value !== undefined && !value.rejected && (value.expiresAt === undefined || value.expiresAt > Date.now() + 30_000);
-  }
-  async function load(key: string, operation: Operation): Promise<StoredCredential | undefined> {
-    const value = await step(operation, store.load(key, operation.signal));
+
+  async function read<K extends StoredRecord["kind"]>(key: string, kind: K, operation: Operation): Promise<Extract<StoredRecord, { kind: K }> | undefined> {
+    const value = await race(operation.signal, store.load(key, operation.signal));
     if (value === undefined) return undefined;
-    if (!Array.isArray(value.scopes) || typeof value.generation !== "string" || !value.generation ||
-        typeof value.token !== "string" || (value.expiresAt !== undefined && !Number.isFinite(value.expiresAt))) {
+    if (typeof value !== "object" || value === null || value.kind !== kind || typeof value.generation !== "string" || !value.generation ||
+        (kind === "grant" && (!Array.isArray((value as StoredGrant).scopes) ||
+          ((value as StoredGrant).token !== undefined && typeof (value as StoredGrant).token !== "string") ||
+          ((value as StoredGrant).expiresAt !== undefined && !Number.isFinite((value as StoredGrant).expiresAt))))) {
       throw new AuthError("credential_unavailable");
     }
-    return Object.freeze({ ...value, scopes: Object.freeze([...value.scopes]) });
+    // Snapshot: a live host object must not change what we compare-and-set against.
+    return structuredClone(value) as Extract<StoredRecord, { kind: K }>;
   }
-  async function save(key: string, expected: string | undefined, token: TokenValue & { refreshQuarantined?: boolean }, operation: Operation) {
+  async function write(key: string, expected: string | undefined, value: StoredRecord | undefined, operation: Operation): Promise<boolean> {
     operation.signal.throwIfAborted();
-    const value: StoredCredential = Object.freeze({ ...token, scopes: Object.freeze([...token.scopes]), generation: crypto.randomUUID() });
-    const saved = await step(operation, store.compareAndSet(key, expected, value, operation.signal));
-    if (!saved) throw new AuthError("provider_failed");
+    return race(operation.signal, store.compareAndSet(key, expected, value, operation.signal));
+  }
+  async function saveGrant(key: string, expected: string | undefined, token: Omit<StoredGrant, "kind" | "generation">, operation: Operation): Promise<StoredGrant> {
+    const value: StoredGrant = { ...token, kind: "grant", scopes: [...token.scopes], generation: crypto.randomUUID() };
+    if (!await write(key, expected, value, operation)) throw new AuthError("provider_failed");
     return value;
   }
-  async function targetFor(context: DeliveryAuthContext, operation: Operation, force = false): Promise<ResolvedTarget> {
+  function identity(context: DeliveryAuthContext): string {
+    return bindingKey("", context);
+  }
+  function usable(grant: StoredGrant | undefined, target: ResolvedTarget, required: readonly string[]): grant is StoredGrant & { token: string } {
+    return grant?.token !== undefined && (grant.expiresAt === undefined || grant.expiresAt > Date.now() + EXPIRY_SKEW) &&
+      within(required, effective(grant, target));
+  }
+  function effective(grant: StoredGrant, target: ResolvedTarget): string[] {
+    const ceiling = ceilingOf(target.client);
+    return grant.scopes.filter(scope => ceiling.includes(scope));
+  }
+  function ready(grant: StoredGrant, key: string, binding: string, target: ResolvedTarget, required: readonly string[]): Ready {
+    if (!within(required, effective(grant, target))) throw new AuthError("access_denied", required);
+    if (!grant.token || !/^[A-Za-z0-9\-._~+/]+=*$/.test(grant.token)) throw new AuthError("credential_unavailable");
+    const attempt = Object.freeze({});
+    attempts.set(attempt, { key, generation: grant.generation, identity: binding });
+    const credential = { type: "bearer" as const, attempt };
+    Object.defineProperty(credential, "token", { value: grant.token, enumerable: false });
+    return Object.freeze({ type: "ready", credential: Object.freeze(credential as DeliveryCredential) });
+  }
+
+  /** Discover over the network outside store locks; persist the binding only when it changed. */
+  async function discoverBinding(context: DeliveryAuthContext, cached: StoredBinding | undefined, operation: Operation): Promise<ResolvedTarget> {
+    let target: ResolvedTarget;
+    try {
+      target = await resolveTarget(context, options, operation);
+    } catch (error) {
+      operation.signal.throwIfAborted();
+      // A metadata outage must not block refresh/acquisition with a known binding.
+      if (!cached || !(error instanceof AuthError) || error.code !== "discovery_failed") throw error;
+      return resolveTarget(context, options, operation, cached);
+    }
+    const value: StoredBinding = { kind: "binding", generation: crypto.randomUUID(), issuer: target.client.issuer,
+      resource: target.client.resource, metadata: target.metadata, discoveredAt: Date.now() };
+    // A lost race means another writer stored an equally fresh binding.
+    await write(bindingKey(namespace, context), cached?.generation, value, operation);
+    return target;
+  }
+
+  /** The single acquisition path for host prepare, delivery credentials and the up-front lookup. */
+  async function acquire(context: DeliveryAuthContext, operation: Operation, mode: Mode, explicit: readonly string[] = []): Promise<PrepareResult | typeof LOOKUP_MISS> {
     if (context.authentication !== undefined && context.authentication.type !== "oauth") throw new AuthError("unsupported_binding");
-    const cacheKey = bindingKey(options.namespace, context);
-    const cached = await step(operation, store.load(cacheKey, operation.signal));
-    if (!force && cached?.bindingMetadata) {
-      try {
-        return withBindingRequirements(await step(operation, resolveTarget(context, options, operation, structuredClone(cached.bindingMetadata))), cached.requiredScopes ?? []);
-      } catch (error) {
-        operation.signal.throwIfAborted();
-        if (!(error instanceof AuthError) || !["unsupported_binding", "discovery_failed", "invalid_configuration"].includes(error.code)) throw error;
-        // Obsolete capabilities or explicit principal changes rebuild outside locks.
-      }
+    const binding = identity(context);
+    const cached = await read(bindingKey(namespace, context), "binding", operation);
+    if (!cached && mode === "lookup") return LOOKUP_MISS;
+    let target: ResolvedTarget;
+    try {
+      target = cached ? await resolveTarget(context, options, operation, cached) : await discoverBinding(context, undefined, operation);
+    } catch (error) {
+      operation.signal.throwIfAborted();
+      if (mode === "lookup" && error instanceof AuthError) return LOOKUP_MISS;
+      throw error;
     }
-    // Discovery and destination policy run before either binding or grant coordination.
-    const target = await step(operation, resolveTarget(snapshotContext({ ...context, challenged: true }), options, operation));
-    scopes(target.client.scopes);
-    const allowed = scopes(target.client.allowedScopes ?? target.client.scopes);
-    if ([...target.client.scopes, ...(target.client.requiredScopes ?? [])].some(scope => !allowed.includes(scope))) {
-      throw new AuthError("access_denied");
+    const withExplicit = (resolved: ResolvedTarget): ResolvedTarget => {
+      const required = [...new Set([...(resolved.client.requiredScopes ?? []), ...scopes(explicit)])];
+      if (!within(required, ceilingOf(resolved.client))) throw new AuthError("access_denied", required);
+      return { ...resolved, client: { ...resolved.client, requiredScopes: required } };
+    };
+    target = withExplicit(target);
+    let key = grantKey(namespace, context, target.client);
+    // Cached tokens are served without metadata I/O, locks or writes.
+    const observed = await read(key, "grant", operation);
+    if (usable(observed, target, target.client.requiredScopes ?? [])) return ready(observed, key, binding, target, []);
+    if (!observed && mode === "lookup") return LOOKUP_MISS;
+    const challenged = context.challenged === true || context.challenge !== undefined;
+    if (cached && mode !== "lookup" && (challenged || Date.now() - cached.discoveredAt >= metadataMaxAge)) {
+      target = withExplicit(await discoverBinding(context, cached, operation));
+      key = grantKey(namespace, context, target.client);
     }
-    const { clientSecret: _secret, ...nonSecret } = target.client;
-    const value: StoredCredential = { token: "", scopes: [], generation: crypto.randomUUID(),
-      bindingMetadata: { client: nonSecret, metadata: target.metadata } };
-    await step(operation, store.coordinate(cacheKey, operation.signal, async () => {
-      const latest = await step(operation, store.load(cacheKey, operation.signal));
-      if (!await step(operation, store.compareAndSet(cacheKey, latest?.generation, { ...value, requiredScopes: latest?.requiredScopes ?? [] }, operation.signal))) {
-        throw new AuthError("provider_failed");
+    const required = target.client.requiredScopes ?? [];
+    return race(operation.signal, store.coordinate(key, operation.signal, async () => {
+      const current = await read(key, "grant", operation);
+      if (usable(current, target, required)) return ready(current, key, binding, target, []);
+      const prior = current ? effective(current, target) : [];
+      if (target.client.flow === "client_credentials") {
+        const requested = { ...target, client: { ...target.client, scopes: [...new Set([...target.client.scopes, ...required])] } };
+        const token = await acquireClientCredentials(requested, options, operation);
+        return ready(await saveGrant(key, current?.generation, token, operation), key, binding, target, required);
       }
+      // A refresh can never broaden a grant, so it only helps when the requirement is already covered.
+      if (current?.refreshToken && within(required, prior)) {
+        return ready(await refresh(key, current, current.scopes, target, operation), key, binding, target, required);
+      }
+      if (mode !== "host") throw new AuthError("interaction_required", required);
+      return login(context, target, key, operation);
     }));
-    return withBindingRequirements(target, cached?.requiredScopes ?? []);
   }
-  function withBindingRequirements(target: ResolvedTarget, required: readonly string[]): ResolvedTarget {
-    const allowed = target.client.allowedScopes ?? target.client.scopes;
-    if (required.some(scope => !allowed.includes(scope))) throw new AuthError("access_denied");
-    return { ...target, client: { ...target.client,
-      requiredScopes: [...new Set([...(target.client.requiredScopes ?? []), ...required])] } };
-  }
-  async function recordBindingRequirements(context: DeliveryAuthContext, required: readonly string[], operation: Operation): Promise<void> {
-    const key = bindingKey(options.namespace, context);
-    await step(operation, store.coordinate(key, operation.signal, async () => {
-      const current = await step(operation, store.load(key, operation.signal));
-      if (!current?.bindingMetadata) throw new AuthError("provider_failed");
-      if (!await step(operation, store.compareAndSet(key, current.generation, { ...current,
-        requiredScopes: [...new Set([...(current.requiredScopes ?? []), ...required])] }, operation.signal))) {
-        throw new AuthError("provider_failed");
+
+  async function refresh(key: string, current: StoredGrant, prior: readonly string[], target: ResolvedTarget, operation: Operation): Promise<StoredGrant> {
+    const presented = current.refreshToken!;
+    let result: TokenResult;
+    try {
+      result = await refreshCredential(target, presented, prior, options, operation);
+    } catch (error) {
+      operation.signal.throwIfAborted();
+      if (error instanceof AuthError && error.code === "refresh_rejected") {
+        // Compare-and-delete: a newer record (another refresh or login) is kept.
+        const latest = await read(key, "grant", operation);
+        if (latest?.refreshToken === presented) await write(key, latest.generation, undefined, operation);
       }
-    }));
-  }
-  function checkedReady(value: StoredCredential, key: string, binding: string, target: ResolvedTarget): Ready {
-    const allowed = target.client.allowedScopes ?? target.client.scopes;
-    if (value.rejected) throw new AuthError("access_denied");
-    if (value.scopes.some(scope => !allowed.includes(scope))) throw new AuthError("access_denied");
-    if ([...(target.client.requiredScopes ?? []), ...(value.requiredScopes ?? [])].some(scope => !value.scopes.includes(scope))) {
-      throw new AuthError(target.client.flow === "client_credentials" ? "access_denied" : "interaction_required");
+      throw error;
     }
-    return ready(value, key, binding);
+    if (!result.value) {
+      // Not dispatched: keep a valid rotated refresh token, drop the unusable access token.
+      const { token: _token, expiresAt: _expiresAt, kind: _kind, generation: _generation, ...rest } = current;
+      await saveGrant(key, current.generation, { ...rest, refreshToken: result.refreshToken ?? presented }, operation);
+      throw new AuthError("provider_failed");
+    }
+    const token: TokenValue = result.value;
+    return saveGrant(key, current.generation, { ...token, refreshToken: token.refreshToken ?? presented }, operation);
   }
-  async function prepare(input: DeliveryAuthContext, suppliedBudget: Operation, interactive = true): Promise<PrepareResult> {
-    const budget = Object.freeze({ signal: suppliedBudget.signal, deadline: suppliedBudget.deadline });
-    const context = snapshotContext(interactive && input.authentication === undefined ? { ...input, challenged: true } : input);
-    return bounded(budget, async (operation) => {
-      // No background cleanup: expiry is enforced at use and pruned on prepare.
-      for (const record of pendingByKey.values()) {
-        if (record.expiresAt <= Date.now() || record.signals.some(signal => signal.aborted)) retire(record);
-      }
-      const binding = identity(context);
-      let target = await targetFor(context, operation);
-      let key = grantKey(options.namespace, context, target.client);
-      const observed = await load(key, operation);
-      const observedRequirements = [...(target.client.requiredScopes ?? []), ...(observed?.requiredScopes ?? [])];
-      if (observed && (!reusable(observed) || observedRequirements.some(scope => !observed.scopes.includes(scope)))) {
-        // Refresh capabilities/endpoints can change. Rebuild outside the grant lock.
-        target = await targetFor(context, operation, true);
-        key = grantKey(options.namespace, context, target.client);
-      }
-      return step(operation, store.coordinate(key, operation.signal, async () => {
-        operation.signal.throwIfAborted();
-        const current = await load(key, operation);
-        const required = [...new Set([...(target.client.requiredScopes ?? []), ...(current?.requiredScopes ?? [])])];
-        if (reusable(current) && required.every(scope => current.scopes.includes(scope))) {
-          return checkedReady(current, key, binding, target);
-        }
-        const requestedTarget = { ...target, client: { ...target.client,
-          scopes: [...new Set([...target.client.scopes, ...required])] } };
-        if (target.client.flow !== "client_credentials" && current?.refreshToken && !current.refreshRejected && !current.refreshQuarantined && required.every(scope => current.scopes.includes(scope))) {
-          try {
-            const token = await step(operation, refreshCredential({ ...target, client: { ...target.client, scopes: current.scopes.filter(scope => (target.client.allowedScopes ?? target.client.scopes).includes(scope)) } }, current.refreshToken, options, operation));
-            return checkedReady(await save(key, current.generation, { ...token, requiredScopes: required, ...(token.rejected ? { refreshQuarantined: true } : {}),
-              ...(token.refreshToken === undefined ? { refreshToken: current.refreshToken } : {}),
-            }, operation), key, binding, target);
-          } catch (error) {
-            operation.signal.throwIfAborted();
-            if (error instanceof AuthError && error.code === "refresh_rejected") {
-              const saved = await step(operation, store.compareAndSet(key, current.generation,
-                { ...current, rejected: true, refreshRejected: true }, operation.signal));
-              if (!saved) throw new AuthError("provider_failed");
-            }
-            if (!(error instanceof AuthError && error.code === "refresh_rejected")) throw error;
-            if (!interactive) throw new AuthError("interaction_required");
-          }
-        }
-        if (target.client.flow === "client_credentials") {
-          const token = await step(operation, acquireClientCredentials(requestedTarget, options, operation));
-          return checkedReady(await save(key, current?.generation, { ...token, requiredScopes: required }, operation), key, binding, target);
-        }
-        if (!interactive) throw new AuthError("interaction_required");
-        const existing = pendingByKey.get(key);
-        if (existing?.pending && existing.baseGeneration === current?.generation && existing.expiresAt >= operation.deadline && existing.expiresAt > Date.now() &&
-            existing.target.client.redirectUri === requestedTarget.client.redirectUri &&
-            JSON.stringify(scopes(existing.target.client.scopes)) === JSON.stringify(scopes(requestedTarget.client.scopes)) &&
-            JSON.stringify(existing.requestedScopes) === JSON.stringify(scopes(target.client.scopes)) &&
-            JSON.stringify(scopes(existing.target.hostRequiredScopes ?? [])) === JSON.stringify(scopes(target.hostRequiredScopes ?? [])) &&
-            existing.signals.every(signal => !signal.aborted) &&
-            required.every(scope => existing.target.client.scopes.includes(scope))) return existing.pending;
-        if (existing) forget(existing);
-        const { clientSecret: _pendingSecret, ...pendingClient } = requestedTarget.client;
-        const record: PendingRecord = { key, target: { ...requestedTarget, client: Object.freeze(pendingClient) },
-          context, requestedScopes: Object.freeze(scopes(target.client.scopes)), identity: binding, baseGeneration: current?.generation,
-          expiresAt: Math.min(operation.deadline, Date.now() + 600_000),
-          signals: [...new Set([budget.signal, ...(context.signal ? [context.signal] : [])])] };
-        // Reserve before asynchronous PKCE/destination policy work; remove only our entry.
-        pendingByKey.set(key, record);
-        try {
-          record.login = await step(operation, startLogin(requestedTarget, options, operation));
-          record.pending = Object.freeze({ type: "pending_login", authorizationUrl: record.login.authorizationUrl, expiresAt: record.expiresAt });
-          pendingRecords.set(record.pending, record);
-          retain(record);
-          operation.signal.throwIfAborted();
-          return record.pending;
-        } catch (error) {
-          forget(record);
-          throw error;
-        }
-      }));
-    }, context.signal ? [context.signal] : []);
+
+  /** Reuse or atomically supersede the binding's stored pending login. Host prepare only. */
+  async function login(context: DeliveryAuthContext, target: ResolvedTarget, key: string, operation: Operation): Promise<PendingLogin> {
+    const storeKey = pendingKey(namespace, context);
+    const ceiling = ceilingOf(target.client);
+    const wanted = [...new Set([...target.client.scopes, ...(target.client.requiredScopes ?? [])])];
+    const existing = await read(storeKey, "pending_login", operation);
+    const live = existing && existing.expiresAt > Date.now() ? existing : undefined;
+    if (live && live.grantKey === key && live.client.redirectUri === target.client.redirectUri &&
+        within(wanted, live.client.scopes)) return handle(live, storeKey);
+    // Superseding requests the union with the old login's scopes so alternating callers converge.
+    const requested = [...new Set([...(live?.client.scopes ?? []), ...wanted])].filter(scope => ceiling.includes(scope));
+    const { clientSecret: _secret, ...client } = target.client;
+    // The stored ceiling bounds the grant recorded on completion.
+    const loginTarget = { ...target, client: { ...client, scopes: requested, allowedScopes: [...ceiling] } };
+    const started = await startLogin(loginTarget, options, operation);
+    const record: StoredPendingLogin = {
+      kind: "pending_login", generation: crypto.randomUUID(), id: crypto.randomUUID(), grantKey: key,
+      expiresAt: Date.now() + loginLifetime, authorizationUrl: started.authorizationUrl,
+      state: started.state, verifier: started.verifier, client: loginTarget.client, metadata: target.metadata,
+      context: durableContext(context),
+    };
+    if (!await write(storeKey, existing?.generation, record, operation)) throw new AuthError("provider_failed");
+    return handle(record, storeKey);
   }
+  function handle(record: StoredPendingLogin, key: string): PendingLogin {
+    return Object.freeze({ type: "pending_login", authorizationUrl: record.authorizationUrl, expiresAt: record.expiresAt, key, id: record.id });
+  }
+
+  async function prepare(input: DeliveryAuthContext, budget: Operation, prepareOptions: PrepareOptions = {}): Promise<PrepareResult> {
+    const context = snapshotContext(input);
+    const explicit = [...(prepareOptions.requiredScopes ?? [])];
+    return run(budget, context.signal, async operation => await acquire(context, operation, "host", explicit) as PrepareResult);
+  }
+
   async function complete(pending: PendingLogin, callback: string, budget: Operation): Promise<Ready> {
-    const known = pendingRecords.get(pending);
-    const terminal = ended.get(pending);
-    terminal?.signal?.throwIfAborted();
-    const enclosing = { ...budget, deadline: Math.min(budget.deadline, known?.expiresAt ?? terminal?.expiresAt ?? budget.deadline) };
-    return bounded(enclosing, async (operation) => {
-      const record = pendingRecords.get(pending);
-      if (!record || !record.login) throw new AuthError("invalid_configuration");
-      if (record.expiresAt <= Date.now()) throw new AuthError("interaction_required");
+    return run(budget, undefined, async (operation) => {
+      if (!pending || typeof pending.key !== "string" || typeof pending.id !== "string" ||
+          !pending.key.startsWith("ahp.oauth.pending:")) throw new AuthError("invalid_configuration");
+      const record = await read(pending.key, "pending_login", operation);
+      // Completed, superseded, cancelled or expired.
+      if (!record || record.id !== pending.id || record.expiresAt <= Date.now()) throw new AuthError("interaction_required");
+      const stored: ResolvedTarget = { client: record.client as ClientConfig, metadata: record.metadata };
+      const login = { authorizationUrl: record.authorizationUrl, state: record.state, verifier: record.verifier };
+      // Validate redirect, state and issuer before anything can consume the login.
       let denied: boolean;
-      try { denied = validateCallback(record.target, record.login, callback); }
+      try { denied = validateCallback(stored, login, callback); }
       catch { throw new AuthError("access_denied"); }
-      // Consent fixes identity, not runtime client authentication. Reapprove with
-      // current host secrets outside coordination before claiming the callback.
-      const currentTarget = denied ? record.target : await step(operation, resolveTarget(record.context, options, operation, record.target));
-      if (!denied && (grantKey(options.namespace, record.context, currentTarget.client) !== record.key ||
-          currentTarget.client.redirectUri !== record.target.client.redirectUri ||
-          JSON.stringify(scopes(currentTarget.client.scopes)) !== JSON.stringify(record.requestedScopes) ||
-          JSON.stringify(scopes(currentTarget.hostRequiredScopes ?? [])) !== JSON.stringify(scopes(record.target.hostRequiredScopes ?? [])) ||
-          (currentTarget.client.requiredScopes ?? []).some(scope => !record.target.client.scopes.includes(scope)))) {
+      // Consent fixes identity, not runtime client authentication: reselect current
+      // host secrets outside coordination, before claiming the callback.
+      const context = snapshotContext(record.context as DeliveryAuthContext);
+      const current = denied ? stored
+        : await resolveTarget(context, options, operation, { issuer: record.client.issuer, resource: record.client.resource, metadata: record.metadata });
+      if (grantKey(namespace, context, current.client) !== record.grantKey || current.client.redirectUri !== record.client.redirectUri) {
         throw new AuthError("invalid_configuration");
       }
-      const exchangeTarget: ResolvedTarget = { ...currentTarget, client: { ...currentTarget.client,
-        scopes: record.target.client.scopes, requiredScopes: record.target.client.requiredScopes ?? [] } };
-      return step(operation, store.coordinate(record.key, operation.signal, async () => {
-        operation.signal.throwIfAborted();
-        if (pendingByKey.get(record.key) !== record || pendingRecords.get(pending) !== record) throw new AuthError("invalid_configuration");
-        try { validateCallback(record.target, record.login!, callback); }
-        catch { throw new AuthError("access_denied"); }
-        // A validated callback/code is single-use, including unsuccessful exchanges.
-        pendingRecords.delete(pending);
-        try {
-          const current = await load(record.key, operation);
-          if (current?.generation !== record.baseGeneration) throw new AuthError("invalid_configuration");
-          const token = await step(operation, exchangeCode(exchangeTarget, record.login!, callback, options, operation));
-          const stored = await save(record.key, record.baseGeneration, { ...token, requiredScopes: current?.requiredScopes ?? [] }, operation);
-          return checkedReady(stored, record.key, record.identity, exchangeTarget);
-        } finally {
-          forget(record);
-        }
+      // Claim once: a validated callback (including denial) ends the login.
+      if (!await write(pending.key, record.generation, undefined, operation)) throw new AuthError("interaction_required");
+      if (denied) throw new AuthError("access_denied");
+      const acquisition: ResolvedTarget = { ...current, client: { ...current.client,
+        scopes: record.client.scopes, allowedScopes: ceilingOf(record.client as ClientConfig) } };
+      const result = await exchangeCode(acquisition, login, callback, options, operation);
+      // An invalid initial exchange persists nothing.
+      if (!result.value) throw new AuthError("provider_failed");
+      const token = result.value;
+      const grant = await race(operation.signal, store.coordinate(record.grantKey, operation.signal, async () => {
+        const latest = await read(record.grantKey, "grant", operation);
+        return saveGrant(record.grantKey, latest?.generation, token, operation);
       }));
-    }, known?.signals);
-  }
-  async function challenge(input: AuthChallengeContext, budget: Operation): Promise<void> {
-    const context = { ...snapshotContext(input), response: input.response, credential: input.credential };
-    return bounded(budget, async (operation) => {
-      const parameters = bearerParameters(context.response.headers.get("www-authenticate") ?? undefined);
-      const insufficient = context.response.status === 403 && parameters.get("error") === "insufficient_scope";
-      if (context.response.status === 403 && !insufficient) throw new AuthError("access_denied");
-      const target = insufficient ? await targetFor(snapshotContext({ ...context, challenged: true }), operation) : undefined;
-      const advertised = parameters.get("scope");
-      const required = insufficient ? (advertised === undefined
-        ? scopes(target!.hostRequiredScopes ?? []) : scopes(advertised.split(" "))) : [];
-      if (insufficient && required.length === 0) throw new AuthError("access_denied");
-      if (required.some(scope => !(target!.client.allowedScopes ?? target!.client.scopes).includes(scope))) {
-        throw new AuthError("access_denied");
-      }
-      if (!context.credential) {
-        if (insufficient) {
-          await recordBindingRequirements(context, required, operation);
-          if (target!.client.flow === "authorization_code_pkce") throw new AuthError("interaction_required");
-          const { response: _response, credential: _credential, ...delivery } = context;
-          await prepare({ ...delivery, challenged: true }, operation, false);
-          return;
-        }
-        if (context.response.status === 401) {
-          const { response, credential: _credential, ...delivery } = context;
-          const challenge = response.headers.get("www-authenticate");
-          await prepare({ ...delivery, challenged: true, ...(challenge === null ? {} : { challenge }) }, operation, false);
-        }
-        return;
-      }
-      const attempt = context.credential.attempt;
-      const owner = typeof attempt === "object" && attempt !== null ? attempts.get(attempt) : undefined;
-      if (!owner || owner.identity !== identity(context)) throw new AuthError("invalid_configuration");
-      await step(operation, store.coordinate(owner.key, operation.signal, async () => {
-        operation.signal.throwIfAborted();
-        const current = await load(owner.key, operation);
-        if (!current || current.generation !== owner.generation || (current.rejected && !insufficient)) return;
-        if (!await step(operation, store.compareAndSet(owner.key, owner.generation,
-          { ...current, rejected: true, requiredScopes: [...new Set([...(current.requiredScopes ?? []), ...required])] }, operation.signal))) throw new AuthError("provider_failed");
-      }));
-      if (insufficient && target?.client.flow !== "client_credentials") throw new AuthError("interaction_required");
-    }, context.signal ? [context.signal] : []);
-  }
-  async function cancel(pending: PendingLogin, budget: Operation): Promise<void> {
-    return bounded(budget, async (operation) => {
-      const record = pendingRecords.get(pending);
-      if (!record) return;
-      await step(operation, store.coordinate(record.key, operation.signal, async () => {
-        operation.signal.throwIfAborted();
-        forget(record);
-      }));
+      return ready(grant, record.grantKey, identity(context), current, record.client.requiredScopes ?? []);
     });
   }
-  function provider(host: { readonly budget: (context: DeliveryAuthContext) => Operation }): DeliveryAuthProvider {
-    function deliveryBudget(context: DeliveryAuthContext): Operation {
-      context.signal?.throwIfAborted();
-      try { return host.budget(context); } catch (error) {
-        context.signal?.throwIfAborted();
-        throw classifyAuthError(error);
+
+  async function cancel(pending: PendingLogin, budget: Operation): Promise<void> {
+    return run(budget, undefined, async (operation) => {
+      if (!pending || typeof pending.key !== "string" || !pending.key.startsWith("ahp.oauth.pending:")) return;
+      const record = await read(pending.key, "pending_login", operation);
+      if (record?.id === pending.id) await write(pending.key, record.generation, undefined, operation);
+    });
+  }
+
+  async function challenge(input: AuthChallengeContext, budget: Operation): Promise<void> {
+    const { response, credential } = input;
+    const header = response.headers.get("www-authenticate") ?? undefined;
+    const context = snapshotContext({ ...input, ...(header === undefined ? {} : { challenge: header }), challenged: true });
+    return run(budget, context.signal, async (operation) => {
+      const parameters = bearerParameters(header);
+      const insufficient = response.status === 403 && parameters.get("error") === "insufficient_scope";
+      if (response.status === 403 && !insufficient) throw new AuthError("access_denied");
+      if (response.status !== 401 && !insufficient) return;
+      const owner = credential ? attempts.get(credential.attempt as object) : undefined;
+      if (credential && (!owner || owner.identity !== identity(context))) throw new AuthError("invalid_configuration");
+      const cached = await read(bindingKey(namespace, context), "binding", operation);
+      // An anonymous rejection (re)learns the binding; otherwise the cached one suffices.
+      const target = owner && cached ? await resolveTarget(context, options, operation, cached) : await discoverBinding(context, cached, operation);
+      if (insufficient) {
+        // Operation-scoped: validated against the ceiling, never persisted. The replay
+        // carries the same challenge, so its acquisition sees the same requirement.
+        const advertised = parameters.get("scope");
+        const required = advertised === undefined ? scopes(target.hostRequiredScopes ?? []) : scopes(advertised.split(" "));
+        if (required.length === 0) throw new AuthError("access_denied");
+        if (!within(required, ceilingOf(target.client))) throw new AuthError("access_denied", required);
+        if (target.client.flow === "authorization_code_pkce") throw new AuthError("interaction_required", required);
+      } else if (owner) {
+        // Drop the rejected access token (keeping refresh material) unless a newer generation exists.
+        await race(operation.signal, store.coordinate(owner.key, operation.signal, async () => {
+          const current = await read(owner.key, "grant", operation);
+          if (current?.generation !== owner.generation || current.token === undefined) return;
+          const { token: _token, expiresAt: _expiresAt, kind: _kind, generation: _generation, ...rest } = current;
+          await saveGrant(owner.key, current.generation, rest, operation);
+        }));
       }
-    }
+      // Prepare the next attempt (the replay, or the next notification/upload that is
+      // never replayed): discovery and client-credentials acquisition, never a login.
+      if (target.client.flow === "client_credentials") await acquire(context, operation, "delivery");
+    });
+  }
+
+  function provider(host: { readonly budget: (context: DeliveryAuthContext) => Operation }): DeliveryAuthProvider {
     return {
       async credential(input) {
         const context = snapshotContext(input);
-        const budget = deliveryBudget(context);
-        if (context.authentication === undefined && !context.challenged) {
-          const known = await bounded(budget, operation => step(operation,
-            store.load(bindingKey(options.namespace, context), operation.signal)), context.signal ? [context.signal] : []);
-          if (!known?.bindingMetadata) return undefined;
+        const lookup = context.authentication === undefined && !context.challenged && context.challenge === undefined;
+        context.signal?.throwIfAborted();
+        let budget: Operation;
+        try { budget = host.budget(context); } catch (error) {
+          context.signal?.throwIfAborted();
+          // Without a budget an unbound endpoint with no stored binding still sends anonymously.
+          if (lookup && await store.load(bindingKey(namespace, context), context.signal ?? new AbortController().signal) === undefined) return undefined;
+          throw classifyAuthError(error);
         }
-        const result = await prepare(context, budget, false);
-        if (result.type === "pending_login") throw new AuthError("interaction_required");
+        const result = await run(budget, context.signal, operation => acquire(context, operation, lookup ? "lookup" : "delivery"));
+        // The up-front lookup is anonymous only on a store miss or a host policy refusal.
+        if (result.type === "lookup_miss") return undefined;
+        if (result.type !== "ready") throw new AuthError("interaction_required");
         return result.credential;
       },
       async challenge(input) {
-        const context = { ...snapshotContext(input), response: input.response, credential: input.credential };
-        return challenge(context, deliveryBudget(context));
+        input.signal?.throwIfAborted();
+        let budget: Operation;
+        try { budget = host.budget(input); } catch (error) {
+          input.signal?.throwIfAborted();
+          throw classifyAuthError(error);
+        }
+        return challenge(input, budget);
       },
     };
   }

@@ -1,7 +1,10 @@
 import * as oauth from "oauth4webapi";
 import { AuthError, classifyAuthError } from "../client/auth.js";
-import { checkedFetch } from "./discovery.js";
+import { active, checkedFetch } from "./discovery.js";
 import type { ManagedOAuthOptions, Operation, ResolvedTarget, TokenValue } from "./types.js";
+
+/** A token response that was not dispatched still reports a valid rotated refresh token. */
+export type TokenResult = { readonly value: TokenValue } | { readonly value?: undefined; readonly refreshToken?: string };
 
 export interface LoginState {
   readonly authorizationUrl: string;
@@ -9,25 +12,22 @@ export interface LoginState {
   readonly verifier: string;
 }
 
-function active(operation: Operation): void {
-  operation.signal.throwIfAborted();
-  if (Date.now() >= operation.deadline) throw new AuthError("provider_failed");
-}
-
-async function protect<T>(operation: Operation, work: () => Promise<T>, refresh = false, interactive = true): Promise<T> {
+async function protect<T>(operation: Operation, work: () => Promise<T>, grant: "code" | "refresh" | "client_credentials" = "code"): Promise<T> {
   try {
     active(operation);
     const result = await work();
     active(operation);
     return result;
   } catch (error) {
-    operation.signal.throwIfAborted();
+    active(operation);
     const classified = classifyAuthError(error);
     if (classified.code !== "provider_failed") throw classified;
     if (error instanceof oauth.ResponseBodyError || error instanceof oauth.AuthorizationResponseError) {
       if (error.error === "invalid_client" || error.error === "unauthorized_client") throw new AuthError("credential_unavailable");
       if (error.error === "access_denied") throw new AuthError("access_denied");
-      if (error.error === "invalid_grant") throw new AuthError(refresh ? "refresh_rejected" : interactive ? "interaction_required" : "credential_unavailable");
+      if (error.error === "invalid_grant") {
+        throw new AuthError(grant === "refresh" ? "refresh_rejected" : grant === "code" ? "interaction_required" : "credential_unavailable");
+      }
     }
     if (error instanceof oauth.UnsupportedOperationError ||
         (error instanceof oauth.OperationProcessingError &&
@@ -64,23 +64,49 @@ function safeToken(value: string): boolean {
   return value.length > 0 && !/[\s\x00-\x1f\x7f-\x9f]/u.test(value);
 }
 
-function tokenValue(response: oauth.TokenEndpointResponse, target: ResolvedTarget): TokenValue {
-  const expires = response.expires_in;
-  const scopes = response.scope === undefined ? [...target.client.scopes] : response.scope.split(" ");
-  const allowed = new Set(target.client.allowedScopes ?? target.client.scopes);
-  if (response.token_type !== "bearer" || !/^[A-Za-z0-9\-._~+/]+=*$/.test(response.access_token) ||
-      (expires !== undefined && (typeof expires !== "number" || !Number.isFinite(expires) || expires <= 0)) ||
-      (response.scope !== undefined && !/^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/.test(response.scope)) ||
-      (response.refresh_token !== undefined && !safeToken(response.refresh_token))) {
-    throw new AuthError("provider_failed");
+const SCOPES = /^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/;
+
+/**
+ * Initial exchange: granted = response ∩ acquisition ceiling. Refresh: granted =
+ * response ∩ previous grant (the current ceiling applies only at use). Extra
+ * scopes are ignored, never an error.
+ */
+function parseToken(body: unknown, target: ResolvedTarget, previous?: readonly string[]): TokenResult {
+  const json = typeof body === "object" && body !== null ? body as Record<string, unknown> : {};
+  const refresh = json.refresh_token;
+  const refreshToken = typeof refresh === "string" && safeToken(refresh) ? refresh : undefined;
+  const expires = json.expires_in;
+  const type = typeof json.token_type === "string" ? json.token_type.toLowerCase() : undefined;
+  if (type !== "bearer" || typeof json.access_token !== "string" || !/^[A-Za-z0-9\-._~+/]+=*$/.test(json.access_token) ||
+      (expires !== undefined && !(typeof expires === "number" ? Number.isSafeInteger(expires) && expires > 0
+        : typeof expires === "string" && /^[0-9]+$/.test(expires) && Number(expires) > 0 && Number.isSafeInteger(Number(expires)))) ||
+      (json.scope !== undefined && (typeof json.scope !== "string" || !SCOPES.test(json.scope))) ||
+      (refresh !== undefined && refreshToken === undefined)) {
+    return refreshToken === undefined ? {} : { refreshToken };
   }
-  const expiresAt = expires === undefined ? undefined : Date.now() + expires * 1000;
-  if (expiresAt !== undefined && (!Number.isFinite(expiresAt) || expiresAt <= Date.now())) throw new AuthError("provider_failed");
-  return {
-    token: response.access_token, expiresAt, scopes: [...new Set(scopes)],
-    ...(scopes.some(scope => !allowed.has(scope)) ? { rejected: true } : {}),
-    ...(response.refresh_token === undefined ? {} : { refreshToken: response.refresh_token }),
-  };
+  const bound = previous ?? target.client.allowedScopes ?? target.client.scopes;
+  const response = typeof json.scope === "string" ? json.scope.split(" ") : previous ?? target.client.scopes;
+  const scopes = [...new Set(response)].filter(scope => bound.includes(scope));
+  return { value: {
+    token: json.access_token, scopes,
+    ...(expires === undefined ? {} : { expiresAt: Date.now() + Number(expires) * 1000 }),
+    ...(refreshToken === undefined ? {} : { refreshToken }),
+  } };
+}
+
+async function tokenResult(response: Response, target: ResolvedTarget,
+  process: (response: Response) => Promise<unknown>, previous?: readonly string[]): Promise<TokenResult> {
+  const raw: unknown = response.status === 200 ? await response.clone().json().catch(() => undefined) : undefined;
+  let body: unknown;
+  try { body = await process(response); }
+  catch (error) {
+    // OAuth error responses are classified by protect(); anything else is an invalid response.
+    if (error instanceof oauth.ResponseBodyError || raw === undefined) throw error;
+    return parseToken({ ...raw as object, token_type: "invalid" }, target);
+  }
+  // Validate the server's own expires_in, not oauth4webapi's parseFloat coercion.
+  const expires = (raw as { expires_in?: unknown } | undefined)?.expires_in;
+  return parseToken({ ...body as object, expires_in: expires }, target, previous);
 }
 
 function literalLoopback(authority: string, hostname: string): boolean {
@@ -183,7 +209,7 @@ export function validateCallback(target: ResolvedTarget, login: LoginState, call
 }
 
 export function exchangeCode(target: ResolvedTarget, login: LoginState, callback: string,
-  options: ManagedOAuthOptions, operation: Operation): Promise<TokenValue> {
+  options: ManagedOAuthOptions, operation: Operation): Promise<TokenResult> {
   return protect(operation, async () => {
     pkce(target);
     const parameters = callbackParameters(target, login, callback);
@@ -191,7 +217,7 @@ export function exchangeCode(target: ResolvedTarget, login: LoginState, callback
       parameters, target.client.redirectUri!, login.verifier, {
         ...requestOptions(options, operation), additionalParameters: { resource: target.client.resource },
       });
-    return tokenValue(await oauth.processAuthorizationCodeResponse(target.metadata, client(target), response), target);
+    return tokenResult(response, target, r => oauth.processAuthorizationCodeResponse(target.metadata, client(target), r));
   });
 }
 
@@ -202,22 +228,23 @@ export function acquireClientCredentials(target: ResolvedTarget, options: Manage
         !target.metadata.grant_types_supported?.includes("client_credentials")) throw new AuthError("unsupported_binding");
     const response = await oauth.clientCredentialsGrantRequest(target.metadata, client(target), authentication(target),
       { resource: target.client.resource, scope: target.client.scopes.join(" ") }, requestOptions(options, operation));
-    return tokenValue(await oauth.processClientCredentialsResponse(target.metadata, client(target), response), target);
-  }, false, false);
+    const result = await tokenResult(response, target, r => oauth.processClientCredentialsResponse(target.metadata, client(target), r));
+    if (!result.value) throw new AuthError("provider_failed");
+    return result.value;
+  }, "client_credentials");
 }
 
-export function refreshCredential(target: ResolvedTarget, refreshToken: string, options: ManagedOAuthOptions,
-  operation: Operation): Promise<TokenValue> {
+/** `previous` is the recorded prior grant: a refresh can narrow it but never broaden it. */
+export function refreshCredential(target: ResolvedTarget, refreshToken: string, previous: readonly string[],
+  options: ManagedOAuthOptions, operation: Operation): Promise<TokenResult> {
   return protect(operation, async () => {
     if (!safeToken(refreshToken)) throw new AuthError("refresh_rejected");
     if (target.metadata.grant_types_supported !== undefined &&
         !target.metadata.grant_types_supported.includes("refresh_token")) throw new AuthError("unsupported_binding");
     const response = await oauth.refreshTokenGrantRequest(target.metadata, client(target), authentication(target), refreshToken, {
       ...requestOptions(options, operation),
-      additionalParameters: { resource: target.client.resource, scope: target.client.scopes.join(" ") },
+      additionalParameters: { resource: target.client.resource, ...(previous.length ? { scope: previous.join(" ") } : {}) },
     });
-    return tokenValue(await oauth.processRefreshTokenResponse(target.metadata, client(target), response), {
-      ...target, client: { ...target.client, allowedScopes: target.client.scopes },
-    });
-  }, true);
+    return tokenResult(response, target, r => oauth.processRefreshTokenResponse(target.metadata, client(target), r), previous);
+  }, "refresh");
 }
