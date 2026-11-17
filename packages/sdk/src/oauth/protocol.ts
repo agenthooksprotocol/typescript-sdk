@@ -20,7 +20,9 @@ async function protect<T>(operation: Operation, work: () => Promise<T>, grant: "
     // caller's commit, or a rotated refresh token would be lost.
     return await work();
   } catch (error) {
-    active(operation);
+    // A server OAuth error response is classified even after a caller abort, so the
+    // caller of refresh can still compare-and-delete a rejected refresh token.
+    if (!(error instanceof oauth.ResponseBodyError)) active(operation);
     const classified = classifyAuthError(error);
     if (classified.code !== "provider_failed") throw classified;
     if (error instanceof oauth.ResponseBodyError || error instanceof oauth.AuthorizationResponseError) {

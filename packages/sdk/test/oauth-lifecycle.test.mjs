@@ -717,3 +717,27 @@ test('[token-validation-failure-clears-in-flight] a token body delayed past a ca
   await new Promise(resolve => setTimeout(resolve, 300));
   assert.equal(f.store.grants()[0].refreshToken, 'rotated-late');
 });
+
+test('[refresh-invalid-grant-drops-tokens] invalid_grant over real HTTP after a caller abort still drops the dead refresh token', async t => {
+  const { createServer } = await import('node:http');
+  const server = createServer((request, response) => { request.resume(); request.on('end', () => {
+    const text = JSON.stringify({ error: 'invalid_grant' });
+    response.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text) });
+    response.flushHeaders();
+    setTimeout(() => response.end(text), 50);
+  }); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const f = fixture();
+  await f.login(); f.expire();
+  const controller = new AbortController();
+  const oauth = managedOAuth({ ...f.options, async policyFetch(url, init, context) {
+    if (url !== 'https://issuer.example/token') return f.options.policyFetch(url, init, context);
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/token`, { method: init.method, headers: init.headers, body: init.body, signal: init.signal });
+    setTimeout(() => controller.abort(), 10);
+    return new Response(response.body, { status: response.status, headers: response.headers });
+  } });
+  await assert.rejects(oauth.prepare(f.context, budget(controller.signal)), { name: 'AbortError' });
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(f.store.grants().length, 0, 'compare-and-delete ran despite the abort');
+});
