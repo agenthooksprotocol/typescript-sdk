@@ -114,9 +114,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
   const options = { ...configuration };
   const { store, namespace } = options;
   const loginLifetime = options.loginLifetimeMs ?? MAX_LOGIN_LIFETIME;
-  const metadataMaxAge = options.metadataMaxAgeMs ?? 3_600_000;
-  if (!Number.isFinite(loginLifetime) || loginLifetime <= 0 || loginLifetime > MAX_LOGIN_LIFETIME ||
-      !Number.isFinite(metadataMaxAge) || metadataMaxAge < 0) throw new AuthError("invalid_configuration");
+  if (!Number.isFinite(loginLifetime) || loginLifetime <= 0 || loginLifetime > MAX_LOGIN_LIFETIME) throw new AuthError("invalid_configuration");
   const attempts = new WeakMap<object, Attempt>();
 
   async function read<K extends StoredRecord["kind"]>(key: string, kind: K, operation: Operation): Promise<Extract<StoredRecord, { kind: K }> | undefined> {
@@ -190,7 +188,8 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       target = cached ? await resolveTarget(context, options, operation, cached) : await discoverBinding(context, undefined, operation);
     } catch (error) {
       operation.signal.throwIfAborted();
-      if (mode === "lookup" && error instanceof AuthError) return LOOKUP_MISS;
+      // Host policy refusal is anonymous; an issuer-metadata fetch failure is not.
+      if (mode === "lookup" && error instanceof AuthError && error.code !== "discovery_failed") return LOOKUP_MISS;
       throw error;
     }
     const withExplicit = (resolved: ResolvedTarget): ResolvedTarget => {
@@ -203,9 +202,10 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     // Cached tokens are served without metadata I/O, locks or writes.
     const observed = await read(key, "grant", operation);
     if (usable(observed, target, target.client.requiredScopes ?? [])) return ready(observed, key, binding, target, []);
-    if (!observed && mode === "lookup") return LOOKUP_MISS;
+    // Full discovery only on a cache miss, host prepare or challenge handling; a
+    // known binding otherwise renews from persisted metadata (or fails, never anonymous).
     const challenged = context.challenged === true || context.challenge !== undefined;
-    if (cached && mode !== "lookup" && (challenged || Date.now() - cached.discoveredAt >= metadataMaxAge)) {
+    if (cached && (mode === "host" || (mode === "delivery" && challenged))) {
       target = withExplicit(await discoverBinding(context, cached, operation));
       key = grantKey(namespace, context, target.client);
     }
@@ -215,8 +215,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       if (usable(current, target, required)) return ready(current, key, binding, target, []);
       const prior = current ? effective(current, target) : [];
       if (target.client.flow === "client_credentials") {
-        const requested = { ...target, client: { ...target.client, scopes: [...new Set([...target.client.scopes, ...required])] } };
-        const token = await acquireClientCredentials(requested, options, operation);
+        const token = await acquireClientCredentials(acquisition(target, current), options, operation);
         return ready(await saveGrant(key, current?.generation, token, operation), key, binding, target, required);
       }
       // A refresh can never broaden a grant, so it only helps when the requirement is already covered.
@@ -224,8 +223,20 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         return ready(await refresh(key, current, current.scopes, target, operation), key, binding, target, required);
       }
       if (mode !== "host") throw new AuthError("interaction_required", required);
-      return login(context, target, key, operation);
+      return login(context, acquisition(target, current), key, operation);
     }));
+  }
+
+  /**
+   * A new acquisition for an existing grant key requests previously granted ∪
+   * ((requested ∪ required) ∩ ceiling) and records response ∩ (previously granted
+   * ∪ acquisition ceiling), so a step-up never loses earlier scopes.
+   */
+  function acquisition(target: ResolvedTarget, current: StoredGrant | undefined): ResolvedTarget {
+    const ceiling = ceilingOf(target.client), previous = current?.scopes ?? [];
+    const wanted = [...target.client.scopes, ...(target.client.requiredScopes ?? [])].filter(scope => ceiling.includes(scope));
+    return { ...target, client: { ...target.client,
+      scopes: [...new Set([...previous, ...wanted])], allowedScopes: [...new Set([...previous, ...ceiling])] } };
   }
 
   async function refresh(key: string, current: StoredGrant, prior: readonly string[], target: ResolvedTarget, operation: Operation): Promise<StoredGrant> {
@@ -256,16 +267,17 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
   async function login(context: DeliveryAuthContext, target: ResolvedTarget, key: string, operation: Operation): Promise<PendingLogin> {
     const storeKey = pendingKey(namespace, context);
     const ceiling = ceilingOf(target.client);
-    const wanted = [...new Set([...target.client.scopes, ...(target.client.requiredScopes ?? [])])];
+    const wanted = target.client.scopes;
     const existing = await read(storeKey, "pending_login", operation);
     const live = existing && existing.expiresAt > Date.now() ? existing : undefined;
     if (live && live.grantKey === key && live.client.redirectUri === target.client.redirectUri &&
         within(wanted, live.client.scopes)) return handle(live, storeKey);
-    // Superseding requests the union with the old login's scopes so alternating callers converge.
-    const requested = [...new Set([...(live?.client.scopes ?? []), ...wanted])].filter(scope => ceiling.includes(scope));
+    // Superseding grows both the requested scopes and the stored ceiling, so alternating callers converge.
+    const requested = [...new Set([...(live?.client.scopes ?? []), ...wanted])];
+    const stored = [...new Set([...(live ? ceilingOf(live.client as ClientConfig) : []), ...ceiling])];
     const { clientSecret: _secret, ...client } = target.client;
     // The stored ceiling bounds the grant recorded on completion.
-    const loginTarget = { ...target, client: { ...client, scopes: requested, allowedScopes: [...ceiling] } };
+    const loginTarget = { ...target, client: { ...client, scopes: requested, allowedScopes: stored } };
     const started = await startLogin(loginTarget, options, operation);
     const record: StoredPendingLogin = {
       kind: "pending_login", generation: crypto.randomUUID(), id: crypto.randomUUID(), grantKey: key,
@@ -310,9 +322,10 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       // Claim once: a validated callback (including denial) ends the login.
       if (!await write(pending.key, record.generation, undefined, operation)) throw new AuthError("interaction_required");
       if (denied) throw new AuthError("access_denied");
-      const acquisition: ResolvedTarget = { ...current, client: { ...current.client,
-        scopes: record.client.scopes, allowedScopes: ceilingOf(record.client as ClientConfig) } };
-      const result = await exchangeCode(acquisition, login, callback, options, operation);
+      const prior = (await read(record.grantKey, "grant", operation))?.scopes ?? [];
+      const exchange: ResolvedTarget = { ...current, client: { ...current.client,
+        scopes: record.client.scopes, allowedScopes: [...new Set([...prior, ...ceilingOf(record.client as ClientConfig)])] } };
+      const result = await exchangeCode(exchange, login, callback, options, operation);
       // An invalid initial exchange persists nothing.
       if (!result.value) throw new AuthError("provider_failed");
       const token = result.value;
@@ -365,7 +378,10 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       }
       // Prepare the next attempt (the replay, or the next notification/upload that is
       // never replayed): discovery and client-credentials acquisition, never a login.
-      if (target.client.flow === "client_credentials") await acquire(context, operation, "delivery");
+      // A rejected token is stale even with unknown or future expiry: renew it now
+      // (refresh or client credentials) so it is never resent.
+      const grant = owner ? await read(owner.key, "grant", operation) : undefined;
+      if (target.client.flow === "client_credentials" || grant?.refreshToken) await acquire(context, operation, "delivery");
     });
   }
 

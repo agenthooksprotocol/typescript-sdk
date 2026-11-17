@@ -122,7 +122,7 @@ test('[pending-login-supersede] a different redirect supersedes; the old callbac
   assert.equal((await f.oauth.complete(second, f.callback(second), budget())).credential.token, 'access-1');
 });
 
-test('[pending-login-supersede-scope-union] supersede requests the union within the new ceiling so callers converge', async () => {
+test('[pending-login-supersede-scope-union] supersede grows requested scopes and the stored ceiling so callers converge', async () => {
   const f = fixture({ scopes: ['deliver'], allowedScopes: ['deliver', 'audit', 'write'] });
   const first = await f.oauth.prepare(f.context, budget());
   assert.deepEqual(f.scopeOf(first), ['deliver']);
@@ -131,10 +131,16 @@ test('[pending-login-supersede-scope-union] supersede requests the union within 
   assert.deepEqual(f.scopeOf(second), ['audit', 'deliver']);
   // The original caller is now covered and reuses the superseding login.
   assert.deepEqual(await f.oauth.prepare(f.context, budget()), second);
-  // A narrower ceiling bounds the union.
+  // A caller with a different ceiling adds its filtered scopes; old scopes and ceiling are kept.
   f.client.allowedScopes = ['deliver', 'write'];
   const third = await f.oauth.prepare(f.context, budget(), { requiredScopes: ['write'] });
-  assert.deepEqual(f.scopeOf(third), ['deliver', 'write']);
+  assert.deepEqual(f.scopeOf(third), ['audit', 'deliver', 'write']);
+  assert.deepEqual([...f.store.pending()[0].client.allowedScopes].sort(), ['audit', 'deliver', 'write']);
+  f.client.allowedScopes = ['deliver', 'audit', 'write'];
+  assert.deepEqual(await f.oauth.prepare(f.context, budget(), { requiredScopes: ['audit'] }), third, 'alternating callers converge');
+  f.state.scope = 'audit deliver write';
+  await f.oauth.complete(third, f.callback(third), budget());
+  assert.deepEqual([...f.store.grants()[0].scopes].sort(), ['audit', 'deliver', 'write']);
 });
 
 test('[pending-login-end-states] completion, supersede, cancel and expiry each end a login; cancel keeps the grant', async () => {
@@ -319,4 +325,76 @@ test('[extra-granted-scope-ignored] scopes outside the ceiling are dropped from 
   f.state.scope = 'deliver openid offline_access admin';
   assert.equal((await f.login()).credential.token, 'access-1');
   assert.deepEqual(f.store.grants()[0].scopes, ['deliver']);
+});
+
+test('[up-front-client-credentials-reacquire] the lookup re-acquires an expired client-credentials grant from persisted metadata', async () => {
+  const f = fixture({ flow: 'client_credentials', clientSecret: 'secret' });
+  assert.equal((await f.oauth.prepare(f.context, budget())).credential.token, 'access-1');
+  f.expire(); f.state.metadataDown = true;
+  const metadata = f.state.metadataCalls;
+  const provider = managedOAuth(f.options).provider({ budget: () => budget() });
+  assert.equal((await provider.credential(f.context)).token, 'access-2');
+  assert.equal(f.state.metadataCalls, metadata);
+  assert.equal(f.state.tokenCalls.at(-1).get('grant_type'), 'client_credentials');
+});
+
+test('[up-front-lookup-issuer-metadata-only] a binding without persisted metadata fetches only issuer metadata', async () => {
+  const f = fixture();
+  await f.login();
+  f.expire();
+  for (const [key, value] of f.store.values) {
+    if (value.kind === 'binding') { const { metadata: _metadata, ...rest } = value; f.store.values.set(key, rest); }
+  }
+  const urls = [];
+  const fetch = f.options.policyFetch;
+  const options = { ...f.options, policyFetch: (url, init, context) => { urls.push(url); return fetch(url, init, context); } };
+  const provider = managedOAuth(options).provider({ budget: () => budget() });
+  assert.equal((await provider.credential(f.context)).token, 'access-2');
+  assert(urls.every(url => !url.includes('oauth-protected-resource')), 'no protected-resource discovery');
+  assert(urls.some(url => url.startsWith('https://issuer.example/.well-known/')));
+  f.expire(); f.state.metadataDown = true;
+  for (const [key, value] of f.store.values) {
+    if (value.kind === 'binding') { const { metadata: _metadata, ...rest } = value; f.store.values.set(key, rest); }
+  }
+  await assert.rejects(provider.credential(f.context), { code: 'discovery_failed' });
+});
+
+test('[known-binding-without-token-requires-login] a known PKCE binding with dropped tokens fails interaction_required until prepare', async () => {
+  const f = fixture();
+  await f.login();
+  for (const [key, value] of f.store.values) if (value.kind === 'grant') f.store.values.delete(key);
+  const provider = f.oauth.provider({ budget: () => budget() });
+  await assert.rejects(provider.credential(f.context), { code: 'interaction_required' });
+  assert.equal(f.store.pending().length, 0);
+  await f.login();
+  assert.equal((await provider.credential(f.context)).token, 'access-2');
+});
+
+test('[challenge-renews-rejected-unexpired-token] a 401 on an unknown-expiry token renews it so it is never resent', async () => {
+  const f = fixture();
+  const fetch = f.options.policyFetch;
+  const options = { ...f.options, async policyFetch(url, init, context) {
+    const response = await fetch(url, init, context);
+    if (!url.endsWith('/token')) return response;
+    const { expires_in: _expires, ...body } = await response.json();
+    return Response.json(body);
+  } };
+  const oauth = managedOAuth(options), provider = oauth.provider({ budget: () => budget() });
+  const { credential } = await f.login(oauth);
+  assert.equal(f.store.grants()[0].expiresAt, undefined);
+  // A notification is not replayed: challenge handling alone must renew the token.
+  await provider.challenge({ ...f.context, credential, response: new Response(null, { status: 401 }) });
+  assert.equal(f.state.tokenCalls.at(-1).get('grant_type'), 'refresh_token');
+  assert.equal((await provider.credential(f.context)).token, 'access-2');
+});
+
+test('[step-up-keeps-previous-grant] step-up consent requests and records the previous grant plus the new scopes', async () => {
+  const f = fixture({ scopes: ['files', 'read'], allowedScopes: ['files', 'read'] });
+  await f.login();
+  Object.assign(f.client, { scopes: ['read'], allowedScopes: ['read', 'write'] });
+  const pending = await f.oauth.prepare(f.context, budget(), { requiredScopes: ['write'] });
+  assert.deepEqual(f.scopeOf(pending), ['files', 'read', 'write']);
+  f.state.scope = 'files read write openid';
+  await f.oauth.complete(pending, f.callback(pending), budget());
+  assert.deepEqual([...f.store.grants()[0].scopes].sort(), ['files', 'read', 'write'], 'earlier scopes are not lost');
 });

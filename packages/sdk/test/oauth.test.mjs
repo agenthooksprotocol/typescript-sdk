@@ -484,8 +484,20 @@ for (const vector of lifecycleVectors.token_responses) {
       const initial = await f.login();
       Object.assign(f.client, { allowedScopes: vector.allowed, scopes: vector.requested.filter(scope => vector.allowed.includes(scope)) });
       f.state.tokenResponse = vector.response;
-      await f.managed.challenge({ ...f.context, credential: initial.credential, response: new Response(null, { status: 401 }) }, budget());
-      complete = f.prepare();
+      // A 401 marks the token stale and challenge handling refreshes it at once.
+      complete = f.managed.challenge({ ...f.context, credential: initial.credential, response: new Response(null, { status: 401 }) }, budget())
+        .then(() => f.prepare());
+    } else if (vector.exchange === 'reacquire') {
+      // The prior grant came from a broader ceiling; the step-up consent must keep it.
+      Object.assign(f.client, { scopes: vector.previous_granted, allowedScopes: [...new Set([...vector.allowed, ...vector.previous_granted])], requiredScopes: [] });
+      f.state.tokenResponse = { access_token: 'initial', token_type: 'Bearer', refresh_token: 'initial-refresh', scope: vector.previous_granted.join(' ') };
+      await f.login();
+      Object.assign(f.client, { scopes: vector.requested.filter(scope => vector.allowed.includes(scope)), allowedScopes: vector.allowed, requiredScopes: vector.required });
+      f.state.tokenResponse = vector.response;
+      const pending = await f.prepare();
+      assert.deepEqual(new URL(pending.authorizationUrl).searchParams.get('scope').split(' ').sort(),
+        [...new Set([...vector.previous_granted, ...vector.requested.filter(scope => vector.allowed.includes(scope)), ...vector.required])].sort());
+      complete = f.managed.complete(pending, f.callback(pending), budget());
     } else {
       const pending = await f.prepare();
       complete = f.managed.complete(pending, f.callback(pending), budget());
@@ -656,7 +668,7 @@ test('[delivery-never-creates-pending-login] anonymous 401 learns the binding; d
   await provider.challenge({ ...f.context, response, credential: undefined });
   assert.equal(f.store.bindings.size, 1);
   await assert.rejects(provider.credential({ ...f.context, challenged: true, challenge: 'Bearer' }), { code: 'interaction_required' });
-  assert.equal(await provider.credential(f.context), undefined, 'the up-front lookup stays anonymous without a grant');
+  await assert.rejects(provider.credential(f.context), { code: 'interaction_required' }, 'a known binding needing login never sends anonymously');
   assert.equal(f.store.pending.size, 0); assert.equal(f.tokens.length, 0);
   const before = Date.now(), pending = await f.managed.prepare(f.context, budget(undefined, 1000));
   assert.equal(pending.type, 'pending_login'); assert.equal(f.store.pending.size, 1);
@@ -715,7 +727,7 @@ test('[metadata-and-secret-rotation] stale metadata is renewed outside store loc
   f.state.tokenEndpoint = `${f.origin}/rotated-token`;
   f.state.authorizationMetadata = { token_endpoint_auth_methods_supported: ['client_secret_post'] };
   const checkDestination = f.options.checkDestination;
-  const renewed = managedOAuth({ ...f.options, metadataMaxAgeMs: 0, checkDestination(url, purpose, operation) {
+  const renewed = managedOAuth({ ...f.options, checkDestination(url, purpose, operation) {
     if (purpose === 'metadata') assert.equal(f.store.locks.size, 0, 'renewal discovery must run outside host-store locks');
     return checkDestination(url, purpose, operation);
   } });

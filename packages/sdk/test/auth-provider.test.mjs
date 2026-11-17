@@ -655,3 +655,25 @@ test("[transient-refresh-failure] built-in auth() keeps its refresh token until 
   respond = () => ({ status: 200 });
   assert.equal((await provider.authenticate(context)).token, "access-2");
 });
+
+test("[challenge-renews-rejected-unexpired-token] built-in auth() never resends an unknown-expiry token after a 401", async () => {
+  let issued = 0;
+  const cache = new Map();
+  const provider = auth({
+    resolveHostname: async () => ["93.184.216.34"],
+    resolveCredentialReference: () => "client-secret",
+    async fetch(url) {
+      if (url.pathname.startsWith("/.well-known/")) {
+        return Response.json({ issuer: "https://identity.example/tenant", token_endpoint: "https://identity.example/token",
+          grant_types_supported: ["client_credentials"] });
+      }
+      return Response.json({ access_token: `access-${++issued}`, token_type: "Bearer", scope: "events" });
+    },
+  });
+  const context = { backendId: "auth.backend", purpose: "event", url: eventUrl, authentication: bindings[2], cache };
+  const first = await provider.credential(context);
+  assert.equal(first.token, "access-1");
+  // Not replayed (e.g. a notification): the next attempt must not reuse the rejected token.
+  await provider.challenge({ ...context, credential: first, response: new Response(null, { status: 401 }) });
+  assert.equal((await provider.credential(context)).token, "access-2");
+});

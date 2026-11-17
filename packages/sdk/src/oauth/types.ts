@@ -44,8 +44,9 @@ export interface StoredBinding {
   readonly generation: string;
   readonly issuer: string;
   readonly resource: string;
-  readonly metadata: AuthorizationServer;
-  /** Unix milliseconds; metadata older than `metadataMaxAgeMs` is renewed before acquisition. */
+  /** Persisted for refresh/acquisition. If absent, the lookup fetches only the stored issuer's metadata. */
+  readonly metadata?: AuthorizationServer;
+  /** Unix milliseconds. Host prepare and challenge handling rebuild the binding. */
   readonly discoveredAt: number;
 }
 /** A host-created login awaiting its callback. Completable from any process sharing the store. */
@@ -87,6 +88,4 @@ export interface ManagedOAuthOptions {
     context: DeliveryAuthContext, operation: Operation) => ClientConfig | Promise<ClientConfig>;
   /** Pending login lifetime, fixed at creation. Default and maximum 600000 (10 minutes). */
   readonly loginLifetimeMs?: number;
-  /** Cached authorization-server metadata age before renewal for acquisition. Default 3600000. */
-  readonly metadataMaxAgeMs?: number;
 }

@@ -83,9 +83,14 @@ opens UI or creates a login: it throws `interaction_required` when login is need
 Unknown endpoints are anonymous until challenged or explicitly prepared. Once a
 binding is stored, the up-front lookup sends its stored token on the first
 attempt, including for uploads and notifications that are never replayed. That
-lookup performs no discovery; it may refresh an expired token with cached
-metadata, and a failed refresh fails the operation. It is anonymous only on a
-store miss or a host policy refusal (`selectClient` throwing). Uploads use their
+lookup never runs protected-resource discovery or creates a login. It renews an
+unusable token (refresh, or client-credentials re-acquisition) with the binding's
+persisted authorization-server metadata, fetching only the stored issuer's
+metadata if that is missing (`discovery_failed` on failure). A known binding that
+cannot be renewed, including one needing login (`interaction_required`), fails
+the operation. It is anonymous only when no binding is stored or the host policy
+refuses (`selectClient` throwing). Full discovery runs only on a cache miss, host
+`prepare` or challenge handling; `prepare` rebuilds the binding metadata. Uploads use their
 own bindings and isolated storage keys by default.
 
 ## Host-driven PKCE
@@ -108,7 +113,8 @@ the store. Its lifetime is fixed at creation by `loginLifetimeMs` (default and
 maximum ten minutes), independent of the creating budget or its cancellation.
 A later `prepare` reuses it when the grant key and redirect match and the new
 requested plus required scopes are covered; otherwise it supersedes it with a
-login for (old ∪ new requested ∪ new required) ∩ the new ceiling. A login ends by
+login for old ∪ ((new requested ∪ new required) ∩ new ceiling), storing the union
+of both ceilings. A login ends by
 completion (a claimed valid callback, including consent denial), supersede,
 `cancel` or expiry; a callback for an ended login fails `interaction_required`.
 Redirect, state and issuer are validated before the login is claimed, so a stray
@@ -125,9 +131,12 @@ a locally resolved `clientSecret`, and permitted `scopes`. `prepare` returns
 `ready` and never requests UI. Grants and refresh send the RFC 8707 `resource`
 parameter. Tokens need bearer type and valid values; `expires_in` must be a
 positive integer (or digit string). Absent expiry means the token remains usable
-until rejected. An initial exchange records `granted = response ∩ acquisition
-ceiling` (the ceiling stored on the login, or the client-credentials caller's);
-a refresh records `response ∩ previous grant`. Extra scopes are ignored. At use,
+until rejected. An acquisition (PKCE consent or client credentials, including a
+step-up for an existing grant) requests previously granted ∪ ((requested ∪
+required) ∩ ceiling) and records `granted = response ∩ (previously granted ∪
+acquisition ceiling)`, where the acquisition ceiling is the one stored on the
+login or the client-credentials caller's. A refresh records `response ∩ previous
+grant`. Extra scopes are ignored. At use,
 effective scopes are the grant ∩ the current ceiling, and only explicit or
 challenge requirements are mandatory. The ceiling governs what the SDK requests
 and records; it does not constrain what an issued token can do.
@@ -136,15 +145,17 @@ and records; it does not constrain what an issued token can do.
 
 Refresh runs inside host coordination, reloads the latest generation, and uses
 CAS for replacement; concurrent callers reuse the refreshed grant. Refresh uses
-cached authorization-server metadata, renewed after `metadataMaxAgeMs` or a
-challenge, outside store locks; an outage falls back to the cached metadata.
+the persisted authorization-server metadata; `prepare` and challenge handling
+rediscover outside store locks, falling back to it during an outage.
 Missing refresh-token rotation retains the previous refresh token. Transient
 failures preserve stored credentials and advise retry. An invalid token response
 is never dispatched and fails `provider_failed`: an initial exchange persists
 nothing, while a refresh keeps a valid rotated refresh token. A definitive refresh
 `invalid_grant` returns `refresh_rejected` and deletes the grant only if it still
 holds the presented refresh token. Client credentials reacquire noninteractively.
-A 401 drops the rejected access token unless a newer generation exists.
+A 401 marks the rejected token stale (unless a newer generation exists), even
+with unknown or future expiry, and challenge handling renews it at once, so it is
+never resent, including after unreplayed notifications and uploads.
 
 Public failures are redacted `AuthError`s with safe codes/recovery and no raw
 provider messages, token bodies or cause chains. `Ready.credential.token` is not

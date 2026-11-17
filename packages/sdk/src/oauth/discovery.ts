@@ -190,7 +190,7 @@ async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptio
   const issuer = https(client.issuer);
   // RFC 8414 section 3.1 removes a terminating slash for metadata lookup only.
   const issuerPath = issuer.pathname.replace(/\/$/, "");
-  const metadata = cached && cached.issuer === client.issuer ? cached.metadata as unknown as Record<string, unknown> : await metadataAt([
+  const metadata = cached?.metadata && cached.issuer === client.issuer ? cached.metadata as unknown as Record<string, unknown> : await metadataAt([
     `${issuer.origin}/.well-known/oauth-authorization-server${issuerPath}`,
     `${issuer.origin}/.well-known/openid-configuration${issuerPath}`,
     `${issuer.origin}${issuerPath.replace(/\/$/, "")}/.well-known/openid-configuration`,
