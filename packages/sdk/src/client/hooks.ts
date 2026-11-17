@@ -36,7 +36,7 @@ import { Attachment, ContentManager, UploadLimiter, createSharedContentManager }
 import { composeResponseAsync, normalizeEffects, type ComposedEffect } from "./composition.js";
 import { runtimeInteger } from "../runtime-integer.js";
 import { admitContracts, decodeContract, encodeContract, freezeContractValue, type ToolBeforeInput, type ToolBeforeResult } from "./contracts.js";
-import { auth } from "./auth.js";
+import { auth, classifyAuthError } from "./auth.js";
 import { bearerParameters } from "./challenge.js";
 import { isEventType, validateWire } from "./validation.js";
 import {
@@ -910,7 +910,7 @@ export class Hooks {
           };
           diagnosticCauses.set(
             error,
-            classifyDiagnostic(
+            diagnosticCause(
               cause,
               signal.aborted ? signal : deadline,
               phase === "preparation",
@@ -1056,7 +1056,7 @@ export class Hooks {
       };
       diagnosticCauses.set(
         error,
-        classifyDiagnostic(cause, signal, preparing, false),
+        diagnosticCause(cause, signal, preparing, false),
       );
       return error;
     } finally {
@@ -1526,10 +1526,35 @@ function cancellationCode(
 // Causes remain separate from delivery stage and never retain raw endpoint data.
 const diagnosticCauses = new WeakMap<
   DeliveryFailure,
-  DeliveryDiagnostic["code"]
+  Pick<DeliveryDiagnostic, "code" | "auth">
 >();
 function deliveryDiagnostic(error: DeliveryFailure): DeliveryDiagnostic {
-  return { ...error, code: diagnosticCauses.get(error) ?? "transport" };
+  const cause = diagnosticCauses.get(error);
+  return { ...error, code: cause?.code ?? "transport", ...(cause?.auth ? { auth: cause.auth } : {}) };
+}
+/** The typed auth failure in a cause chain, re-validated so only safe fields survive. */
+function authFailure(cause: unknown): DeliveryDiagnostic["auth"] {
+  for (let current = cause, depth = 0; current && typeof current === "object" && depth < 4; depth++) {
+    let name: unknown, next: unknown;
+    try { ({ name, cause: next } = current as { name?: unknown; cause?: unknown }); } catch { return undefined; }
+    if (name === "AuthError") {
+      const error = classifyAuthError(current, "provider_failed");
+      return Object.freeze({ code: error.code, recovery: error.recovery,
+        ...(error.requiredScopes ? { requiredScopes: error.requiredScopes } : {}) });
+    }
+    current = next;
+  }
+  return undefined;
+}
+function diagnosticCause(
+  cause: unknown,
+  signal: AbortSignal | undefined,
+  preparing: boolean,
+  received: boolean,
+): Pick<DeliveryDiagnostic, "code" | "auth"> {
+  const code = classifyDiagnostic(cause, signal, preparing, received);
+  const auth = code === "cancelled" || code === "deadline_exceeded" ? undefined : authFailure(cause);
+  return auth ? { code, auth } : { code };
 }
 function classifyDiagnostic(
   cause: unknown,

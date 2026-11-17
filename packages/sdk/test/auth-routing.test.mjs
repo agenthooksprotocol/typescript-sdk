@@ -421,3 +421,60 @@ for (const status of [401, 403]) {
     });
   });
 }
+
+test("delivery-diagnostic-auth: a delivery diagnostic carries the typed auth failure, redacted", async () => {
+  const routing = auth.compose({
+    oauth: provider(() => { throw new AuthError("interaction_required", ["events", "audit"]); }),
+  });
+  await withServer((req, res, body) => success(res, body), async (origin, requests) => {
+    const hooks = hooksFor(`${origin}/events`, routing, { authentication: { ...oauth, flow: "authorization_code_pkce" } });
+    try {
+      const result = await hooks.dispatch("tool.before", input());
+      assert.equal(requests.length, 0);
+      const [diagnostic] = result.diagnostics.filter((d) => d.phase !== "observation");
+      assert.deepEqual(diagnostic.auth, { code: "interaction_required", recovery: "login", requiredScopes: ["events", "audit"] });
+      assert.equal(diagnostic.backendId, "routing.backend");
+      assert.ok(Object.isFrozen(diagnostic.auth));
+    } finally { await hooks.close(); }
+  });
+  // Another SDK copy's AuthError is re-validated: unsafe scopes and extra fields are dropped.
+  const foreign = Object.assign(new Error("secret-token https://callback.example/?code=x"), {
+    name: "AuthError", code: "access_denied", requiredScopes: ["bad scope"], token: "secret-token" });
+  const opaque = { credential() { throw foreign; }, challenge() {} };
+  await withServer((req, res, body) => success(res, body), async (origin) => {
+    const hooks = hooksFor(`${origin}/events`, opaque);
+    try {
+      const result = await hooks.dispatch("tool.before", input());
+      const [diagnostic] = result.diagnostics.filter((d) => d.phase !== "observation");
+      assert.deepEqual(diagnostic.auth, { code: "access_denied", recovery: "none" });
+      assert.doesNotMatch(JSON.stringify(result.diagnostics), /secret-token|callback/);
+    } finally { await hooks.close(); }
+  });
+  // A non-auth delivery failure has no auth field.
+  await withServer((req, res) => { res.statusCode = 500; res.end(); }, async (origin) => {
+    const hooks = hooksFor(`${origin}/events`, auth.compose({ bearer: auth.bearer({ resolveCredentialReference: () => "token" }) }));
+    try {
+      const result = await hooks.dispatch("tool.before", input());
+      const [diagnostic] = result.diagnostics.filter((d) => d.phase !== "observation");
+      assert.equal(diagnostic.code, "transport");
+      assert.equal(Object.hasOwn(diagnostic, "auth"), false);
+    } finally { await hooks.close(); }
+  });
+});
+
+test("delivery-diagnostic-auth-observation: an observation's auth failure is typed too", async () => {
+  const routing = auth.compose({ oauth: provider(() => { throw new AuthError("credential_unavailable"); }) });
+  await withServer((req, res) => { res.statusCode = 202; res.end(); }, async (origin) => {
+    const hooks = new Hooks({ protocolVersion: "draft", hooks: [{
+      id: "routing.backend", transport: { type: "http", url: `${origin}/events` }, authentication: oauth,
+      subscriptions: [{ mode: "observe", events: ["tool.before"], content: { default: "metadata" } }],
+    }] }, { source: "urn:test:auth-routing", harness: { name: "test", version: "1" },
+      capabilities: { toolBefore: { intercept: { deny: true }, observe: true } }, auth: routing });
+    try {
+      const result = await hooks.dispatch("tool.before", input());
+      const [diagnostic] = result.diagnostics;
+      assert.equal(diagnostic.phase, "observation");
+      assert.deepEqual(diagnostic.auth, { code: "credential_unavailable", recovery: "configure" });
+    } finally { await hooks.close(); }
+  });
+});
