@@ -150,11 +150,14 @@ and records; it does not constrain what an issued token can do.
 Refresh runs inside host coordination, reloads the latest generation, and uses
 CAS for replacement; concurrent callers reuse the refreshed grant. Refresh uses
 the persisted authorization-server metadata; `prepare` and challenge handling
-rediscover outside store locks, falling back to it during an outage. If a renewal
-fails without an OAuth error response (network, TLS, 404/410, moved endpoint), the
-stored issuer's metadata is refetched once, persisted if the issuer is unchanged,
-and the renewal retried once; otherwise it fails `discovery_failed` and the host
-repairs the binding with `prepare`.
+rediscover outside store locks, falling back to it during an outage. If the token
+endpoint provably did not process a renewal (DNS, TCP connect or TLS handshake
+failure, or HTTP 404/410), the stored issuer's metadata is refetched once,
+persisted if the issuer is unchanged, and the renewal retried once; a changed
+issuer or failed refetch is `discovery_failed`, repaired by host `prepare`.
+Ambiguous failures after sending (timeouts, resets, 5xx, non-OAuth bodies) return
+`provider_failed` with no refetch or immediate retry, so a refresh token is never
+replayed.
 Missing refresh-token rotation retains the previous refresh token. Transient
 failures preserve stored credentials and advise retry. An invalid token response
 is never dispatched and fails `provider_failed`: an initial exchange persists

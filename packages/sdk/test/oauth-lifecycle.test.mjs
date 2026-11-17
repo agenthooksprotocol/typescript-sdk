@@ -446,3 +446,45 @@ test('[stale-metadata-refetch-once] a moved token endpoint refetches issuer meta
   issuer = 'https://other-issuer.example';
   await assert.rejects(provider.credential(f.context), { code: 'discovery_failed', recovery: 'retry' });
 });
+
+test('[stale-metadata-refetch-once] a DNS failure before sending refetches issuer metadata once and retries', async () => {
+  const f = fixture();
+  await f.login();
+  const fetch = f.options.policyFetch;
+  let unresolvable = true, metadata = 0;
+  const options = { ...f.options, async policyFetch(url, init, context) {
+    if (url.includes('oauth-authorization-server')) metadata++;
+    if (url.endsWith('/token') && unresolvable) {
+      unresolvable = false;
+      throw new TypeError('fetch failed', { cause: Object.assign(new Error('getaddrinfo'), { code: 'ENOTFOUND' }) });
+    }
+    return fetch(url, init, context);
+  } };
+  f.expire();
+  assert.equal((await managedOAuth(options).provider({ budget: () => budget() }).credential(f.context)).token, 'access-2');
+  assert.equal(metadata, 1);
+});
+
+for (const [kind, failure] of [
+  ['reset after send', () => { throw new TypeError('fetch failed', { cause: Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }) }); }],
+  ['5xx with a non-OAuth body', () => new Response('<html>bad gateway</html>', { status: 502 })],
+  ['read timeout', () => { throw new TypeError('fetch failed', { cause: Object.assign(new Error('timeout'), { code: 'UND_ERR_BODY_TIMEOUT' }) }); }],
+]) {
+  test(`[ambiguous-renewal-failure-no-refetch] ${kind} keeps retry advice without refetch or immediate retry`, async () => {
+    const f = fixture();
+    await f.login();
+    const fetch = f.options.policyFetch;
+    let metadata = 0, token = 0;
+    const options = { ...f.options, async policyFetch(url, init, context) {
+      if (url.includes('oauth-authorization-server')) metadata++;
+      if (url.endsWith('/token')) { token++; return failure(); }
+      return fetch(url, init, context);
+    } };
+    f.expire();
+    const before = structuredClone(f.store.grants()[0]);
+    await assert.rejects(managedOAuth(options).provider({ budget: () => budget() }).credential(f.context), { code: 'provider_failed', recovery: 'retry' });
+    assert.equal(token, 1, 'the presented refresh token is not replayed');
+    assert.equal(metadata, 0);
+    assert.deepEqual(f.store.grants()[0], before);
+  });
+}

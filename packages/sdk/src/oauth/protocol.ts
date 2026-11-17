@@ -97,17 +97,17 @@ function parseToken(body: unknown, target: ResolvedTarget, previous?: readonly s
 
 async function tokenResult(response: Response, target: ResolvedTarget,
   process: (response: Response) => Promise<unknown>, previous?: readonly string[]): Promise<TokenResult> {
-  const parsed: unknown = await response.clone().json().catch(() => undefined);
-  const raw = response.status === 200 ? parsed : undefined;
+  const raw: unknown = response.status === 200 ? await response.clone().json().catch(() => undefined) : undefined;
   let body: unknown;
   try { body = await process(response); }
   catch (error) {
     // OAuth error responses are classified by protect(); anything else is an invalid response.
     if (error instanceof oauth.ResponseBodyError) throw error;
     if (raw === undefined) {
-      // A non-200 without an OAuth error body (404/410, proxy page) may be a moved endpoint.
-      const oauthError = typeof (parsed as { error?: unknown } | undefined)?.error === "string";
-      throw oauthError ? new AuthError("provider_failed") : markTransport(new AuthError("provider_failed"));
+      // Only 404/410 prove the endpoint did not process the request (moved). Anything
+      // else after sending (5xx, non-OAuth body) is ambiguous: never refetch or retry.
+      const moved = response.status === 404 || response.status === 410;
+      throw moved ? markTransport(new AuthError("provider_failed")) : new AuthError("provider_failed");
     }
     return parseToken({ ...raw as object, token_type: "invalid" }, target);
   }

@@ -21,7 +21,19 @@ function https(value: string): URL {
 }
 
 const transport = new WeakSet<AuthError>();
-/** Tag a failure that had no OAuth error response: network, TLS, 404/410, moved endpoint. */
+/** Failures before the request reached the server: DNS, TCP connect, TLS handshake. */
+const PRE_SEND = /^(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|EADDRNOTAVAIL|UND_ERR_CONNECT_TIMEOUT|EPROTO|CERT_.*|.*_CERT_.*|UNABLE_TO_.*|ERR_TLS_.*|ERR_SSL_.*)$/;
+function preSend(error: unknown): boolean {
+  // Node's fetch wraps the socket error in a TypeError; inspect the cause chain.
+  for (let current = error, depth = 0; current && depth < 4; depth++) {
+    let code: unknown, cause: unknown;
+    try { ({ code, cause } = current as { code?: unknown; cause?: unknown }); } catch { return false; }
+    if (typeof code === "string" && PRE_SEND.test(code)) return true;
+    current = cause;
+  }
+  return false;
+}
+/** Tag a renewal failure where the token endpoint provably did not process the request. */
 export function markTransport(error: AuthError): AuthError { transport.add(error); return error; }
 export function isTransportFailure(error: unknown): boolean {
   return error instanceof AuthError && transport.has(error);
@@ -52,7 +64,7 @@ export async function checkedFetch(
   } catch (error) {
     active(operation);
     const classified = classifyAuthError(error);
-    throw classified.code === "provider_failed" ? markTransport(classified) : classified;
+    throw classified.code === "provider_failed" && preSend(error) ? markTransport(classified) : classified;
   }
   active(operation);
   if (response.redirected || (response.url !== "" && response.url !== url)) {

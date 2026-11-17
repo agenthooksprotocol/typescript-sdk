@@ -231,8 +231,9 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       operation.signal.throwIfAborted();
       if (!cached || !isTransportFailure(error)) throw error;
     }
-    // Persisted metadata may be stale (moved endpoint, 404/410, network): refetch the
-    // stored issuer's metadata once, outside the lock, never protected-resource metadata.
+    // The token endpoint provably did not process the request (DNS, connect, TLS
+    // handshake, 404/410): persisted metadata may be stale. Refetch the stored
+    // issuer's metadata once, outside the lock, never protected-resource metadata.
     let refreshed: ResolvedTarget;
     try {
       refreshed = withExplicit(await resolveTarget(context, options, operation, { issuer: cached.issuer, resource: cached.resource }));
