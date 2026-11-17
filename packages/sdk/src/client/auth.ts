@@ -209,6 +209,8 @@ export interface AuthProvider extends DeliveryAuthProvider {
   ): Promise<Credential>;
 }
 
+/** Rotated refresh tokens carried by invalid token responses, keyed by the thrown error. */
+const rotatedRefresh = new WeakMap<object, string>();
 function error(message: string): never {
   // Never include credential values, callback URLs, or token endpoint bodies.
   throw new Error(`Authentication failed: ${message}`);
@@ -527,8 +529,9 @@ const defaults: AuthProvider = {
   // Drop the rejected access token so neither the replay nor a later delivery
   // resends it; refresh material survives for the next authenticate.
   challenge(context) {
+    // Only a 401 makes the token stale; 403 insufficient_scope keeps it for other operations.
     const rejected = context.credential?.token;
-    if (rejected === undefined || !context.cache) return;
+    if (context.response.status !== 401 || rejected === undefined || !context.cache) return;
     for (const [key, cached] of context.cache) {
       if (cached.token !== rejected) continue;
       if (cached.refreshToken) context.cache.set(key, { ...cached, expiresAt: 0 });
@@ -730,40 +733,46 @@ const defaults: AuthProvider = {
       error("token request rejected");
     }
     const body = record(await withinBudget(response.json(), context.signal));
-    if (
-      typeof body.token_type !== "string" ||
-      body.token_type.toLowerCase() !== "bearer"
-    )
-      error("unsupported token type");
-    if (body.resource !== undefined && body.resource !== client.resource)
-      error("token resource mismatch");
-    if (
-      body.expires_in !== undefined &&
-      (typeof body.expires_in !== "number" ||
-        !Number.isFinite(body.expires_in) ||
-        body.expires_in <= 0)
-    )
-      error("invalid token expiry");
-    if (body.scope !== undefined && (typeof body.scope !== "string" ||
-        !/^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/.test(body.scope)))
-      error("invalid token scope");
-    // Granted = response ∩ local ceiling; extra scopes are ignored, not an error.
-    const ceiling = client.allowedScopes ?? client.scopes ?? [];
-    const scopes = [...new Set(body.scope === undefined ? client.scopes ?? [] : (body.scope as string).split(" "))]
-      .filter(scope => ceiling.includes(scope));
-    return validateCredential(
-      {
-        token: string(body.access_token, "access token"),
-        ...(typeof body.expires_in === "number"
-          ? { expiresAt: (options.now ?? Date.now)() + body.expires_in * 1000 }
-          : {}),
-        ...(body.refresh_token !== undefined
-          ? { refreshToken: string(body.refresh_token, "refresh token") }
-          : {}),
-        ...(scopes ? { scopes } : {}),
-      },
-      options,
-    );
+    try {
+      if (
+        typeof body.token_type !== "string" ||
+        body.token_type.toLowerCase() !== "bearer"
+      )
+        error("unsupported token type");
+      if (body.resource !== undefined && body.resource !== client.resource)
+        error("token resource mismatch");
+      const expires = body.expires_in;
+      if (expires !== undefined && !(typeof expires === "number"
+        ? Number.isSafeInteger(expires) && expires > 0
+        : typeof expires === "string" && /^[0-9]+$/.test(expires) && Number(expires) > 0 && Number.isSafeInteger(Number(expires))))
+        error("invalid token expiry");
+      if (body.scope !== undefined && (typeof body.scope !== "string" ||
+          !/^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/.test(body.scope)))
+        error("invalid token scope");
+      // Granted = response ∩ local ceiling; extra scopes are ignored, not an error.
+      const ceiling = client.allowedScopes ?? client.scopes ?? [];
+      const scopes = [...new Set(body.scope === undefined ? client.scopes ?? [] : (body.scope as string).split(" "))]
+        .filter(scope => ceiling.includes(scope));
+      return validateCredential(
+        {
+          token: string(body.access_token, "access token"),
+          ...(expires !== undefined
+            ? { expiresAt: (options.now ?? Date.now)() + Number(expires) * 1000 }
+            : {}),
+          ...(body.refresh_token !== undefined
+            ? { refreshToken: string(body.refresh_token, "refresh token") }
+            : {}),
+          ...(scopes ? { scopes } : {}),
+        },
+        options,
+      );
+    } catch (failure) {
+      // An invalid response is not dispatched, but a valid rotated refresh token is kept.
+      const rotated = body.refresh_token;
+      if (typeof rotated === "string" && rotated && !/[\s\x00-\x1f\x7f]/.test(rotated) && typeof failure === "object" && failure !== null)
+        rotatedRefresh.set(failure, rotated);
+      throw failure;
+    }
   },
   async exchangeAuthorizationCode(request, context, options) {
     const parameters = new URLSearchParams(request.parameters);
@@ -864,11 +873,15 @@ const defaults: AuthProvider = {
       try {
         credential = await this.refresh(context, { ...request, client }, presented, options);
       } catch (failure) {
-        if (failure instanceof AuthError && failure.code === "refresh_rejected") {
-          // Compare-and-delete: keep a newer record holding a different refresh token.
+        const rotated = typeof failure === "object" && failure !== null ? rotatedRefresh.get(failure) : undefined;
+        if ((failure instanceof AuthError && failure.code === "refresh_rejected") || rotated !== undefined) {
+          // Compare-and-delete/replace: keep a newer record holding a different refresh token.
           const latest = await withinBudget(Promise.resolve(this.getToken(key, context)), context.signal);
-          if (latest?.refreshToken === presented)
-            await withinBudget(Promise.resolve(this.deleteToken(key, context)), context.signal);
+          if (latest?.refreshToken === presented) {
+            await withinBudget(Promise.resolve(rotated === undefined
+              ? this.deleteToken(key, context)
+              : this.setToken(key, { ...latest, refreshToken: rotated, expiresAt: 0 }, context)), context.signal);
+          }
         }
         throw failure;
       }

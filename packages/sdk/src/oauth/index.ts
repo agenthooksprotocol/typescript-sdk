@@ -1,7 +1,7 @@
 import { AuthError, normalizeAuthTarget, classifyAuthError } from "../client/auth.js";
 import type { AuthChallengeContext, DeliveryAuthContext, DeliveryAuthProvider, DeliveryCredential } from "../client/auth.js";
 import { bearerParameters } from "../client/challenge.js";
-import { resolveTarget, type CachedBinding } from "./discovery.js";
+import { isPolicyRefusal, resolveTarget, type CachedBinding } from "./discovery.js";
 import { acquireClientCredentials, exchangeCode, isTransportFailure, refreshCredential, startLogin, validateCallback } from "./protocol.js";
 import type { TokenResult } from "./protocol.js";
 import type {
@@ -114,7 +114,14 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
   const options = { ...configuration };
   const { store, namespace } = options;
   const loginLifetime = options.loginLifetimeMs ?? MAX_LOGIN_LIFETIME;
-  if (!Number.isFinite(loginLifetime) || loginLifetime <= 0 || loginLifetime > MAX_LOGIN_LIFETIME) throw new AuthError("invalid_configuration");
+  const commitTimeout = options.commitTimeoutMs ?? 30_000;
+  if (!Number.isFinite(loginLifetime) || loginLifetime <= 0 || loginLifetime > MAX_LOGIN_LIFETIME ||
+      !Number.isFinite(commitTimeout) || commitTimeout <= 0) throw new AuthError("invalid_configuration");
+  /**
+   * Persisting a token response is not tied to the caller's budget: the server has
+   * already spent the old refresh token, so losing the rotated one would replay it.
+   */
+  const commit = (): Operation => Object.freeze({ signal: AbortSignal.timeout(Math.min(commitTimeout, 2_147_483_647)), deadline: Date.now() + commitTimeout });
   const attempts = new WeakMap<object, Attempt>();
 
   async function read<K extends StoredRecord["kind"]>(key: string, kind: K, operation: Operation): Promise<Extract<StoredRecord, { kind: K }> | undefined> {
@@ -160,20 +167,24 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
   }
 
   /** Discover over the network outside store locks; persist the binding only when it changed. */
-  async function discoverBinding(context: DeliveryAuthContext, cached: StoredBinding | undefined, operation: Operation): Promise<ResolvedTarget> {
+  async function discoverBinding(context: DeliveryAuthContext, cached: StoredBinding | undefined, operation: Operation,
+    staleFallback = true): Promise<ResolvedTarget> {
     let target: ResolvedTarget;
     try {
       target = await resolveTarget(context, options, operation);
     } catch (error) {
       operation.signal.throwIfAborted();
       // A metadata outage must not block refresh/acquisition with a known binding.
-      if (!cached || !(error instanceof AuthError) || error.code !== "discovery_failed") throw error;
+      if (!staleFallback || !cached || !(error instanceof AuthError) || error.code !== "discovery_failed") throw error;
       return resolveTarget(context, options, operation, cached);
     }
     const value: StoredBinding = { kind: "binding", generation: crypto.randomUUID(), issuer: target.client.issuer,
-      resource: target.client.resource, metadata: target.metadata, discoveredAt: Date.now() };
-    // A lost race means another writer stored an equally fresh binding.
-    await write(bindingKey(namespace, context), cached?.generation, value, operation);
+      resource: target.client.resource, metadata: target.metadata, discoveredAt: Date.now(),
+      grantKey: grantKey(namespace, context, target.client) };
+    // Write only on change; a lost race means another writer stored an equally fresh binding.
+    const same = cached && cached.issuer === value.issuer && cached.resource === value.resource &&
+      cached.grantKey === value.grantKey && JSON.stringify(cached.metadata) === JSON.stringify(value.metadata);
+    if (!same) await write(bindingKey(namespace, context), cached?.generation, value, operation);
     return target;
   }
 
@@ -183,14 +194,19 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     const binding = identity(context);
     const cached = await read(bindingKey(namespace, context), "binding", operation);
     if (!cached && mode === "lookup") return LOOKUP_MISS;
+    const challenged = context.challenged === true || context.challenge !== undefined;
+    // Paths that may exchange can repair a binding whose cached resolution fails
+    // (stored issuer gone or no longer trusted) through full discovery.
+    const repairable = mode === "host" || (mode === "delivery" && challenged);
     let target: ResolvedTarget;
     try {
       target = cached ? await resolveTarget(context, options, operation, cached) : await discoverBinding(context, undefined, operation);
     } catch (error) {
       operation.signal.throwIfAborted();
-      // Host policy refusal is anonymous; an issuer-metadata fetch failure is not.
-      if (mode === "lookup" && error instanceof AuthError && error.code !== "discovery_failed") return LOOKUP_MISS;
-      throw error;
+      // Only a host selectClient rejection is a policy refusal; other errors propagate.
+      if (mode === "lookup" && isPolicyRefusal(error)) return LOOKUP_MISS;
+      if (!cached || !repairable || !(error instanceof AuthError)) throw error;
+      target = await discoverBinding(context, cached, operation, false);
     }
     const withExplicit = (resolved: ResolvedTarget): ResolvedTarget => {
       const required = [...new Set([...(resolved.client.requiredScopes ?? []), ...scopes(explicit)])];
@@ -199,13 +215,14 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     };
     target = withExplicit(target);
     let key = grantKey(namespace, context, target.client);
+    // A known binding whose host policy now names another grant is not a store miss.
+    if (mode === "lookup" && cached?.grantKey !== undefined && cached.grantKey !== key) throw new AuthError("discovery_failed");
     // Cached tokens are served without metadata I/O, locks or writes.
     const observed = await read(key, "grant", operation);
     if (usable(observed, target, target.client.requiredScopes ?? [])) return ready(observed, key, binding, target, []);
     // Full discovery only on a cache miss, host prepare or challenge handling; a
     // known binding otherwise renews from persisted metadata (or fails, never anonymous).
-    const challenged = context.challenged === true || context.challenge !== undefined;
-    if (cached && (mode === "host" || (mode === "delivery" && challenged))) {
+    if (cached && repairable) {
       target = withExplicit(await discoverBinding(context, cached, operation));
       key = grantKey(namespace, context, target.client);
     }
@@ -216,7 +233,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       const prior = current ? effective(current, target) : [];
       if (target.client.flow === "client_credentials") {
         const token = await acquireClientCredentials(acquisition(target, current), options, operation);
-        return ready(await saveGrant(key, current?.generation, token, operation), key, binding, target, required);
+        return ready(await saveGrant(key, current?.generation, token, commit()), key, binding, target, required);
       }
       // A refresh can never broaden a grant, so it only helps when the requirement is already covered.
       if (current?.refreshToken && within(required, prior)) {
@@ -265,22 +282,23 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     try {
       result = await refreshCredential(target, presented, prior, options, operation);
     } catch (error) {
-      operation.signal.throwIfAborted();
       if (error instanceof AuthError && error.code === "refresh_rejected") {
         // Compare-and-delete: a newer record (another refresh or login) is kept.
-        const latest = await read(key, "grant", operation);
-        if (latest?.refreshToken === presented) await write(key, latest.generation, undefined, operation);
+        const settle = commit();
+        const latest = await read(key, "grant", settle);
+        if (latest?.refreshToken === presented) await write(key, latest.generation, undefined, settle);
       }
+      operation.signal.throwIfAborted();
       throw error;
     }
     if (!result.value) {
       // Not dispatched: keep a valid rotated refresh token, drop the unusable access token.
       const { token: _token, expiresAt: _expiresAt, kind: _kind, generation: _generation, ...rest } = current;
-      await saveGrant(key, current.generation, { ...rest, refreshToken: result.refreshToken ?? presented }, operation);
+      if (result.refreshToken !== undefined) await saveGrant(key, current.generation, { ...rest, refreshToken: result.refreshToken }, commit());
       throw new AuthError("provider_failed");
     }
     const token: TokenValue = result.value;
-    return saveGrant(key, current.generation, { ...token, refreshToken: token.refreshToken ?? presented }, operation);
+    return saveGrant(key, current.generation, { ...token, refreshToken: token.refreshToken ?? presented }, commit());
   }
 
   /** Reuse or atomically supersede the binding's stored pending login. Host prepare only. */
@@ -351,9 +369,10 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       // An invalid initial exchange persists nothing.
       if (!result.value) throw new AuthError("provider_failed");
       const token = result.value;
-      const grant = await race(operation.signal, store.coordinate(record.grantKey, operation.signal, async () => {
-        const latest = await read(record.grantKey, "grant", operation);
-        return saveGrant(record.grantKey, latest?.generation, token, operation);
+      const settle = commit();
+      const grant = await race(operation.signal, store.coordinate(record.grantKey, settle.signal, async () => {
+        const latest = await read(record.grantKey, "grant", settle);
+        return saveGrant(record.grantKey, latest?.generation, token, settle);
       }));
       return ready(grant, record.grantKey, identity(context), current, record.client.requiredScopes ?? []);
     });
@@ -379,8 +398,8 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       const owner = credential ? attempts.get(credential.attempt as object) : undefined;
       if (credential && (!owner || owner.identity !== identity(context))) throw new AuthError("invalid_configuration");
       const cached = await read(bindingKey(namespace, context), "binding", operation);
-      // An anonymous rejection (re)learns the binding; otherwise the cached one suffices.
-      const target = owner && cached ? await resolveTarget(context, options, operation, cached) : await discoverBinding(context, cached, operation);
+      // Challenge handling runs full discovery, honouring a resource_metadata hint.
+      const target = await discoverBinding(context, cached, operation);
       if (insufficient) {
         // Operation-scoped: validated against the ceiling, never persisted. The replay
         // carries the same challenge, so its acquisition sees the same requirement.

@@ -20,7 +20,11 @@ function https(value: string): URL {
   return url;
 }
 
-const transport = new WeakSet<AuthError>();
+const transport = new WeakSet<AuthError>(), refusals = new WeakSet<AuthError>();
+/** True when the host's selectClient rejected the binding: the only lookup policy refusal. */
+export function isPolicyRefusal(error: unknown): boolean {
+  return error instanceof AuthError && refusals.has(error);
+}
 /** Failures before the request reached the server: DNS, TCP connect, TLS handshake. */
 const PRE_SEND = /^(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|EADDRNOTAVAIL|UND_ERR_CONNECT_TIMEOUT|EPROTO|CERT_.*|.*_CERT_.*|UNABLE_TO_.*|ERR_TLS_.*|ERR_SSL_.*)$/;
 function preSend(error: unknown): boolean {
@@ -66,7 +70,9 @@ export async function checkedFetch(
     const classified = classifyAuthError(error);
     throw classified.code === "provider_failed" && preSend(error) ? markTransport(classified) : classified;
   }
-  active(operation);
+  // A token response is never dropped for a late caller abort: its rotated refresh
+  // token must still be committed.
+  if (purpose !== "token") active(operation);
   if (response.redirected || (response.url !== "" && response.url !== url)) {
     throw new AuthError("untrusted_destination");
   }
@@ -177,7 +183,9 @@ async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptio
     selected = await options.selectClient(Object.freeze(binding ? [binding.issuer] : [...issuers]), resource, context, operation);
   } catch (error) {
     active(operation);
-    throw classifyAuthError(error, "credential_unavailable");
+    const refusal = classifyAuthError(error, "credential_unavailable");
+    refusals.add(refusal);
+    throw refusal;
   }
   active(operation);
   validateClient(selected);

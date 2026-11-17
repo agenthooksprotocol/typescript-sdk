@@ -677,3 +677,39 @@ test("[challenge-renews-rejected-unexpired-token] built-in auth() never resends 
   await provider.challenge({ ...context, credential: first, response: new Response(null, { status: 401 }) });
   assert.equal((await provider.credential(context)).token, "access-2");
 });
+
+test("[insufficient-scope-step-up] built-in auth() keeps a valid token after 403 insufficient_scope", async () => {
+  const { provider, issued } = builtInOAuth();
+  const cache = new Map();
+  const context = { backendId: "auth.backend", purpose: "event", url: eventUrl, authentication: bindings[2], cache };
+  const first = await provider.credential(context);
+  await provider.challenge({ ...context, credential: first, response: new Response(null, { status: 403,
+    headers: { "www-authenticate": 'Bearer error="insufficient_scope", scope="admin"' } }) });
+  assert.equal((await provider.credential(context)).token, "access-1");
+  assert.equal(issued.length, 1);
+});
+
+test("[token-validation-failure-clears-in-flight] built-in auth() persists a rotated refresh token from an invalid refresh response", async () => {
+  let invalid = false;
+  const cache = new Map();
+  const provider = auth({
+    resolveHostname: async () => ["93.184.216.34"],
+    resolveCredentialReference: () => "client-secret",
+    async fetch(url) {
+      if (url.pathname.startsWith("/.well-known/")) {
+        return Response.json({ issuer: "https://identity.example/tenant", token_endpoint: "https://identity.example/token",
+          grant_types_supported: ["client_credentials", "refresh_token"] });
+      }
+      return invalid
+        ? Response.json({ access_token: "n", token_type: "Bearer", expires_in: "3600.5", refresh_token: "rotated" })
+        : Response.json({ access_token: "a", token_type: "Bearer", expires_in: 3600, refresh_token: "r1", scope: "events" });
+    },
+  });
+  const context = { backendId: "auth.backend", purpose: "event", url: eventUrl, authentication: bindings[2], cache };
+  await provider.credential(context);
+  const [key] = cache.keys();
+  cache.set(key, { ...cache.get(key), expiresAt: 0 });
+  invalid = true;
+  await assert.rejects(provider.credential(context));
+  assert.equal(cache.get(key).refreshToken, "rotated");
+});

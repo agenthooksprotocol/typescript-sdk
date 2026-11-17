@@ -48,6 +48,8 @@ export interface StoredBinding {
   readonly metadata?: AuthorizationServer;
   /** Unix milliseconds. Host prepare and challenge handling rebuild the binding. */
   readonly discoveredAt: number;
+  /** Grant the binding was approved for; a different selection is not a lookup miss. */
+  readonly grantKey?: string;
 }
 /** A host-created login awaiting its callback. Completable from any process sharing the store. */
 export interface StoredPendingLogin {
@@ -86,6 +88,8 @@ export interface ManagedOAuthOptions {
   /** Local trust/identity/scope policy, never inferred from advertised metadata. */
   readonly selectClient: (issuers: readonly string[], resource: string,
     context: DeliveryAuthContext, operation: Operation) => ClientConfig | Promise<ClientConfig>;
+  /** Budget for persisting a received token response, independent of the caller. Default 30000. */
+  readonly commitTimeoutMs?: number;
   /** Pending login lifetime, fixed at creation. Default and maximum 600000 (10 minutes). */
   readonly loginLifetimeMs?: number;
 }

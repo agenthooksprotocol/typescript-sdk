@@ -488,3 +488,108 @@ for (const [kind, failure] of [
     assert.deepEqual(f.store.grants()[0], before);
   });
 }
+
+// Host policy moves the resource to a new authorization server while the old one is gone.
+function movedIssuer(f, { oldUp = false } = {}) {
+  const NEW = 'https://new-issuer.example';
+  const urls = [];
+  const options = { ...f.options,
+    selectClient: issuers => ({ ...f.client, issuer: issuers.includes(NEW) ? NEW : issuers[0], scopes: [...f.client.scopes] }),
+    async policyFetch(url, init, context) {
+      urls.push(url);
+      if (url.startsWith('https://api.example/.well-known/')) return Response.json({ resource: f.client.resource, authorization_servers: [NEW] });
+      if (url.startsWith('https://issuer.example/') && !oldUp) return new Response('gone', { status: 503 });
+      if (url === `${NEW}/token`) return Response.json({ access_token: 'new-as', token_type: 'Bearer', expires_in: 3600, refresh_token: 'new-refresh' });
+      if (url.startsWith(`${NEW}/.well-known/`)) return Response.json({ issuer: NEW, authorization_endpoint: `${NEW}/authorize`, token_endpoint: `${NEW}/token`,
+        response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token', 'client_credentials'],
+        code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['none', 'client_secret_basic'] });
+      return f.options.policyFetch(url, init, context);
+    } };
+  return { NEW, urls, options };
+}
+
+for (const persisted of [true, false]) {
+  test(`exchange-needing prepare repairs a binding whose stored issuer is gone or untrusted (metadata ${persisted ? 'persisted' : 'missing'})`, async () => {
+    const f = fixture();
+    await f.login();
+    for (const [key, value] of f.store.values) {
+      if (value.kind === 'grant') f.store.values.delete(key);
+      if (value.kind === 'binding' && !persisted) { const { metadata: _metadata, ...rest } = value; f.store.values.set(key, rest); }
+    }
+    const moved = movedIssuer(f);
+    const pending = await managedOAuth(moved.options).prepare(f.context, budget());
+    assert.equal(pending.type, 'pending_login');
+    assert(pending.authorizationUrl.startsWith(moved.NEW));
+    assert(moved.urls.some(url => url.includes('oauth-protected-resource')), 'full discovery ran');
+    assert.equal([...f.store.values.values()].find(value => value.kind === 'binding').issuer, moved.NEW);
+  });
+}
+
+test('challenge handling runs full discovery and rebinds a resource that moved to a new authorization server', async () => {
+  const f = fixture({ flow: 'client_credentials', clientSecret: 'secret' });
+  const moved = movedIssuer(f, { oldUp: true });
+  const oauth = managedOAuth(moved.options), provider = oauth.provider({ budget: () => budget() });
+  // Bind to the old issuer first: protected-resource metadata then still named it.
+  await managedOAuth(f.options).prepare(f.context, budget());
+  const credential = await provider.credential(f.context);
+  assert.equal(credential.token, 'access-1');
+  await provider.challenge({ ...f.context, credential, response: new Response(null, { status: 401, headers: {
+    'www-authenticate': 'Bearer resource_metadata="https://api.example/.well-known/oauth-protected-resource/events"' } }) });
+  assert.equal((await provider.credential(f.context)).token, 'new-as');
+  assert.equal([...f.store.values.values()].find(value => value.kind === 'binding').issuer, moved.NEW);
+});
+
+test('[unbound-lookup-anonymous-fallback] the lookup surfaces config and identity errors; only selectClient rejection is anonymous', async () => {
+  const f = fixture();
+  await f.login();
+  const lookup = mutate => managedOAuth({ ...f.options, selectClient: (...args) => mutate(f.options.selectClient(...args)) })
+    .provider({ budget: () => budget() }).credential(f.context);
+  for (const mutate of [c => ({ ...c, scopes: ['bad scope'] }), c => ({ ...c, requiredScopes: ['admin'] }), c => ({ ...c, clientId: '' }),
+    c => ({ ...c, issuer: 'https://other.example' }), c => ({ ...c, resource: 'https://api.example/' })]) {
+    await assert.rejects(lookup(mutate), error => error.code !== undefined);
+  }
+  for (const mutate of [c => ({ ...c, clientId: 'other' }), c => ({ ...c, grantPartition: 'other' })]) {
+    await assert.rejects(lookup(mutate), { code: 'discovery_failed' }, 'a grant-key mismatch on a known binding is not a store miss');
+  }
+  assert.equal(await lookup(() => { throw new Error('policy refused'); }), undefined);
+  assert.equal((await lookup(c => c)).token, 'access-1');
+});
+
+test('[token-validation-failure-clears-in-flight] a received refresh response is committed despite caller abort or a slow store', async () => {
+  for (const scenario of ['abort', 'slow-store']) {
+    const f = fixture();
+    await f.login(); f.expire();
+    const controller = new AbortController();
+    const store = scenario === 'slow-store'
+      ? { ...f.store, async compareAndSet(...args) { await new Promise(resolve => setTimeout(resolve, 300)); return f.store.compareAndSet(...args); } }
+      : f.store;
+    const oauth = managedOAuth({ ...f.options, store, async policyFetch(url, init, context) {
+      const response = await f.options.policyFetch(url, init, context);
+      if (url.endsWith('/token')) queueMicrotask(() => controller.abort());
+      return response;
+    } });
+    await assert.rejects(oauth.prepare(f.context, budget(scenario === 'abort' ? controller.signal : undefined, scenario === 'abort' ? 5000 : 150)));
+    await new Promise(resolve => setTimeout(resolve, 400));
+    assert.equal(f.store.grants()[0].refreshToken, 'refresh-2', `${scenario}: rotated refresh token persisted`);
+  }
+});
+
+for (const [kind, response] of [
+  ['201 status', () => new Response(JSON.stringify({ access_token: 'n', token_type: 'Bearer', refresh_token: 'rotated' }), { status: 201, headers: { 'content-type': 'application/json' } })],
+  ['form-urlencoded body', () => new Response('access_token=n&token_type=Bearer&refresh_token=rotated', { headers: { 'content-type': 'application/x-www-form-urlencoded' } })],
+  ['text/plain JSON with malformed expires_in', () => new Response('{"access_token":"n","token_type":"Bearer","expires_in":"3600.5","refresh_token":"rotated"}', { headers: { 'content-type': 'text/plain' } })],
+  ['missing access_token', () => Response.json({ refresh_token: 'rotated', token_type: 'Bearer' })],
+  ['null expires_in', () => Response.json({ access_token: 'n', token_type: 'Bearer', expires_in: null, refresh_token: 'rotated' })],
+  ['overflowing expires_in', () => new Response('{"access_token":"n","token_type":"Bearer","expires_in":1e400,"refresh_token":"rotated"}', { headers: { 'content-type': 'application/json' } })],
+]) {
+  test(`[token-validation-failure-clears-in-flight] an invalid refresh response (${kind}) persists the rotated refresh token`, async () => {
+    const f = fixture();
+    await f.login(); f.expire();
+    const oauth = managedOAuth({ ...f.options, async policyFetch(url, init, context) {
+      return url.endsWith('/token') ? response() : f.options.policyFetch(url, init, context);
+    } });
+    await assert.rejects(oauth.prepare(f.context, budget()), { code: 'provider_failed', recovery: 'retry' });
+    assert.equal(f.store.grants()[0].refreshToken, 'rotated');
+    assert.equal(f.store.grants()[0].token, undefined);
+  });
+}

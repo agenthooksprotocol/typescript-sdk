@@ -89,7 +89,8 @@ persisted authorization-server metadata, fetching only the stored issuer's
 metadata if that is missing (`discovery_failed` on failure). A known binding that
 cannot be renewed, including one needing login (`interaction_required`), fails
 the operation. It is anonymous only when no binding is stored or the host policy
-refuses (`selectClient` throwing). Full discovery runs only on a cache miss,
+refuses (`selectClient` throwing); other configuration errors propagate, and a
+selection naming a different grant is `discovery_failed`. Full discovery runs only on a cache miss,
 challenge handling, or a host `prepare` that must exchange or create a login; a
 `prepare` with a usable cached token makes no metadata calls. Uploads use their
 own bindings and isolated storage keys by default.
@@ -154,7 +155,9 @@ rediscover outside store locks, falling back to it during an outage. If the toke
 endpoint provably did not process a renewal (DNS, TCP connect or TLS handshake
 failure, or HTTP 404/410), the stored issuer's metadata is refetched once,
 persisted if the issuer is unchanged, and the renewal retried once; a changed
-issuer or failed refetch is `discovery_failed`, repaired by host `prepare`.
+issuer or failed refetch is `discovery_failed`, repaired by host `prepare`. A received token response is
+committed under its own budget (`commitTimeoutMs`, default 30s), not the caller's,
+so a late cancellation or slow store never loses a rotated refresh token.
 Ambiguous failures after sending (timeouts, resets, 5xx, non-OAuth bodies) return
 `provider_failed` with no refetch or immediate retry, so a refresh token is never
 replayed.

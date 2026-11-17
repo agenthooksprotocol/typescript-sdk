@@ -16,9 +16,9 @@ export interface LoginState {
 async function protect<T>(operation: Operation, work: () => Promise<T>, grant: "code" | "refresh" | "client_credentials" = "code"): Promise<T> {
   try {
     active(operation);
-    const result = await work();
-    active(operation);
-    return result;
+    // No signal check after the response: a received token response must reach the
+    // caller's commit, or a rotated refresh token would be lost.
+    return await work();
   } catch (error) {
     active(operation);
     const classified = classifyAuthError(error);
@@ -95,9 +95,20 @@ function parseToken(body: unknown, target: ResolvedTarget, previous?: readonly s
   } };
 }
 
+function rawBody(text: string): Record<string, unknown> | undefined {
+  try {
+    const json: unknown = JSON.parse(text);
+    if (typeof json === "object" && json !== null && !Array.isArray(json)) return json as Record<string, unknown>;
+  } catch { /* Not JSON: try a form body. */ }
+  const form = new URLSearchParams(text);
+  return form.has("refresh_token") || form.has("access_token") ? Object.fromEntries(form) : undefined;
+}
+
 async function tokenResult(response: Response, target: ResolvedTarget,
   process: (response: Response) => Promise<unknown>, previous?: readonly string[]): Promise<TokenResult> {
-  const raw: unknown = response.status === 200 ? await response.clone().json().catch(() => undefined) : undefined;
+  // Capture the body of any 2xx, whatever its content type, so a rotated refresh
+  // token survives a response the OAuth library rejects.
+  const raw = response.status >= 200 && response.status < 300 ? rawBody(await response.clone().text().catch(() => "")) : undefined;
   let body: unknown;
   try { body = await process(response); }
   catch (error) {
