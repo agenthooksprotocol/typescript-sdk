@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.12.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.11.0...agenthooksprotocol-v0.12.0) (2026-11-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** add composable providers and managed OAuth ([#49](https://github.com/agenthooksprotocol/typescript-sdk/issues/49))
+
+### Features
+
+* **auth:** add composable providers and managed OAuth ([#49](https://github.com/agenthooksprotocol/typescript-sdk/issues/49)) ([0b56d2d](https://github.com/agenthooksprotocol/typescript-sdk/commit/0b56d2d16ecc133a064ad52878297a2de68a449a))
+
 ## [0.11.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.10.1...agenthooksprotocol-v0.11.0) (2026-11-04)
 
 
