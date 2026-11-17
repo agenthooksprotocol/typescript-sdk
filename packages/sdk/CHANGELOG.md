@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.13.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.12.0...agenthooksprotocol-v0.13.0) (2026-11-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **oauth:** add client registration via CIMD and DCR and typed auth diagnostics ([#52](https://github.com/agenthooksprotocol/typescript-sdk/issues/52))
+
+### Features
+
+* **oauth:** add client registration via CIMD and DCR and typed auth diagnostics ([#52](https://github.com/agenthooksprotocol/typescript-sdk/issues/52)) ([cf8e423](https://github.com/agenthooksprotocol/typescript-sdk/commit/cf8e423b082d74213cb0504695d9642b423b4a7f))
+
 ## [0.12.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.11.0...agenthooksprotocol-v0.12.0) (2026-11-17)
 
 
