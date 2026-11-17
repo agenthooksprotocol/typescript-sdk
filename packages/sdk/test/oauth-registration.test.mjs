@@ -923,3 +923,23 @@ test('a slow proactive renewal never fails the operation; it completes later und
     server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
   }
 });
+
+test('a renewal that is not due starts no background work and takes no registration lock', async () => {
+  const store = memoryStore();
+  const f = fixture({ ...cc(), store });
+  f.state.expiresAt = Math.floor(Date.now() / 1000) + 3600;
+  await f.oauth.prepare(f.context, budget());
+  const locks = [];
+  const coordinate = store.coordinate;
+  store.coordinate = (key, signal, work) => { locks.push(key); return coordinate(key, signal, work); };
+  f.expire();
+  assert.equal((await f.provider().credential(f.context)).token, 'access-2');
+  await until(() => false, 30);
+  assert.deepEqual(locks.filter(key => key.startsWith('ahp.oauth.registration:')), []);
+  // Once due, exactly the registration key is locked.
+  f.patchRecord({ registeredAt: Date.now() - 100 * 3600_000, clientSecretExpiresAt: Math.floor(Date.now() / 1000) + 60 });
+  f.expire();
+  await f.provider().credential(f.context);
+  await until(() => f.state.registrations.length === 2);
+  assert.deepEqual(locks.filter(key => key.startsWith('ahp.oauth.registration:')), [f.key]);
+});
