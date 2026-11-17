@@ -48,6 +48,8 @@ interface Attempt { readonly key: string; readonly generation: string; readonly 
 interface Selected extends ResolvedTarget {
   readonly selection: ClientSelection;
   readonly registration?: Registered & { readonly key: string; readonly digest: string };
+  /** The client a forced re-registration replaced. */
+  readonly replacedClientId?: string;
 }
 interface Registered { readonly record: StoredRegistration; readonly secret?: string; readonly usable: boolean }
 /** Up-front lookup outcome for a store miss or host policy refusal: send anonymously. */
@@ -221,9 +223,9 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       requestDigest: digest, failedAt: now, attempts, nextAttemptAt: now + delay };
     await write(failureKey(key), prior?.generation, value, commit());
   }
-  /** Store the secret under a fresh reference, then compare-and-set the record. */
+  /** Store the secret under a fresh reference, then compare-and-set the record, under the commit budget. */
   async function save(key: string, current: StoredRegistration | undefined, accepted: AcceptedRegistration,
-    digest: string, flow: ClientConfig["flow"], operation: Operation): Promise<Registered> {
+    digest: string, flow: ClientConfig["flow"]): Promise<Registered> {
     const settle = commit();
     const secretRef = accepted.clientSecret === undefined ? undefined : crypto.randomUUID();
     if (secretRef !== undefined) await race(settle.signal, secrets!.put(secretRef, accepted.clientSecret!, settle.signal));
@@ -238,8 +240,8 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     }
     if (!won) {
       // Another process registered first: use its record.
-      const winner = await read(key, "registration", operation);
-      const resolved = winner && winner.requestDigest === digest ? await resolveRecord(winner, flow, operation) : undefined;
+      const winner = await read(key, "registration", settle);
+      const resolved = winner && winner.requestDigest === digest ? await resolveRecord(winner, flow, settle) : undefined;
       if (!resolved?.usable) throw new AuthError("provider_failed");
       return resolved;
     }
@@ -286,7 +288,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         await failed(key, marker, digest, attempt.retryAfterMs);
         throw attempt.error;
       }
-      const saved = await save(key, current, attempt.accepted, digest, client.flow, operation);
+      const saved = await save(key, current, attempt.accepted, digest, client.flow);
       if (marker) await write(markerKey, marker.generation, undefined, commit()).catch(() => false);
       return saved;
     }));
@@ -330,9 +332,15 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     }
     const pending: Selected = { ...target, selection: { source: "dcr", clientId: "", registrationKey: key, requestDigest: digest! },
       registration: { key, digest: digest!, record: current!, usable: false } };
+    // Host prepare restarts the backoff: its marker is compare-and-deleted up front.
+    if (mode === "host") {
+      const marker = await read(failureKey(key), "registration_failure", operation);
+      if (marker) await write(failureKey(key), marker.generation, undefined, operation);
+    }
     if (force || !current) {
       if (mode !== "host" && client.flow !== "client_credentials") throw new AuthError("interaction_required", client.requiredScopes);
-      return withRegistration(pending, await registration(target, key, digest!, mode, operation, force ? "force" : "ensure"));
+      const registered = withRegistration(pending, await registration(target, key, digest!, mode, operation, force ? "force" : "ensure"));
+      return current && current.clientId !== registered.client.clientId ? { ...registered, replacedClientId: current.clientId } : registered;
     }
     return withRegistration(pending, await resolveRecord(current, client.flow, operation));
   }
@@ -365,6 +373,16 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       cached.grantKey === value.grantKey && JSON.stringify(cached.metadata) === JSON.stringify(value.metadata) &&
       JSON.stringify(cached.client) === JSON.stringify(value.client);
     if (!same) await write(bindingKey(namespace, context), cached?.generation, value, operation);
+  }
+  /**
+   * Compare-and-delete the grant of a replaced client: its tokens are never presented
+   * under another client. Shared partitions may serve other bindings, so they are kept.
+   */
+  async function dropGrant(context: DeliveryAuthContext, target: ResolvedTarget, clientId: string): Promise<void> {
+    if (target.client.grantPartition !== undefined) return;
+    const key = grantKey(namespace, context, { ...target.client, clientId }), settle = commit();
+    const old = await read(key, "grant", settle);
+    if (old) await write(key, old.generation, undefined, settle);
   }
   /** Discover over the network outside store locks, then select the client. */
   async function discoverBinding(context: DeliveryAuthContext, cached: StoredBinding | undefined, operation: Operation,
@@ -417,6 +435,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       return { ...resolved, client: { ...resolved.client, requiredScopes: required } };
     };
     target = withExplicit(target);
+    if (target.replacedClientId !== undefined) await dropGrant(context, target, target.replacedClientId);
     let key = grantKey(namespace, context, target.client);
     // A known binding whose host policy now names another grant is not a store miss;
     // a changed client selection (or a replaced registration) is not such a change.
@@ -475,7 +494,9 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
           throw new AuthError("credential_unavailable");
         }
         replaced = true;
-        return attempt(withRegistration(target, await registration(target, registered.key, registered.digest, mode, operation, "ensure")));
+        const replacement = withRegistration(target, await registration(target, registered.key, registered.digest, mode, operation, "ensure"));
+        if (replacement.client.clientId !== target.client.clientId) await dropGrant(context, target, target.client.clientId!);
+        return attempt(replacement);
       }
     };
     /** Record a client replaced during this acquisition on the binding. */

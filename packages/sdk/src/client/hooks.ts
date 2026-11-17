@@ -49,6 +49,7 @@ import {
   type EventType,
   type HooksOptions,
   type DeliveryDiagnostic,
+  type DeliveryAuthFailure,
 } from "./types.js";
 
 type DeliveryFailure = Omit<DeliveryDiagnostic, "code"> & {
@@ -134,7 +135,8 @@ type ElicitationLifetime = {
 export class Hooks {
   readonly initialized: Promise<void>;
   /** Sanitized registration outcomes; available after initialized settles. */
-  readonly initializationDiagnostics: { backendId: string; code: "CONFIGURATION_UNAVAILABLE" | "NO_APPLICABLE_SUBSCRIPTIONS" | "CONFIGURATION_LOCAL_SECRET" }[] = [];
+  /** `auth` is present when endpoint authentication made the configuration unavailable. */
+  readonly initializationDiagnostics: { backendId: string; code: "CONFIGURATION_UNAVAILABLE" | "NO_APPLICABLE_SUBSCRIPTIONS" | "CONFIGURATION_LOCAL_SECRET"; auth?: DeliveryAuthFailure }[] = [];
   private readonly lifetime = new AbortController();
   private readonly options: HooksOptions;
   private readonly routes: Route[] = [];
@@ -392,7 +394,8 @@ export class Hooks {
       return subscriptions;
     } catch (error) {
       if (this.lifetime.signal.aborted) throw error;
-      this.initializationDiagnostics.push({ backendId: backend.id, code: "CONFIGURATION_UNAVAILABLE" });
+      const auth = authFailure(error);
+      this.initializationDiagnostics.push({ backendId: backend.id, code: "CONFIGURATION_UNAVAILABLE", ...(auth ? { auth } : {}) });
       return [];
     } finally {
       budget.dispose();

@@ -350,3 +350,20 @@ test("wildcard helpers remain selectors rather than actual runtime events", asyn
     assert.equal(client.subscribes(events.toolBefore), true);
   } finally { await client.close(); }
 });
+
+test("configuration-auth-diagnostic: an auth failure during discovery carries the login hint", async () => {
+  const { AuthError } = await import("agenthooksprotocol/client");
+  const cfg = registration();
+  cfg.hooks = [{ id: "test.login", transport: { type: "http", url: "https://backend.test/login" },
+    authentication: { type: "oauth", issuer: "https://issuer.test", resource: "https://backend.test", clientId: "c",
+      flow: "authorization_code_pkce", scopes: ["read"] } }];
+  let sent = 0;
+  const provider = { credential() { throw new AuthError("interaction_required", ["read"]); }, challenge() {} };
+  const client = new Hooks(cfg, { ...options(async () => { sent++; return new Response(null, { status: 500 }); }), auth: provider });
+  try {
+    await client.initialized;
+    assert.equal(sent, 0);
+    assert.deepEqual(client.initializationDiagnostics, [{ backendId: "test.login", code: "CONFIGURATION_UNAVAILABLE",
+      auth: { code: "interaction_required", recovery: "login", requiredScopes: ["read"] } }]);
+  } finally { await client.close(); }
+});

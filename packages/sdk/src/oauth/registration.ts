@@ -142,8 +142,8 @@ export function retryAfter(value: string | null, now: number): number | undefine
 export type Attempted = { readonly accepted: AcceptedRegistration } | { readonly error: AuthError; readonly retryAfterMs?: number };
 
 /**
- * POST one RFC 7591 request. Destination failures throw before any request; the
- * caller's cancellation rethrows; every response or transport outcome is returned.
+ * POST one RFC 7591 request. Destination failures and caller cancellation throw before
+ * it is sent; afterwards every response or transport outcome is returned.
  */
 export async function register(endpoint: string, request: Record<string, unknown>, accessToken: string | undefined,
   flow: ClientConfig["flow"], options: ManagedOAuthOptions, operation: Operation): Promise<Attempted> {
@@ -160,17 +160,19 @@ export async function register(endpoint: string, request: Record<string, unknown
   const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "application/json" };
   if (accessToken !== undefined) headers.Authorization = `Bearer ${accessToken}`;
   let status: number, text = "", after: string | null = null;
+  // Once sent, the server may have registered a client: like a token request, the
+  // response is received and persisted under the commit timeout, never the caller's signal.
+  const timeout = options.commitTimeoutMs ?? 30_000;
+  const transfer: Operation = Object.freeze({ signal: AbortSignal.timeout(Math.min(timeout, 2_147_483_647)), deadline: Date.now() + timeout });
   try {
     // Redirects are surfaced, never followed: a 3xx is untrusted_destination.
     const response = await options.policyFetch(endpoint, { method: "POST", headers, body: JSON.stringify(request),
-      redirect: "manual", signal: operation.signal }, { purpose: "registration", operation });
-    active(operation);
+      redirect: "manual", signal: transfer.signal }, { purpose: "registration", operation: transfer });
     status = response.type === "opaqueredirect" || response.redirected ? 302 : response.status;
     after = response.headers.get("retry-after");
     if (status === 200 || status === 201) text = await response.text();
     else void response.body?.cancel().catch(() => {});
   } catch (error) {
-    active(operation);
     return { error: classifyAuthError(error, "provider_failed").code === "untrusted_destination"
       ? new AuthError("untrusted_destination") : new AuthError("provider_failed") };
   }
