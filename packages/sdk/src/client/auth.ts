@@ -12,16 +12,19 @@ export type { AuthErrorCode, AuthRecovery, AuthTarget, AuthCompositionOptions } 
 export function classifyAuthError(error: unknown, fallback: AuthErrorCode = "provider_failed", signal?: AbortSignal): AuthError {
   signal?.throwIfAborted();
   if (error instanceof AuthError) return error;
-  let code: unknown;
+  let code: unknown, requiredScopes: unknown;
   try {
-    if (typeof error === "object" && error !== null) code = (error as { code?: unknown }).code;
+    if (typeof error === "object" && error !== null) ({ code, requiredScopes } = error as { code?: unknown; requiredScopes?: unknown });
   } catch { /* Untrusted provider objects may have throwing accessors. */ }
   const allowed: readonly string[] = [
     "invalid_configuration", "unsupported_binding", "credential_unavailable",
     "interaction_required", "access_denied", "refresh_rejected",
     "discovery_failed", "untrusted_destination", "provider_failed",
   ];
-  return new AuthError(typeof code === "string" && allowed.includes(code) ? code as AuthErrorCode : fallback);
+  // The constructor re-validates scopes from another SDK copy's AuthError.
+  return typeof code === "string" && allowed.includes(code)
+    ? new AuthError(code as AuthErrorCode, Array.isArray(requiredScopes) ? requiredScopes : undefined)
+    : new AuthError(fallback);
 }
 
 export interface Credential {
@@ -616,10 +619,10 @@ const defaults: AuthProvider = {
     validateResource(resource, context.url, options);
     const issuer = secureUrl(client.issuer, options);
     if (issuer.search) error("invalid issuer");
-    if (
-      !client.clientId ||
-      !["authorization_code_pkce", "client_credentials"].includes(client.flow)
-    )
+    // Pre-registered clients only: without the managed store, coordination and secret
+    // hook, this provider never uses CIMD or registers, so no client is unavailable.
+    if (!client.clientId) throw new AuthError("credential_unavailable");
+    if (!["authorization_code_pkce", "client_credentials"].includes(client.flow))
       error("invalid client configuration");
     const requiredScopes =
       challengeParameter(context.challenge, "scope")

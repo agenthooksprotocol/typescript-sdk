@@ -13,6 +13,12 @@ export interface LoginState {
   readonly verifier: string;
 }
 
+const invalidClients = new WeakSet<AuthError>();
+/** A token or authorization endpoint `invalid_client` OAuth error, so the client itself was rejected. */
+export function isInvalidClient(error: unknown): boolean {
+  return error instanceof AuthError && invalidClients.has(error);
+}
+
 async function protect<T>(operation: Operation, work: () => Promise<T>, grant: "code" | "refresh" | "client_credentials" = "code"): Promise<T> {
   try {
     active(operation);
@@ -26,7 +32,12 @@ async function protect<T>(operation: Operation, work: () => Promise<T>, grant: "
     const classified = classifyAuthError(error);
     if (classified.code !== "provider_failed") throw classified;
     if (error instanceof oauth.ResponseBodyError || error instanceof oauth.AuthorizationResponseError) {
-      if (error.error === "invalid_client" || error.error === "unauthorized_client") throw new AuthError("credential_unavailable");
+      if (error.error === "invalid_client") {
+        const rejected = new AuthError("credential_unavailable");
+        invalidClients.add(rejected);
+        throw rejected;
+      }
+      if (error.error === "unauthorized_client") throw new AuthError("credential_unavailable");
       if (error.error === "access_denied") throw new AuthError("access_denied");
       if (error.error === "invalid_grant") {
         throw new AuthError(grant === "refresh" ? "refresh_rejected" : grant === "code" ? "interaction_required" : "credential_unavailable");
@@ -42,7 +53,7 @@ async function protect<T>(operation: Operation, work: () => Promise<T>, grant: "
 }
 
 function client(target: ResolvedTarget): oauth.Client {
-  return { client_id: target.client.clientId };
+  return { client_id: target.client.clientId! };
 }
 
 function authentication(target: ResolvedTarget): oauth.ClientAuth {
@@ -138,7 +149,7 @@ function literalLoopback(authority: string, hostname: string): boolean {
     octets.every(octet => /^(?:0|[1-9][0-9]{0,2})$/.test(octet) && Number(octet) <= 255);
 }
 
-function pkce(target: ResolvedTarget): void {
+export function pkce(target: ResolvedTarget): void {
   if (target.client.flow !== "authorization_code_pkce" ||
       !target.metadata.code_challenge_methods_supported?.includes("S256") ||
       (target.metadata.grant_types_supported !== undefined &&
@@ -173,7 +184,7 @@ export function startLogin(target: ResolvedTarget, options: ManagedOAuthOptions,
     const state = oauth.generateRandomState();
     const verifier = oauth.generateRandomCodeVerifier();
     url.searchParams.set("response_type", "code");
-    url.searchParams.set("client_id", target.client.clientId);
+    url.searchParams.set("client_id", target.client.clientId!);
     url.searchParams.set("redirect_uri", target.client.redirectUri!);
     url.searchParams.set("scope", target.client.scopes.join(" "));
     url.searchParams.set("resource", target.client.resource);

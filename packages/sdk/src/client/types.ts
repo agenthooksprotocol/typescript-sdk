@@ -11,6 +11,7 @@ import type {
 import type { Attachment, AttachmentContent } from "./content.js";
 import type { StdioSpawn } from "./transport.js";
 import type { BoundaryContracts } from "./contracts.js";
+import type { AuthErrorCode, AuthRecovery } from "./auth-routing.js";
 import type {
   Capabilities,
   ContentReference,
@@ -120,7 +121,19 @@ export interface DeliveryDiagnostic {
   code: DeliveryDiagnosticCode;
   failurePolicy?: "fail-open" | "fail-closed";
   syntheticDenial: boolean;
+  /**
+   * Present when endpoint authentication caused the failure: the safe `AuthError`
+   * code, its recovery and validated required scopes. `recovery: "login"` means
+   * the host should run its explicit login (`prepare`) for `backendId`.
+   */
+  auth?: DeliveryAuthFailure;
 }
+/** Redacted `AuthError` fields; never tokens, URLs, bodies or provider causes. */
+export type DeliveryAuthFailure = Readonly<{
+  code: AuthErrorCode;
+  recovery: AuthRecovery;
+  requiredScopes?: readonly string[];
+}>;
 /** Immutable JSON snapshot, including nested candidate values and extensions. */
 // Bound recursive JSON extension types for TypeScript; runtime freezing has no
 // depth limit. Six levels cover the canonical containers and nested JSON data.

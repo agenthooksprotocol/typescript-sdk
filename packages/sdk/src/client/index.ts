@@ -4,7 +4,7 @@ export { SettlementDecodeError } from "./settlement.js";
 export { ConfigurationError } from "./types.js";
 export type {
   Event, EventType, HarnessValue, HarnessEvent, BoundaryInput, EventInput,
-  HooksOptions, BoundaryOptions, DeliveryDiagnostic,
+  HooksOptions, BoundaryOptions, DeliveryDiagnostic, DeliveryAuthFailure,
   BoundaryState, BoundaryResult, AcceptedResponse, ConfigurationIssue,
 } from "./types.js";
 export { Type } from "@sinclair/typebox";

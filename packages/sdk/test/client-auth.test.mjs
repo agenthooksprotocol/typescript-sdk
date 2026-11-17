@@ -256,6 +256,17 @@ test("absent binding starts anonymous and discovers on a 401 without a challenge
   assert.equal(tokens[0].get("grant_type"), "client_credentials");
 });
 
+test("the built-in provider uses only pre-registered clients: none is credential_unavailable", async () => {
+  const { provider, requests } = fixture({
+    selectClient: () => { const { clientId: _clientId, ...rest } = binding; return rest; },
+  });
+  await assert.rejects(provider.authenticate({ url, challenged: true }), (error) => {
+    assert.equal(error.code, "credential_unavailable");
+    return true;
+  });
+  assert.ok(requests.every((request) => !String(request.url ?? request).includes("register")));
+});
+
 test("discovery requires explicit issuer selection but destination policy is an optional restriction", async () => {
   const { provider } = fixture({ validateDestination: undefined });
   await assert.rejects(
