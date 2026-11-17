@@ -125,6 +125,11 @@ function fixture({ client: overrides = {}, metadata = {}, options: extra = {}, s
 }
 function withoutSelect({ select: _select, ...client }) { return client; }
 const cc = (rest = {}) => ({ client: { flow: 'client_credentials', redirectUri: undefined, ...rest } });
+/** Wait for unawaited background work (proactive renewal) to settle. */
+const until = async (predicate, ms = 2000) => {
+  for (const end = Date.now() + ms; !predicate() && Date.now() < end;) await new Promise(resolve => setTimeout(resolve, 5));
+  await new Promise(resolve => setTimeout(resolve, 20));
+};
 const errorCode = code => error => { assert.equal(error.code, code); return true; };
 const clientIdOf = pending => new URL(pending.authorizationUrl).searchParams.get('client_id');
 
@@ -655,6 +660,7 @@ test('[cc-proactive-reregistration-before-expiry] inside the margin a successful
   f.expire();
   const before = f.state.requests.length;
   assert.equal((await f.provider().credential(f.context)).token, 'access-2');
+  await until(() => f.registrations()[0].clientId === 'dcr-2');
   assert.deepEqual(f.state.requests.slice(before).map(({ purpose }) => purpose), ['token', 'registration']);
   assert.equal(f.state.tokenCalls.at(-1).id, 'dcr-1', 'the operation used the current client');
   assert.equal(f.registrations()[0].clientId, 'dcr-2');
@@ -665,10 +671,12 @@ test('[cc-proactive-reregistration-before-expiry] inside the margin a successful
   capped.patchRecord({ registeredAt: Date.now() - 100 * 3600_000 });
   capped.expire();
   await capped.provider().credential(capped.context);
+  await until(() => false, 30);
   assert.equal(capped.state.registrations.length, 1);
   capped.patchRecord({ clientSecretExpiresAt: now + 3500 });
   capped.expire();
   await capped.provider().credential(capped.context);
+  await until(() => capped.state.registrations.length === 2);
   assert.equal(capped.state.registrations.length, 2);
 });
 
@@ -682,6 +690,8 @@ test('[proactive-reregistration-once-across-processes] concurrent renewals insid
   f.patchRecord({ registeredAt: Date.now() - 1_000_000 });
   f.expire();
   await Promise.all(contexts.map(context => f.provider(managedOAuth(f.options)).credential(context)));
+  await until(() => f.registrations()[0].clientId === 'dcr-2', 2000);
+  await until(() => false, 50);
   assert.equal(f.state.tokenCalls.length, 6, 'each grant acquired');
   assert.equal(f.state.registrations.length, 2, 'exactly one renewal');
 });
@@ -695,6 +705,7 @@ test('[proactive-renewal-failure-keeps-current-registration] a failed renewal ad
   f.state.register = () => new Response('', { status: 429, headers: { 'retry-after': '30' } });
   f.expire();
   assert.equal((await f.provider().credential(f.context)).token, 'access-2');
+  await until(() => f.markers().length === 1);
   assert.equal(f.markers()[0].attempts, 1);
   const [current] = f.registrations();
   assert.deepEqual([current.clientId, current.secretRef], [record.clientId, record.secretRef]);
@@ -702,6 +713,7 @@ test('[proactive-renewal-failure-keeps-current-registration] a failed renewal ad
   // The marker suppresses the next renewal; the current client keeps acquiring.
   f.expire();
   assert.equal((await f.provider().credential(f.context)).token, 'access-3');
+  await until(() => false, 30);
   assert.equal(f.state.registrations.length, 2);
   assert.deepEqual(f.state.tokenCalls.map(call => call.id), ['dcr-1', 'dcr-1', 'dcr-1']);
 });
@@ -868,4 +880,46 @@ test('a registration sent before the caller aborts is still persisted with its s
     assert.equal(f.state.tokenCalls[0].id, 'dcr-http');
     assert.equal(received, 1);
   } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+});
+
+test('a slow proactive renewal never fails the operation; it completes later under the commit budget', async () => {
+  const { createServer } = await import('node:http');
+  let received = 0;
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request);
+    received++;
+    await new Promise(resolve => setTimeout(resolve, 200));
+    response.setHeader('content-type', 'application/json');
+    response.statusCode = 201;
+    response.end(JSON.stringify({ client_id: 'dcr-renewed', client_secret: 'secret-renewed' }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const rejections = [];
+  const onRejection = reason => rejections.push(reason);
+  process.on('unhandledRejection', onRejection);
+  try {
+    const f = fixture(cc());
+    f.state.expiresAt = Math.floor(Date.now() / 1000) + 100;
+    await f.oauth.prepare(f.context, budget());
+    f.patchRecord({ registeredAt: Date.now() - 1_000_000 });
+    f.expire();
+    const inner = f.options.policyFetch;
+    const oauth = managedOAuth({ ...f.options, policyFetch: (url, init, context) => url.endsWith('/register')
+      ? fetch(`http://127.0.0.1:${server.address().port}/register`, init) : inner(url, init, context) });
+    const started = Date.now();
+    const credential = await oauth.provider({ budget: () => budget(100) }).credential(f.context);
+    assert.equal(credential.token, 'access-2');
+    assert.ok(Date.now() - started < 150, 'the operation does not wait for the renewal');
+    assert.equal(f.registrations()[0].clientId, 'dcr-1');
+    await until(() => f.registrations()[0].clientId === 'dcr-renewed');
+    const [record] = f.registrations();
+    assert.equal(record.clientId, 'dcr-renewed');
+    assert.equal(f.secrets.values.get(record.secretRef), 'secret-renewed');
+    assert.equal(received, 1);
+    assert.deepEqual(f.markers(), []);
+    assert.deepEqual(rejections, []);
+  } finally {
+    process.off('unhandledRejection', onRejection);
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+  }
 });

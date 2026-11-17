@@ -351,12 +351,16 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     if (mode !== "host" && target.client.flow !== "client_credentials") throw new AuthError("interaction_required", target.client.requiredScopes);
     return withRegistration(target, await registration(target, registered.key, registered.digest, mode, operation, "ensure"));
   }
-  /** Proactive client-secret renewal; a failure only advances the marker. */
-  async function renewRegistration(target: Selected, mode: Mode, operation: Operation): Promise<void> {
+  /**
+   * Proactive client-secret renewal, started after the token is committed and never
+   * awaited: it runs under the commit budget, holding the registration lock, so a slow
+   * or failed renewal never affects the operation; a failure only advances the marker.
+   */
+  function renewRegistration(target: Selected, mode: Mode): void {
     const registered = target.registration;
     if (!registered || target.client.flow !== "client_credentials" || !renewalDue(registered.record)) return;
-    try { await registration(target, registered.key, registered.digest, mode, operation, "renew"); }
-    catch { /* The current registration stays in use until it is actually unusable. */ }
+    void registration(target, registered.key, registered.digest, mode, commit(), "renew")
+      .catch(() => { /* The current registration stays in use until it is actually unusable. */ });
   }
 
   /** The recorded selection applies only to the issuer it was made for. */
@@ -464,7 +468,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         if (target.client.flow === "client_credentials") {
           const token = await acquireClientCredentials(acquisition(target, current), options, operation);
           const saved = await saveGrant(key, current?.generation, token, commit());
-          await renewRegistration(target, mode, operation);
+          renewRegistration(target, mode);
           return ready(saved, key, binding, target, required);
         }
         // A refresh can never broaden a grant, so it only helps when the requirement is already covered.
