@@ -272,9 +272,11 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     const live = existing && existing.expiresAt > Date.now() ? existing : undefined;
     if (live && live.grantKey === key && live.client.redirectUri === target.client.redirectUri &&
         within(wanted, live.client.scopes)) return handle(live, storeKey);
-    // Superseding grows both the requested scopes and the stored ceiling, so alternating callers converge.
-    const requested = [...new Set([...(live?.client.scopes ?? []), ...wanted])];
-    const stored = [...new Set([...(live ? ceilingOf(live.client as ClientConfig) : []), ...ceiling])];
+    // With the same grant key and redirect, superseding grows both the requested scopes
+    // and the stored ceiling, so alternating callers converge. Otherwise start afresh.
+    const merge = live && live.grantKey === key && live.client.redirectUri === target.client.redirectUri ? live : undefined;
+    const requested = [...new Set([...(merge?.client.scopes ?? []), ...wanted])];
+    const stored = [...new Set([...(merge ? ceilingOf(merge.client as ClientConfig) : []), ...ceiling])];
     const { clientSecret: _secret, ...client } = target.client;
     // The stored ceiling bounds the grant recorded on completion.
     const loginTarget = { ...target, client: { ...client, scopes: requested, allowedScopes: stored } };

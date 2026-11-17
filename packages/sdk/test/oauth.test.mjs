@@ -495,8 +495,9 @@ for (const vector of lifecycleVectors.token_responses) {
       Object.assign(f.client, { scopes: vector.requested.filter(scope => vector.allowed.includes(scope)), allowedScopes: vector.allowed, requiredScopes: vector.required });
       f.state.tokenResponse = vector.response;
       const pending = await f.prepare();
-      assert.deepEqual(new URL(pending.authorizationUrl).searchParams.get('scope').split(' ').sort(),
-        [...new Set([...vector.previous_granted, ...vector.requested.filter(scope => vector.allowed.includes(scope)), ...vector.required])].sort());
+      const wire = new URL(pending.authorizationUrl).searchParams.get('scope').split(' ').sort();
+      assert.deepEqual(wire, [...vector.wire_request].sort());
+      assert.deepEqual(wire, [...new Set([...vector.previous_granted, ...[...vector.requested, ...vector.required].filter(scope => vector.allowed.includes(scope))])].sort());
       complete = f.managed.complete(pending, f.callback(pending), budget());
     } else {
       const pending = await f.prepare();

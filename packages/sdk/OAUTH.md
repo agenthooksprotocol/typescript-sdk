@@ -89,8 +89,9 @@ persisted authorization-server metadata, fetching only the stored issuer's
 metadata if that is missing (`discovery_failed` on failure). A known binding that
 cannot be renewed, including one needing login (`interaction_required`), fails
 the operation. It is anonymous only when no binding is stored or the host policy
-refuses (`selectClient` throwing). Full discovery runs only on a cache miss, host
-`prepare` or challenge handling; `prepare` rebuilds the binding metadata. Uploads use their
+refuses (`selectClient` throwing). Full discovery runs only on a cache miss,
+challenge handling, or a host `prepare` that must exchange or create a login; a
+`prepare` with a usable cached token makes no metadata calls. Uploads use their
 own bindings and isolated storage keys by default.
 
 ## Host-driven PKCE
@@ -112,9 +113,10 @@ the handle may be serialized and completed or cancelled from any process sharing
 the store. Its lifetime is fixed at creation by `loginLifetimeMs` (default and
 maximum ten minutes), independent of the creating budget or its cancellation.
 A later `prepare` reuses it when the grant key and redirect match and the new
-requested plus required scopes are covered; otherwise it supersedes it with a
-login for old ∪ ((new requested ∪ new required) ∩ new ceiling), storing the union
-of both ceilings. A login ends by
+requested plus required scopes are covered; otherwise it supersedes it. With the
+same grant key and redirect, the new login requests old ∪ ((new requested ∪ new
+required) ∩ new ceiling) and stores the union of both ceilings; otherwise it uses
+only the new caller's scopes and ceiling. A login ends by
 completion (a claimed valid callback, including consent denial), supersede,
 `cancel` or expiry; a callback for an ended login fails `interaction_required`.
 Redirect, state and issuer are validated before the login is claimed, so a stray

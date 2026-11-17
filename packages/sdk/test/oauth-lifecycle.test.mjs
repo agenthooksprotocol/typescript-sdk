@@ -99,6 +99,14 @@ test('[pending-login-fixed-lifetime] lifetime is fixed at creation and survives 
   await assert.rejects(short.complete(expiring, f.callback(expiring), budget()), { code: 'interaction_required' });
 });
 
+test('[cached-token-metadata-outage] host prepare serves a usable cached token without metadata calls', async () => {
+  const f = fixture();
+  await f.login();
+  const metadata = f.state.metadataCalls;
+  assert.equal((await managedOAuth(f.options).prepare({ ...f.context, challenged: false }, budget())).credential.token, 'access-1');
+  assert.equal(f.state.metadataCalls, metadata);
+});
+
 test('[pending-login-reuse] a later prepare with covered scopes reuses the login regardless of its deadline', async () => {
   const f = fixture({ allowedScopes: ['deliver', 'audit'] });
   const pending = await f.oauth.prepare(f.context, budget(undefined, 60_000));
@@ -119,7 +127,13 @@ test('[pending-login-supersede] a different redirect supersedes; the old callbac
   const second = await f.oauth.prepare(f.context, budget());
   assert.notEqual(second.id, first.id);
   await assert.rejects(f.oauth.complete(first, firstCallback, budget()), { code: 'interaction_required' });
-  assert.equal((await f.oauth.complete(second, f.callback(second), budget())).credential.token, 'access-1');
+  // A different redirect starts from the new caller's scopes and ceiling alone.
+  Object.assign(f.client, { scopes: ['audit'], allowedScopes: ['audit'], redirectUri: 'https://app.example/third-callback' });
+  const third = await f.oauth.prepare(f.context, budget());
+  assert.deepEqual(f.scopeOf(third), ['audit']);
+  assert.deepEqual(f.store.pending()[0].client.allowedScopes, ['audit']);
+  f.state.scope = 'audit';
+  assert.equal((await f.oauth.complete(third, f.callback(third), budget())).credential.token, 'access-1');
 });
 
 test('[pending-login-supersede-scope-union] supersede grows requested scopes and the stored ceiling so callers converge', async () => {
