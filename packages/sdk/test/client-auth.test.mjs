@@ -585,3 +585,31 @@ test("built-in refresh with an omitted scope inherits the previous grant, not th
     assert.equal(stored[0].refreshToken, "r");
   }
 });
+
+// Initial exchanges with a host-selected ceiling: narrowing, broadening and required scopes.
+const ceilingVectors = JSON.parse(readFileSync(new URL("../testdata/sdk-auth-lifecycle.json", import.meta.url), "utf8"))
+  .token_responses.filter((vector) => ["allowed-added-scope", "narrowed-scope", "unallowed-added-scope-ignored", "required-scope-missing"].includes(vector.id));
+for (const vector of ceilingVectors) {
+  test(`built-in auth intersects initial grants with the selected ceiling: ${vector.id}`, async () => {
+    const stored = [];
+    const { provider, tokens } = fixture({
+      async fetch(input, init = {}) {
+        const target = String(input);
+        if (target.includes("oauth-protected-resource")) return Response.json({ resource, authorization_servers: [issuer] });
+        if (target.includes("well-known")) return Response.json(metadata);
+        tokens.push(new URLSearchParams(init.body));
+        return Response.json(vector.response);
+      },
+      selectClient: () => ({ ...binding, scopes: vector.requested, allowedScopes: vector.allowed, requiredScopes: vector.required }),
+      setToken: (_key, value) => { stored.push(value); },
+      getToken: () => undefined,
+      deleteToken() {},
+    });
+    const result = provider.authenticate({ url, challenged: true });
+    if (vector.usable) assert.equal((await result).token, vector.response.access_token);
+    else await assert.rejects(result, (error) => classifyAuthError(error).code === vector.error);
+    assert.equal(tokens.length, 1);
+    assert.deepEqual([...tokens[0].get("scope").split(" ")].sort(), [...new Set([...vector.requested, ...vector.required])].sort());
+    assert.deepEqual([...stored[0].scopes].sort(), [...vector.granted].sort());
+  });
+}
