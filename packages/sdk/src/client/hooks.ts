@@ -50,7 +50,23 @@ import {
   type HooksOptions,
   type DeliveryDiagnostic,
   type DeliveryAuthFailure,
+  type ConfigurationSkipCode,
+  type InitializationDiagnostic,
 } from "./types.js";
+
+/** A backend skipped as `configuration_unavailable`, awaiting a re-attempt. */
+type UnavailableBackend = {
+  readonly index: number;
+  readonly backend: Backend;
+  /** Consecutive failed attempts since initialization or the last host prepare. */
+  failures: number;
+  /** Earliest backoff re-attempt; undefined when only a host prepare re-attempts. */
+  retryAt: number | undefined;
+  /** A successful host prepare for the event endpoint makes it eligible at once. */
+  prepared: boolean;
+};
+/** JSON-RPC method-not-found: the backend has no configuration advertisement. */
+const METHOD_NOT_FOUND = -32601;
 
 type DeliveryFailure = Omit<DeliveryDiagnostic, "code"> & {
   code: "PREPARATION_FAILED" | "DELIVERY_FAILED" | "DEADLINE_EXCEEDED" | "INTERRUPTED";
@@ -134,12 +150,22 @@ type ElicitationLifetime = {
 /** Configuration-driven, harness-facing AHP client. No host operation is executed. */
 export class Hooks {
   readonly initialized: Promise<void>;
-  /** Sanitized registration outcomes; available after initialized settles. */
-  /** `auth` is present when endpoint authentication made the configuration unavailable. */
-  readonly initializationDiagnostics: { backendId: string; code: "CONFIGURATION_UNAVAILABLE" | "NO_APPLICABLE_SUBSCRIPTIONS" | "CONFIGURATION_LOCAL_SECRET"; auth?: DeliveryAuthFailure }[] = [];
+  /**
+   * Sanitized configuration-discovery skips, appended in order: one per skipped
+   * attempt, at initialization and at each later re-attempt. Available after
+   * initialized settles. `auth` is present when endpoint authentication made the
+   * configuration unavailable.
+   */
+  readonly initializationDiagnostics: InitializationDiagnostic[] = [];
   private readonly lifetime = new AbortController();
   private readonly options: HooksOptions;
   private readonly routes: Route[] = [];
+  /** Routes per backend in registration order; `routes` is their atomic flattening. */
+  private readonly groups: Route[][] = [];
+  private readonly unavailable = new Map<string, UnavailableBackend>();
+  /** The single shared admission re-attempting unavailable backends, while running. */
+  private admission: Promise<void> | undefined;
+  private unsubscribePrepared: (() => void) | undefined;
   private readonly managers = new Set<ContentManager>();
   private readonly pending = new Set<Promise<unknown>>();
   private readonly provider;
@@ -175,6 +201,11 @@ export class Hooks {
       }),
     };
     this.provider = options.auth ?? auth();
+    if (typeof this.provider.onPrepared === "function") {
+      try {
+        this.unsubscribePrepared = this.provider.onPrepared(endpoint => this.prepared(endpoint));
+      } catch { /* A provider without working notifications only loses prepare re-attempts. */ }
+    }
     // Explicit subscriptions retain synchronous routing and lazy transport setup.
     // Omitted subscriptions discover defaults during initialized, before dispatch.
     // Configuration failures retain the Promise contract.
@@ -217,6 +248,13 @@ export class Hooks {
       path,
       code: "INVALID_REGISTRATION",
     }));
+    const retry = this.options.configurationRetry;
+    if (retry !== undefined) {
+      const valid = (value: unknown) => value === undefined || (Number.isSafeInteger(value) && (value as number) > 0);
+      if (!retry || typeof retry !== "object" || !valid(retry.initialDelayMs) || !valid(retry.maxDelayMs) ||
+          (retry.initialDelayMs ?? 30_000) > (retry.maxDelayMs ?? 3_600_000))
+        issues.push({ path: "configurationRetry", code: "INVALID_LIMIT" });
+    }
     for (const key of ["maxContentBytes", "observationTimeoutMs", "maxConcurrentUploads", "configurationTimeoutMs"] as const) {
       const value = this.options[key];
       if (
@@ -326,37 +364,19 @@ export class Hooks {
       }
     }
     if (issues.length) throw new ConfigurationError(issues);
-    const groups: Route[][] = [];
+    const groups = this.groups;
     const discoveries: Promise<void>[] = [];
-    for (const backend of registration.hooks) {
+    for (const [position, backend] of registration.hooks.entries()) {
       this.deliveryHeaders.set(backend.id, backend.transport.type === "http"
         ? validateHeaders(backend.transport.headers) : []);
-      // Hooks resolves headers at the shared event/upload delivery boundary.
-      const transportBackend = structuredClone(backend);
-      if (transportBackend.transport.type === "http") delete transportBackend.transport.headers;
-      const transport = new BackendTransport(transportBackend, (url, init) =>
-        this.fetchAuthenticated(
-          url,
-          init,
-          backend.authentication,
-          "event",
-          backend.id,
-        ),
-        {
-          inheritEnvironment: this.options.inheritEnvironment === true,
-          ...(this.options.spawn ? { spawn: this.options.spawn } : {}),
-          ...(this.options.environment ? { environment: this.options.environment } : {}),
-        },
-      );
       const group: Route[] = [];
       groups.push(group);
-      const add = (subscriptions: readonly Subscription[]) => {
-        subscriptions.forEach((subscription, index) => group.push({ backend, subscription, index, transport }));
-      };
       if (backend.subscriptions !== undefined) {
-        add(backend.subscriptions as Subscription[]);
+        const transport = this.transportFor(backend);
+        (backend.subscriptions as Subscription[]).forEach((subscription, index) =>
+          group.push({ backend, subscription, index, transport }));
       } else {
-        discoveries.push(this.discoverConfiguration(backend, transport).then(add));
+        discoveries.push(this.discoverRoutes(position, backend).then(routes => { group.push(...routes); }));
       }
     }
     const install = () => { this.routes.push(...groups.flat()); };
@@ -364,7 +384,95 @@ export class Hooks {
     install();
   }
 
-  private async discoverConfiguration(backend: Backend, transport: BackendTransport): Promise<Subscription[]> {
+  private transportFor(backend: Backend): BackendTransport {
+    // Hooks resolves headers at the shared event/upload delivery boundary.
+    const transportBackend = structuredClone(backend);
+    if (transportBackend.transport.type === "http") delete transportBackend.transport.headers;
+    return new BackendTransport(transportBackend, (url, init) =>
+      this.fetchAuthenticated(
+        url,
+        init,
+        backend.authentication,
+        "event",
+        backend.id,
+      ),
+      {
+        inheritEnvironment: this.options.inheritEnvironment === true,
+        ...(this.options.spawn ? { spawn: this.options.spawn } : {}),
+        ...(this.options.environment ? { environment: this.options.environment } : {}),
+      },
+    );
+  }
+
+  /** Discover one backend's routes with a fresh transport; a skip yields none. */
+  private async discoverRoutes(position: number, backend: Backend): Promise<Route[]> {
+    const transport = this.transportFor(backend);
+    const subscriptions = await this.discoverConfiguration(position, backend, transport);
+    return subscriptions.map((subscription, index) => ({ backend, subscription, index, transport }));
+  }
+
+  /** Record a skip. Only `configuration_unavailable` is re-attempted before reinitialization. */
+  private skip(position: number, backend: Backend, code: ConfigurationSkipCode, failure?: DeliveryAuthFailure): void {
+    this.initializationDiagnostics.push({ backendId: backend.id, code, ...(failure ? { auth: failure } : {}) });
+    if (code !== "configuration_unavailable") {
+      this.unavailable.delete(backend.id);
+      return;
+    }
+    const failures = (this.unavailable.get(backend.id)?.failures ?? 0) + 1;
+    // Backoff only when there is no auth error or its recovery is retry: login,
+    // configure and none need a host prepare (or reinitialization) first.
+    const backoff = failure === undefined || failure.recovery === "retry";
+    const initial = this.options.configurationRetry?.initialDelayMs ?? 30_000;
+    const maximum = this.options.configurationRetry?.maxDelayMs ?? 3_600_000;
+    const delay = Math.min(maximum, initial * 2 ** Math.min(failures - 1, 52));
+    this.unavailable.set(backend.id, {
+      index: position, backend, failures, prepared: false,
+      retryAt: backoff ? Date.now() + delay : undefined,
+    });
+  }
+
+  /** A successful host prepare for a skipped backend's event endpoint resets its backoff. */
+  private prepared(endpoint: unknown): void {
+    if (this.lifetime.signal.aborted || typeof endpoint !== "object" || endpoint === null) return;
+    const { backendId, purpose, url } = endpoint as Partial<Record<"backendId" | "purpose" | "url", unknown>>;
+    if (purpose !== "event" || typeof backendId !== "string") return;
+    const entry = this.unavailable.get(backendId);
+    if (!entry || entry.backend.transport.type !== "http" || entry.backend.transport.url !== url) return;
+    entry.prepared = true;
+    entry.failures = 0;
+  }
+
+  /**
+   * The single shared admission: re-attempt due unavailable backends, then install
+   * every newly discovered route set in one synchronous step. Concurrent callers
+   * wait for the same operation, so none observes a partial route set; events
+   * admitted earlier are never replayed.
+   */
+  private admit(): Promise<void> {
+    if (this.admission) return this.admission;
+    const now = Date.now();
+    const due = [...this.unavailable.values()].filter(entry =>
+      entry.prepared || (entry.retryAt !== undefined && now >= entry.retryAt));
+    if (!due.length) return Promise.resolve();
+    for (const entry of due) entry.prepared = false;
+    const work = (async () => {
+      const discovered = await Promise.all(due.map(async entry =>
+        [entry, await this.discoverRoutes(entry.index, entry.backend)] as const));
+      this.lifetime.signal.throwIfAborted();
+      let changed = false;
+      for (const [entry, routes] of discovered) {
+        if (!routes.length) continue;
+        this.unavailable.delete(entry.backend.id);
+        this.groups[entry.index] = routes;
+        changed = true;
+      }
+      if (changed) this.routes.splice(0, this.routes.length, ...this.groups.flat());
+    })().finally(() => { this.admission = undefined; });
+    this.admission = work;
+    return work;
+  }
+
+  private async discoverConfiguration(position: number, backend: Backend, transport: BackendTransport): Promise<Subscription[]> {
     const budget = deadlineAfter(this.options.configurationTimeoutMs ?? 5000, this.lifetime.signal);
     let retained = false;
     try {
@@ -373,11 +481,20 @@ export class Hooks {
         params: { protocolVersion: PROTOCOL_VERSION },
       }, budget.signal);
       budget.check();
-      if (validateWire("configuration-response", response).length) throw new Error("Invalid configuration response");
+      const rpcError = (response as { error?: { code?: unknown } }).error;
+      if (rpcError !== undefined) {
+        // Method-not-found means no advertisement; any other JSON-RPC error is unavailable.
+        this.skip(position, backend, rpcError.code === METHOD_NOT_FOUND ? "configuration_invalid" : "configuration_unavailable");
+        return [];
+      }
+      if (validateWire("configuration-response", response).length) {
+        this.skip(position, backend, "configuration_invalid");
+        return [];
+      }
       const configuration = (response as { result: { configuration: Configuration } }).result.configuration;
       // A server may pick its upload destination, not which local secret is read.
       if (configuration.subscriptions.some(subscription => namesLocalSecret((subscription.upload as ContentUpload | undefined)?.auth))) {
-        this.initializationDiagnostics.push({ backendId: backend.id, code: "CONFIGURATION_LOCAL_SECRET" });
+        this.skip(position, backend, "configuration_local_secret");
         return [];
       }
       const subscriptions = (configuration.subscriptions as Subscription[]).flatMap(subscription => {
@@ -387,15 +504,20 @@ export class Hooks {
         return selected.length ? [{ ...subscription, events: selected.map(event => event.event) } as Subscription] : [];
       });
       if (!subscriptions.length) {
-        this.initializationDiagnostics.push({ backendId: backend.id, code: "NO_APPLICABLE_SUBSCRIPTIONS" });
+        this.skip(position, backend, "no_applicable_subscriptions");
         return [];
       }
       retained = true;
       return subscriptions;
     } catch (error) {
+      // Cancellation propagates and emits no skip diagnostic.
       if (this.lifetime.signal.aborted) throw error;
       const auth = authFailure(error);
-      this.initializationDiagnostics.push({ backendId: backend.id, code: "CONFIGURATION_UNAVAILABLE", ...(auth ? { auth } : {}) });
+      // Uncorrelated or malformed responses are invalid; transport, timeout, HTTP
+      // status and authentication failures are unavailable.
+      const invalid = auth === undefined && error instanceof HookOperationalError &&
+        (error.code === "MALFORMED_JSON_RPC" || error.code === "ID_MISMATCH" || error.code === "MALFORMED_JSON");
+      this.skip(position, backend, invalid ? "configuration_invalid" : "configuration_unavailable", auth);
       return [];
     } finally {
       budget.dispose();
@@ -564,6 +686,9 @@ export class Hooks {
       // Calls after close are misuse. Active calls return interruption evidence.
       this.lifetime.signal.throwIfAborted();
       await this.initialized;
+      // Re-attempt due skipped backends inside the single shared admission. A
+      // cancelled caller stops waiting; run() then reports the interruption.
+      await raceAbort(this.admit(), signal).catch(error => { if (!signal.aborted) throw error; });
       return this.run(type, input, options, signal, manager, exchange);
     })();
     this.pending.add(work);
@@ -1136,8 +1261,11 @@ export class Hooks {
     if (!this.closed) {
       for (const exchange of this.activeElicitations) exchange.retired = true;
       this.lifetime.abort(new Error("Hooks closed"));
+      this.unsubscribePrepared?.();
+      this.unavailable.clear();
       this.closed = (async () => {
         await this.initialized.catch(() => {});
+        await this.admission?.catch(() => {});
         await Promise.allSettled(
           [...new Set(this.routes.map((r) => r.transport))].map((t) =>
             t.close(),

@@ -96,7 +96,17 @@ export interface DeliveryAuthProvider {
    * authorize replay: Hooks decides whether a bounded retry is protocol-safe.
    */
   challenge(context: AuthChallengeContext): void | Promise<void>;
+  /**
+   * Optional: subscribe to successful host prepares (including a completed login)
+   * that made credentials available for an endpoint. Hooks uses it to re-attempt
+   * configuration discovery for a backend skipped as unavailable. Returns an
+   * unsubscribe function.
+   */
+  onPrepared?(listener: (endpoint: PreparedEndpoint) => void): () => void;
 }
+
+/** The endpoint a successful host prepare made credentials available for. */
+export type PreparedEndpoint = Readonly<{ backendId: string; purpose: "event" | "upload"; url: string }>;
 
 export interface OAuthClient {
   issuer: string;

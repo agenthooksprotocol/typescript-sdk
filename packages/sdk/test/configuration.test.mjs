@@ -148,7 +148,8 @@ for (const failure of ["unavailable", "malformed", "version", "correlation", "un
       assert.equal(client.subscribes(events.toolBefore), false);
       assert.equal(client.initializationDiagnostics.length, 1);
       assert.equal(client.initializationDiagnostics[0].code,
-        failure === "unsupported" ? "NO_APPLICABLE_SUBSCRIPTIONS" : "CONFIGURATION_UNAVAILABLE");
+        failure === "unsupported" ? "no_applicable_subscriptions"
+          : ["malformed", "version", "correlation"].includes(failure) ? "configuration_invalid" : "configuration_unavailable");
     } finally { await client.close(); }
   });
 }
@@ -217,7 +218,7 @@ test("concurrent discovery preserves registration order and isolates skipped bac
     await client.initialized;
     await client.toolBefore(input);
     assert.deepEqual(called, ["first", "last"]);
-    assert.deepEqual(client.initializationDiagnostics, [{ backendId: "test.missing", code: "CONFIGURATION_UNAVAILABLE" }]);
+    assert.deepEqual(client.initializationDiagnostics, [{ backendId: "test.missing", code: "configuration_unavailable" }]);
   } finally { await client.close(); }
 });
 
@@ -281,7 +282,7 @@ for (const [kind, binding] of [
       assert.equal(client.subscribes(events.toolBefore), false);
       assert.deepEqual(calls, ["https://backend.test/hooks"]);
       assert.deepEqual(resolved, []);
-      assert.equal(client.initializationDiagnostics[0].code, "CONFIGURATION_LOCAL_SECRET");
+      assert.equal(client.initializationDiagnostics[0].code, "configuration_local_secret");
     } finally { await client.close(); }
   });
 }
@@ -363,7 +364,237 @@ test("configuration-auth-diagnostic: an auth failure during discovery carries th
   try {
     await client.initialized;
     assert.equal(sent, 0);
-    assert.deepEqual(client.initializationDiagnostics, [{ backendId: "test.login", code: "CONFIGURATION_UNAVAILABLE",
+    assert.deepEqual(client.initializationDiagnostics, [{ backendId: "test.login", code: "configuration_unavailable",
       auth: { code: "interaction_required", recovery: "login", requiredScopes: ["read"] } }]);
+  } finally { await client.close(); }
+});
+
+// Skipped-backend diagnostics and re-attempts (server-driven configuration, "Skipped backends").
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const advertisement = message => Response.json({ jsonrpc: "2.0", id: message.id,
+  result: { protocolVersion: "draft", configuration: configuration() } });
+const accepted = message => Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "draft", effects: [] } });
+/** A host provider that notifies prepares, as managedOAuth's provider does. */
+function preparedProvider(credential = () => undefined) {
+  const listeners = new Set();
+  return {
+    provider: { credential, challenge() {}, onPrepared(listener) { listeners.add(listener); return () => listeners.delete(listener); } },
+    prepare: endpoint => { for (const listener of listeners) listener(endpoint); },
+    listeners,
+  };
+}
+const endpoint = (backendId = "test.backend", url = "https://backend.test/hooks", purpose = "event") => ({ backendId, purpose, url });
+
+test("[configuration-401-diagnostic-carries-auth-code] a 401 discovery with no usable grant reports the safe auth code", async () => {
+  const { AuthError } = await import("agenthooksprotocol/client");
+  let challenged = 0;
+  const provider = { credential() { return undefined; },
+    challenge() { challenged++; throw new AuthError("interaction_required"); } };
+  const client = new Hooks(registration(), { ...options(async () => new Response("secret-body access-secret", {
+    status: 401, headers: { "www-authenticate": 'Bearer resource_metadata="https://backend.test/.well-known/oauth-protected-resource"' } })),
+  auth: provider });
+  try {
+    await client.initialized;
+    assert.equal(challenged, 1);
+    assert.deepEqual(plainDiagnostics(client), [{ backendId: "test.backend", code: "configuration_unavailable",
+      auth: { code: "interaction_required", recovery: "login" } }]);
+    assert.doesNotMatch(JSON.stringify(client.initializationDiagnostics), /secret|Bearer|backend\.test/);
+  } finally { await client.close(); }
+  // Cancellation propagates and emits no skip diagnostic.
+  let start;
+  const started = new Promise(resolve => { start = resolve; });
+  const cancelled = new Hooks(registration(), { ...options(async (_url, init) => {
+    start();
+    return new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason)));
+  }), auth: provider });
+  await started;
+  await cancelled.close();
+  await assert.rejects(cancelled.initialized);
+  assert.deepEqual(cancelled.initializationDiagnostics, []);
+});
+function plainDiagnostics(client) { return JSON.parse(JSON.stringify(client.initializationDiagnostics)); }
+
+test("[configuration-unavailable-retried-after-prepare] a host prepare re-attempts at the next admission without backoff", async () => {
+  const { AuthError } = await import("agenthooksprotocol/client");
+  let authorized = false, discoveries = 0;
+  const called = [];
+  const host = preparedProvider(() => {
+    if (!authorized) throw new AuthError("interaction_required");
+    return { type: "bearer", token: "prepared" };
+  });
+  const provider = auth.compose({ oauth: host.provider });
+  const cfg = registration();
+  cfg.hooks[0].authentication = { type: "oauth", issuer: "https://issuer.test", resource: "https://backend.test",
+    clientId: "c", flow: "authorization_code_pkce", scopes: ["read"] };
+  const client = new Hooks(cfg, { ...options(async (_url, init) => {
+    const message = JSON.parse(init.body);
+    assert.equal(new Headers(init.headers).get("authorization"), "Bearer prepared");
+    if (message.method === "hooks/configuration") { discoveries++; return advertisement(message); }
+    called.push(message.params.event.id);
+    return accepted(message);
+  }), auth: provider });
+  try {
+    await client.initialized;
+    assert.equal(client.initializationDiagnostics[0].auth.recovery, "login");
+    await client.toolBefore(input);
+    assert.equal(discoveries, 0);
+    // A prepare for another backend, purpose or URL does not make this one eligible.
+    authorized = true;
+    host.prepare(endpoint("test.other"));
+    host.prepare(endpoint("test.backend", "https://backend.test/hooks", "upload"));
+    host.prepare(endpoint("test.backend", "https://backend.test/other"));
+    await client.toolBefore(input);
+    assert.equal(discoveries, 0);
+    host.prepare(endpoint());
+    const result = await client.toolBefore({ ...input, callId: "after-prepare" });
+    assert.equal(discoveries, 1);
+    assert.equal(called.length, 1, "the admitting event reaches the retried backend");
+    assert.equal(client.intercepts(events.toolBefore), true);
+    assert.equal(result.interrupted, false);
+    // Installed once: later admissions neither rediscover nor duplicate routes.
+    await client.toolBefore(input);
+    assert.equal(discoveries, 1);
+    assert.equal(called.length, 2);
+  } finally { await client.close(); }
+  assert.equal(host.listeners.size, 0, "close unsubscribes from prepare notifications");
+});
+
+test("[configuration-unavailable-backoff] an unavailable backend is re-attempted only after its doubling, capped backoff", async () => {
+  const { AuthError } = await import("agenthooksprotocol/client");
+  for (const cause of ["status", "retry-auth"]) {
+    const attempts = [];
+    let delivered = 0;
+    let failures = 0;
+    const credential = () => {
+      if (cause === "retry-auth" && failures < 3) { failures++; attempts.push(Date.now()); throw new AuthError("provider_failed"); }
+    };
+    const client = new Hooks(registration(), { ...options(async (_url, init) => {
+      const message = JSON.parse(init.body);
+      if (message.method !== "hooks/configuration") { delivered++; return accepted(message); }
+      attempts.push(Date.now());
+      return cause === "status" && attempts.length < 4 ? new Response(null, { status: 503 }) : advertisement(message);
+    }), auth: { credential, challenge() {} }, configurationRetry: { initialDelayMs: 60, maxDelayMs: 120 } });
+    try {
+      await client.initialized;
+      assert.equal(attempts.length, 1);
+      const expected = cause === "status" ? undefined : { code: "provider_failed", recovery: "retry" };
+      assert.deepEqual(plainDiagnostics(client)[0].auth, expected);
+      await client.toolBefore(input);
+      assert.equal(attempts.length, 1, "no re-attempt before the first backoff ends");
+      // Delays 60, 120, then capped at 120: each due admission makes one attempt.
+      for (const [wait, count] of [[80, 2], [60, 2], [80, 3], [60, 3], [80, 4]]) {
+        await sleep(wait);
+        await client.toolBefore(input);
+        assert.equal(attempts.length, count, `after waiting ${wait} ms`);
+      }
+      assert.ok(attempts[2] - attempts[1] >= 120 && attempts[3] - attempts[2] >= 120);
+      assert.equal(delivered, 1, "only the admission that installed the routes delivers");
+      assert.equal(client.initializationDiagnostics.length, 3);
+      assert.ok(client.initializationDiagnostics.every(diagnostic => diagnostic.code === "configuration_unavailable"));
+    } finally { await client.close(); }
+  }
+  await assert.rejects(new Hooks(registration(), { ...options(), configurationRetry: { initialDelayMs: 10, maxDelayMs: 5 } }).initialized,
+    error => error.issues?.[0].path === "configurationRetry");
+});
+
+test("[configuration-auth-failure-not-retried-on-backoff] login, configure and none recoveries wait for a host prepare", async () => {
+  const { AuthError } = await import("agenthooksprotocol/client");
+  for (const [code, recovery] of [["interaction_required", "login"], ["credential_unavailable", "configure"], ["access_denied", "none"]]) {
+    let attempts = 0, authorized = false;
+    const host = preparedProvider(() => {
+      attempts++;
+      if (!authorized) throw new AuthError(code);
+    });
+    const client = new Hooks(registration(), { ...options(async (_url, init) => advertisement(JSON.parse(init.body))),
+      auth: host.provider, configurationRetry: { initialDelayMs: 5, maxDelayMs: 5 } });
+    try {
+      await client.initialized;
+      assert.deepEqual(plainDiagnostics(client), [{ backendId: "test.backend", code: "configuration_unavailable", auth: { code, recovery } }]);
+      await sleep(30);
+      await client.toolBefore(input);
+      await sleep(30);
+      await client.toolBefore(input);
+      assert.equal(attempts, 1, `${recovery} is not re-attempted on backoff`);
+      assert.equal(client.intercepts(events.toolBefore), false);
+      authorized = true;
+      host.prepare(endpoint());
+      await client.toolBefore(input);
+      assert.equal(client.intercepts(events.toolBefore), true);
+    } finally { await client.close(); }
+  }
+});
+
+test("[configuration-invalid-not-retried] invalid, inapplicable and local-secret skips are never re-attempted", async () => {
+  const cases = {
+    "configuration_invalid": message => Response.json({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" } }),
+    "no_applicable_subscriptions": message => Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "draft",
+      configuration: { subscriptions: [{ mode: "observe", events: ["session.end"], content: { default: "metadata" } }] } } }),
+    "configuration_local_secret": message => Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "draft",
+      configuration: { subscriptions: [{ ...selected(), upload: upload({ type: "bearer", tokenEnv: "LOCAL" }) }] } } }),
+  };
+  for (const [code, respond] of Object.entries(cases)) {
+    let discoveries = 0;
+    const host = preparedProvider();
+    const client = new Hooks(registration(), { ...options(async (_url, init) => {
+      const message = JSON.parse(init.body);
+      if (message.method === "hooks/configuration") discoveries++;
+      return respond(message);
+    }), auth: host.provider, configurationRetry: { initialDelayMs: 5, maxDelayMs: 5 } });
+    try {
+      await client.initialized;
+      assert.deepEqual(plainDiagnostics(client), [{ backendId: "test.backend", code }]);
+      host.prepare(endpoint());
+      await sleep(30);
+      await client.toolBefore(input);
+      await client.toolBefore(input);
+      assert.equal(discoveries, 1, code);
+      assert.equal(client.initializationDiagnostics.length, 1);
+    } finally { await client.close(); }
+  }
+  // A JSON-RPC error other than method-not-found is unavailable, not invalid.
+  const unavailable = new Hooks(registration(), options(async (_url, init) =>
+    Response.json({ jsonrpc: "2.0", id: JSON.parse(init.body).id, error: { code: -32004, message: "Backend internal error" } })));
+  try {
+    await unavailable.initialized;
+    assert.deepEqual(plainDiagnostics(unavailable), [{ backendId: "test.backend", code: "configuration_unavailable" }]);
+  } finally { await unavailable.close(); }
+});
+
+test("[configuration-retry-atomic-routes] a retry installs complete routes in one step and never replays earlier events", async () => {
+  const cfg = registration();
+  cfg.hooks = ["first", "second"].map(name => ({ id: `test.${name}`, transport: { type: "http", url: `https://backend.test/${name}` } }));
+  let available = false, release, firstDiscovered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const firstDone = new Promise(resolve => { firstDiscovered = resolve; });
+  const delivered = [];
+  const client = new Hooks(cfg, { ...options(async (url, init) => {
+    const message = JSON.parse(init.body);
+    const name = new URL(url).pathname.slice(1);
+    if (message.method !== "hooks/configuration") { delivered.push([name, message.params.event.call.id]); return accepted(message); }
+    if (!available) return new Response(null, { status: 503 });
+    if (name === "second") await gate;
+    const response = advertisement(message);
+    if (name === "first") firstDiscovered();
+    return response;
+  }), configurationRetry: { initialDelayMs: 40, maxDelayMs: 40 } });
+  try {
+    await client.initialized;
+    assert.equal(client.initializationDiagnostics.length, 2);
+    await client.toolBefore({ ...input, callId: "before-retry" });
+    available = true;
+    await sleep(60);
+    const concurrent = [client.toolBefore({ ...input, callId: "admitting" }), client.toolBefore({ ...input, callId: "concurrent" })];
+    await firstDone;
+    await sleep(10);
+    // One backend's discovery finished, the other has not: no partial route set is visible.
+    assert.equal(client.intercepts(events.toolBefore), false);
+    assert.deepEqual(delivered, []);
+    release();
+    await Promise.all(concurrent);
+    assert.equal(client.intercepts(events.toolBefore), true);
+    const order = delivered.filter(([, id]) => id === "admitting").map(([name]) => name);
+    assert.deepEqual(order, ["first", "second"], "registration order is retained");
+    assert.deepEqual(delivered.filter(([, id]) => id === "before-retry"), [], "earlier events are not replayed");
+    assert.equal(delivered.length, 4);
   } finally { await client.close(); }
 });

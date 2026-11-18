@@ -1,5 +1,5 @@
 import { AuthError, normalizeAuthTarget, classifyAuthError } from "../client/auth.js";
-import type { AuthChallengeContext, DeliveryAuthContext, DeliveryAuthProvider, DeliveryCredential } from "../client/auth.js";
+import type { AuthChallengeContext, DeliveryAuthContext, DeliveryAuthProvider, DeliveryCredential, PreparedEndpoint } from "../client/auth.js";
 import { bearerParameters } from "../client/challenge.js";
 import { isPolicyRefusal, resolveTarget, type CachedBinding } from "./discovery.js";
 import {
@@ -602,15 +602,28 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     return Object.freeze({ type: "pending_login", authorizationUrl: record.authorizationUrl, expiresAt: record.expiresAt, key, id: record.id });
   }
 
+  // Successful host prepares (and completed logins) let Hooks re-attempt a backend
+  // whose configuration discovery was skipped as unavailable.
+  const preparedListeners = new Set<(endpoint: PreparedEndpoint) => void>();
+  function prepared(context: Pick<DeliveryAuthContext, "backendId" | "purpose" | "url">): void {
+    const endpoint: PreparedEndpoint = Object.freeze({ backendId: context.backendId, purpose: context.purpose, url: context.url });
+    for (const listener of [...preparedListeners]) {
+      try { listener(endpoint); } catch { /* A listener failure never fails the prepare. */ }
+    }
+  }
+
   async function prepare(input: DeliveryAuthContext, budget: Operation, prepareOptions: PrepareOptions = {}): Promise<PrepareResult> {
     const context = snapshotContext(input);
     const explicit = [...(prepareOptions.requiredScopes ?? [])];
     const force = prepareOptions.forceRegistration === true;
-    return run(budget, context.signal, async operation => await acquire(context, operation, "host", explicit, force) as PrepareResult);
+    const result = await run(budget, context.signal, async operation => await acquire(context, operation, "host", explicit, force) as PrepareResult);
+    if (result.type === "ready") prepared(context);
+    return result;
   }
 
   async function complete(pending: PendingLogin, callback: string, budget: Operation): Promise<Ready> {
-    return run(budget, undefined, async (operation) => {
+    let completed: DeliveryAuthContext | undefined;
+    const result: Ready = await run(budget, undefined, async (operation) => {
       if (!pending || typeof pending.key !== "string" || typeof pending.id !== "string" ||
           !pending.key.startsWith("ahp.oauth.pending:")) throw new AuthError("invalid_configuration");
       const record = await read(pending.key, "pending_login", operation);
@@ -668,8 +681,12 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         const latest = await read(record.grantKey, "grant", settle);
         return saveGrant(record.grantKey, latest?.generation, token, settle);
       }));
-      return ready(grant, record.grantKey, identity(context), current, record.client.requiredScopes ?? []);
+      const done: Ready = ready(grant, record.grantKey, identity(context), current, record.client.requiredScopes ?? []);
+      completed = context;
+      return done;
     });
+    if (completed) prepared(completed);
+    return result;
   }
 
   async function cancel(pending: PendingLogin, budget: Operation): Promise<void> {
@@ -726,6 +743,11 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
 
   function provider(host: { readonly budget: (context: DeliveryAuthContext) => Operation }): DeliveryAuthProvider {
     return {
+      onPrepared(listener) {
+        const subscription = (endpoint: PreparedEndpoint) => listener(endpoint);
+        preparedListeners.add(subscription);
+        return () => { preparedListeners.delete(subscription); };
+      },
       async credential(input) {
         const context = snapshotContext(input);
         const lookup = context.authentication === undefined && !context.challenged && context.challenge === undefined;
