@@ -568,6 +568,13 @@ test('[dcr-invalid-client-reregisters-once] invalid_client deletes the registrat
   await assert.rejects(f.provider().credential(f.context), errorCode('credential_unavailable'));
   assert.equal(f.state.registrations.length, 3);
   assert.deepEqual(f.registrations(), []);
+  // The repeat counts as a failed registration: no re-registration on every operation until the backoff passes.
+  const [marker] = f.markers();
+  assert.deepEqual([marker.attempts, marker.code], [1, 'credential_unavailable']);
+  for (const instance of [f.oauth, managedOAuth(f.options)]) {
+    await assert.rejects(f.provider(instance).credential(f.context), errorCode('credential_unavailable'));
+  }
+  assert.equal(f.state.registrations.length, 3);
 });
 
 test('[dcr-secret-not-in-token-record] the client secret is written only through the secret hook', async () => {

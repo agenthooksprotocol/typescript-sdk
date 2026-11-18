@@ -461,7 +461,13 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         const registered = target.registration;
         if (!registered?.record) throw error;
         await dropGeneration(registered.key, registered.record.generation);
-        if (replaced) throw new AuthError("credential_unavailable");
+        if (replaced) {
+          // Registrations are accepted but the clients rejected: back off like a failed registration.
+          const rejected = new AuthError("credential_unavailable");
+          await race(operation.signal, store.coordinate(registered.key, operation.signal, async () =>
+            failed(registered.key, await read(failureKey(registered.key), "registration_failure", operation), rejected)));
+          throw rejected;
+        }
         replaced = true;
         return attempt(withRegistration(target, await registration(target, registered.key, mode, operation)));
       }
