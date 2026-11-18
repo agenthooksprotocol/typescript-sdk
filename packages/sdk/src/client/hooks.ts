@@ -438,7 +438,12 @@ export class Hooks {
 
   /** Discover one backend's routes with a fresh transport; a skip yields none. */
   private async discoverRoutes(position: number, backend: Backend): Promise<Route[]> {
-    const transport = this.transportFor(backend);
+    let transport: BackendTransport;
+    try { transport = this.transportFor(backend); } catch {
+      // A transport that local configuration cannot build is invalid, never retried.
+      this.skip(position, backend, "configuration_invalid");
+      return [];
+    }
     this.attempts++;
     this.syncPrepared();
     const preparesBefore = this.prepares.get(backend.id) ?? 0;
@@ -453,7 +458,10 @@ export class Hooks {
   /** Record a skip. Only `configuration_unavailable` is re-attempted before reinitialization. */
   private skip(position: number, backend: Backend, code: ConfigurationSkipCode, failure?: DeliveryAuthFailure,
     preparesBefore = this.prepares.get(backend.id) ?? 0): void {
-    this.initializationDiagnostics.push({ backendId: backend.id, code, ...(failure ? { auth: failure } : {}) });
+    this.initializationDiagnostics.push({ backendId: backend.id, code, ...(failure ? {
+      authError: failure.code, recovery: failure.recovery,
+      ...(failure.requiredScopes ? { requiredScopes: failure.requiredScopes } : {}),
+    } : {}) });
     // Keep only the latest diagnostics per backend.
     const own = this.initializationDiagnostics.flatMap((diagnostic, index) => diagnostic.backendId === backend.id ? [index] : []);
     if (own.length > MAX_DIAGNOSTICS_PER_BACKEND) this.initializationDiagnostics.splice(own[0]!, 1);
@@ -570,10 +578,13 @@ export class Hooks {
       // Cancellation propagates and emits no skip diagnostic.
       if (this.lifetime.signal.aborted) throw error;
       const auth = authFailure(error);
-      // Uncorrelated or malformed responses are invalid; transport, timeout, HTTP
-      // status and authentication failures are unavailable.
+      // Uncorrelated or malformed responses and unbuildable local transport
+      // configuration are invalid; transport, timeout, HTTP status other than 200
+      // and authentication failures are unavailable. A stdio frame for another
+      // id is discarded by the transport, so it ends as a timeout.
       const invalid = auth === undefined && error instanceof HookOperationalError &&
-        (error.code === "MALFORMED_JSON_RPC" || error.code === "ID_MISMATCH" || error.code === "MALFORMED_JSON");
+        (error.code === "MALFORMED_JSON_RPC" || error.code === "ID_MISMATCH" || error.code === "MALFORMED_JSON" ||
+         error.code === "INVALID_CONFIG");
       skip(invalid ? "configuration_invalid" : "configuration_unavailable", auth);
       return [];
     } finally {

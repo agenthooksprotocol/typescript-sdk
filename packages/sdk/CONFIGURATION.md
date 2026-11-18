@@ -102,16 +102,16 @@ An explicit empty `subscriptions` array remains invalid and never enables discov
 
 Discovered subscriptions are restricted to the host's supported event/mode pairs, including expansion of existing wildcard selectors. The SDK does not convert an intercept subscription to observation or rewrite content, timeout, or failure-policy settings. If discovery fails or no subscriptions remain, that backend is skipped; other backends retain their registration order. There is no required-hook negotiation or application policy gate.
 
-Each skip appends `{ backendId, code, auth? }` to `initializationDiagnostics`, with one of the protocol's codes:
+Each skip appends `{ backendId, code, authError?, recovery?, requiredScopes? }` to `initializationDiagnostics`, with one of the protocol's codes:
 
 | Code | Cause | Re-attempted |
 | --- | --- | --- |
-| `configuration_unavailable` | Transport failure, timeout, non-200 HTTP status, a JSON-RPC error other than method-not-found, or endpoint authentication failure | Yes |
-| `configuration_invalid` | Method-not-found, or an uncorrelated, malformed or version-incompatible response | No |
+| `configuration_unavailable` | Transport failure, timeout, an HTTP status other than 200 (401/403 also carry the auth code), a JSON-RPC error other than method-not-found, or endpoint authentication failure | Yes |
+| `configuration_invalid` | A 200 response that is method-not-found, uncorrelated, malformed or version-incompatible, or a transport that local configuration cannot build | No |
 | `no_applicable_subscriptions` | A valid advertisement with no supported subscriptions | No |
 | `configuration_local_secret` | A discovered upload naming a local secret reference | No |
 
-`auth` is present when authentication caused the failure: the safe `AuthError` `code` and its `recovery`, as on a `DeliveryDiagnostic`. Diagnostics never contain credentials, response bodies or event content. Cancellation (closing the client) rejects `initialized` and emits no diagnostic.
+On stdio, a frame answering another request id is discarded, so a backend that never answers correctly times out as `configuration_unavailable`. When authentication caused the failure, `authError` is the safe `AuthError` code, `recovery` its paired recovery and `requiredScopes` any validated required scopes. Diagnostics never contain credentials, response bodies or event content. Cancellation (closing the client) rejects `initialized` and emits no diagnostic.
 
 A `configuration_unavailable` backend is re-attempted at a later event admission:
 

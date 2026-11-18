@@ -143,14 +143,17 @@ export type ConfigurationSkipCode =
   | "no_applicable_subscriptions"
   | "configuration_local_secret";
 /**
- * A backend skipped by configuration discovery. `auth` is present when endpoint
- * authentication made the configuration unavailable: its `code` and `recovery`
- * are the safe auth error code and paired recovery. Never credentials or bodies.
+ * A backend skipped by configuration discovery, in the protocol's shape. When
+ * endpoint authentication made the configuration unavailable, `authError` is the
+ * safe auth error code, `recovery` its paired recovery and `requiredScopes` any
+ * validated required scopes. Never credentials, response bodies or event content.
  */
 export interface InitializationDiagnostic {
   backendId: string;
   code: ConfigurationSkipCode;
-  auth?: DeliveryAuthFailure;
+  authError?: AuthErrorCode;
+  recovery?: AuthRecovery;
+  requiredScopes?: readonly string[];
 }
 /** Redacted `AuthError` fields; never tokens, URLs, bodies or provider causes. */
 export type DeliveryAuthFailure = Readonly<{

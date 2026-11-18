@@ -365,7 +365,7 @@ test("configuration-auth-diagnostic: an auth failure during discovery carries th
     await client.initialized;
     assert.equal(sent, 0);
     assert.deepEqual(client.initializationDiagnostics, [{ backendId: "test.login", code: "configuration_unavailable",
-      auth: { code: "interaction_required", recovery: "login", requiredScopes: ["read"] } }]);
+      authError: "interaction_required", recovery: "login", requiredScopes: ["read"] }]);
   } finally { await client.close(); }
 });
 
@@ -399,7 +399,7 @@ test("[configuration-401-diagnostic-carries-auth-code] a 401 discovery with no u
     await client.initialized;
     assert.equal(challenged, 1);
     assert.deepEqual(plainDiagnostics(client), [{ backendId: "test.backend", code: "configuration_unavailable",
-      auth: { code: "interaction_required", recovery: "login" } }]);
+      authError: "interaction_required", recovery: "login" }]);
     assert.doesNotMatch(JSON.stringify(client.initializationDiagnostics), /secret|Bearer|backend\.test/);
   } finally { await client.close(); }
   // Cancellation propagates and emits no skip diagnostic.
@@ -437,7 +437,7 @@ test("[configuration-unavailable-retried-after-prepare] a host prepare re-attemp
   }), auth: provider });
   try {
     await client.initialized;
-    assert.equal(client.initializationDiagnostics[0].auth.recovery, "login");
+    assert.equal(client.initializationDiagnostics[0].recovery, "login");
     await admit(client);
     assert.equal(discoveries, 0);
     // A prepare for another backend, purpose or URL does not make this one eligible.
@@ -479,8 +479,9 @@ test("[configuration-unavailable-backoff] an unavailable backend is re-attempted
     try {
       await client.initialized;
       assert.equal(attempts.length, 1);
-      const expected = cause === "status" ? undefined : { code: "provider_failed", recovery: "retry" };
-      assert.deepEqual(plainDiagnostics(client)[0].auth, expected);
+      const expected = cause === "status" ? {} : { authError: "provider_failed", recovery: "retry" };
+      const { backendId: _id, code: _code, ...authFields } = plainDiagnostics(client)[0];
+      assert.deepEqual(authFields, expected);
       await admit(client);
       assert.equal(attempts.length, 1, "no re-attempt before the first backoff ends");
       // Delays 60, 120, then capped at 120: each due admission makes one attempt.
@@ -513,7 +514,7 @@ test("[configuration-auth-failure-not-retried-on-backoff] login, configure and n
       auth: host.provider, configurationRetry: { initialDelayMs: 5, maxDelayMs: 5 } });
     try {
       await client.initialized;
-      assert.deepEqual(plainDiagnostics(client), [{ backendId: "test.backend", code: "configuration_unavailable", auth: { code, recovery } }]);
+      assert.deepEqual(plainDiagnostics(client), [{ backendId: "test.backend", code: "configuration_unavailable", authError: code, recovery }]);
       await sleep(30);
       await admit(client);
       await sleep(30);
@@ -744,4 +745,42 @@ test("a hung re-attempt never holds delivery to other backends", async () => {
     assert.equal(concurrent.interrupted, false);
     assert.deepEqual(delivered, [["enforced", "triggering"], ["enforced", "concurrent"]]);
   } finally { await client.close(); }
+});
+
+for (const lifecycle of ["persistent", "per_event"]) {
+  test(`stdio ${lifecycle} discovery discards an id-mismatched frame and times out as unavailable`, async () => {
+    const script = `require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+      const request = JSON.parse(line);
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 'other-' + request.id, result: { protocolVersion: 'draft',
+        configuration: ${JSON.stringify(configuration())} } }) + '\\n');
+    });`;
+    const cfg = registration();
+    cfg.hooks[0].transport = { type: "stdio", command: process.execPath, args: ["-e", script], lifecycle };
+    const client = new Hooks(cfg, { ...options(), configurationTimeoutMs: 1500 });
+    try {
+      await client.initialized;
+      assert.deepEqual(plainDiagnostics(client), [{ backendId: "test.backend", code: "configuration_unavailable" }]);
+    } finally { await client.close(); }
+  });
+}
+
+test("HTTP discovery maps non-200 statuses to unavailable and 200 malformed or method-not-found to invalid", async () => {
+  const { AuthError } = await import("agenthooksprotocol/client");
+  const cases = [
+    ["500", () => new Response(null, { status: 500 }), {}, { code: "configuration_unavailable" }],
+    ["202", () => new Response(null, { status: 202 }), {}, { code: "configuration_unavailable" }],
+    ["403", () => new Response(null, { status: 403, headers: { "www-authenticate": 'Bearer error="insufficient_scope", scope="admin"' } }),
+      { auth: { credential() { return undefined; }, challenge() { throw new AuthError("access_denied"); } } },
+      { code: "configuration_unavailable", authError: "access_denied", recovery: "none" }],
+    ["200 non-JSON", () => new Response("not json", { status: 200, headers: { "content-type": "application/json" } }), {}, { code: "configuration_invalid" }],
+    ["200 text/plain", () => new Response("{}", { status: 200, headers: { "content-type": "text/plain" } }), {}, { code: "configuration_invalid" }],
+    ["200 method-not-found", message => Response.json({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" } }), {}, { code: "configuration_invalid" }],
+  ];
+  for (const [label, respond, extra, expected] of cases) {
+    const client = new Hooks(registration(), { ...options(async (_url, init) => respond(JSON.parse(init.body))), ...extra });
+    try {
+      await client.initialized;
+      assert.deepEqual(plainDiagnostics(client), [{ backendId: "test.backend", ...expected }], label);
+    } finally { await client.close(); }
+  }
 });

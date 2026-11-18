@@ -491,6 +491,13 @@ export class BackendTransport {
       const pending = state.pending.values().next().value;
       if (!pending || pending.notification || pending.response !== undefined)
         return fail(failure("Unexpected backend response"));
+      // Configuration discovery discards a well-formed response for another id,
+      // as a persistent backend does; the request then ends by timeout or exit.
+      if (pending.message?.method === "hooks/configuration" && value && typeof value === "object" &&
+          !Array.isArray(value) && value.jsonrpc === "2.0" && "id" in value && value.id !== pending.message.id) {
+        diagnose({ backendId: this.#backendId, kind: "unsolicited", strikes, terminated: false });
+        return;
+      }
       try {
         pending.response = responseFor(value, pending.message);
       } catch (error) {
