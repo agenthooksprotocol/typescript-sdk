@@ -566,12 +566,13 @@ test("[configuration-retry-atomic-routes] a retry installs complete routes in on
   let available = false, release, firstDiscovered;
   const gate = new Promise(resolve => { release = resolve; });
   const firstDone = new Promise(resolve => { firstDiscovered = resolve; });
-  const delivered = [];
+  const delivered = [], discoveries = {};
   const client = new Hooks(cfg, { ...options(async (url, init) => {
     const message = JSON.parse(init.body);
     const name = new URL(url).pathname.slice(1);
     if (message.method !== "hooks/configuration") { delivered.push([name, message.params.event.call.id]); return accepted(message); }
     if (!available) return new Response(null, { status: 503 });
+    discoveries[name] = (discoveries[name] ?? 0) + 1;
     if (name === "second") await gate;
     const response = advertisement(message);
     if (name === "first") firstDiscovered();
@@ -596,5 +597,139 @@ test("[configuration-retry-atomic-routes] a retry installs complete routes in on
     assert.deepEqual(order, ["first", "second"], "registration order is retained");
     assert.deepEqual(delivered.filter(([, id]) => id === "before-retry"), [], "earlier events are not replayed");
     assert.equal(delivered.length, 4);
+    assert.deepEqual(discoveries, { first: 1, second: 1 }, "concurrent admissions share one re-attempt per backend");
+  } finally { await client.close(); }
+});
+
+test("a host prepare that arrives during an attempt is not lost", async () => {
+  const { AuthError } = await import("agenthooksprotocol/client");
+  for (const phase of ["initialization", "re-attempt"]) {
+    let attempts = 0, authorized = false, entered, release;
+    const host = preparedProvider(async () => {
+      attempts++;
+      if (authorized) return undefined;
+      if ((phase === "initialization" && attempts === 1) || (phase === "re-attempt" && attempts === 2)) {
+        entered(); await new Promise(resolve => { release = resolve; });
+      }
+      throw new AuthError("interaction_required");
+    });
+    let started = new Promise(resolve => { entered = resolve; });
+    const client = new Hooks(registration(), { ...options(async (_url, init) => advertisement(JSON.parse(init.body))), auth: host.provider });
+    try {
+      if (phase === "re-attempt") {
+        await client.initialized;
+        host.prepare(endpoint());
+        const admitting = client.toolBefore(input);
+        await started;
+        host.prepare(endpoint());
+        release();
+        await admitting;
+        assert.equal(attempts, 2);
+      } else {
+        await started;
+        host.prepare(endpoint());
+        release();
+        await client.initialized;
+        assert.equal(attempts, 1);
+      }
+      // The attempt still failed, but the prepare made during it keeps the backend eligible.
+      authorized = true;
+      await client.toolBefore(input);
+      assert.equal(client.intercepts(events.toolBefore), true, phase);
+    } finally { await client.close(); }
+  }
+});
+
+test("closing during discovery closes transports of backends that were discovered but not installed", async () => {
+  const { nodeSpawn } = await import("agenthooksprotocol/client");
+  const script = `require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+    const request = JSON.parse(line);
+    process.stdout.write(JSON.stringify(process.env.AHP_FAIL ? { jsonrpc: '2.0', id: request.id, error: { code: -32004, message: 'unavailable' } }
+      : { jsonrpc: '2.0', id: request.id, result: { protocolVersion: 'draft', configuration: ${JSON.stringify(configuration())} } }) + '\\n');
+  });`;
+  for (const phase of ["initialization", "re-attempt"]) {
+    const processes = [];
+    let hang = phase === "initialization", hanging;
+    const reached = new Promise(resolve => { hanging = resolve; });
+    const cfg = registration();
+    cfg.hooks = [{ id: "test.stdio", transport: { type: "stdio", command: process.execPath, args: ["-e", script], lifecycle: "persistent" } },
+      { id: "test.http", transport: { type: "http", url: "https://backend.test/hooks" } }];
+    const client = new Hooks(cfg, { ...options(async (_url, init) => {
+      if (!hang) return new Response(null, { status: 503 });
+      hanging();
+      return new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason)));
+    }), configurationRetry: { initialDelayMs: 20, maxDelayMs: 20 },
+    spawn: request => {
+      const child = nodeSpawn(phase === "re-attempt" && processes.length === 0
+        ? { ...request, env: { ...request.env, AHP_FAIL: "1" } } : request);
+      const entry = { killed: false, exited: false };
+      processes.push(entry);
+      child.onClose(() => { entry.exited = true; });
+      return { ...child, write: child.write.bind(child), onStdout: child.onStdout.bind(child), onError: child.onError.bind(child),
+        onClose: child.onClose.bind(child), kill() { entry.killed = true; child.kill(); } };
+    } });
+    if (phase === "re-attempt") {
+      await client.initialized;
+      assert.equal(client.initializationDiagnostics.length, 2);
+      await sleep(40);
+      hang = true;
+      void client.toolBefore(input).catch(() => {});
+    }
+    await reached;
+    // Let the stdio discovery succeed while the HTTP one is still pending.
+    await sleep(phase === "initialization" ? 300 : 300);
+    await client.close();
+    assert.ok(processes.length >= 1, phase);
+    assert.ok(processes.every(entry => entry.killed || entry.exited), `${phase}: every spawned backend is closed`);
+  }
+});
+
+test("prepare matching compares normalized endpoint URLs", async () => {
+  const { AuthError } = await import("agenthooksprotocol/client");
+  let authorized = false;
+  const host = preparedProvider(() => { if (!authorized) throw new AuthError("interaction_required"); });
+  const client = new Hooks(registration(), { ...options(async (_url, init) => advertisement(JSON.parse(init.body))), auth: host.provider });
+  try {
+    await client.initialized;
+    authorized = true;
+    host.prepare(endpoint("test.backend", "https://BACKEND.test:443/hooks"));
+    await client.toolBefore(input);
+    assert.equal(client.intercepts(events.toolBefore), true);
+  } finally { await client.close(); }
+});
+
+test("Hooks subscribes to prepare notifications only while a backend is unavailable", async () => {
+  const { AuthError } = await import("agenthooksprotocol/client");
+  const explicit = preparedProvider();
+  const fixed = new Hooks(registration(configuration().subscriptions), { ...options(), auth: explicit.provider });
+  await fixed.initialized;
+  assert.equal(explicit.listeners.size, 0, "explicit subscriptions never subscribe");
+  const healthy = preparedProvider();
+  const discovered = new Hooks(registration(), { ...options(async (_url, init) => advertisement(JSON.parse(init.body))), auth: healthy.provider });
+  await discovered.initialized;
+  assert.equal(healthy.listeners.size, 0, "successful discovery releases the subscription");
+  let authorized = false;
+  const host = preparedProvider(() => { if (!authorized) throw new AuthError("interaction_required"); });
+  const client = new Hooks(registration(), { ...options(async (_url, init) => advertisement(JSON.parse(init.body))), auth: host.provider });
+  try {
+    await client.initialized;
+    assert.equal(host.listeners.size, 1, "an unavailable backend keeps one subscription");
+    authorized = true;
+    host.prepare(endpoint());
+    await client.toolBefore(input);
+    assert.equal(host.listeners.size, 0, "recovery releases the subscription");
+  } finally { await Promise.all([client.close(), fixed.close(), discovered.close()]); }
+});
+
+test("stored skip diagnostics keep only the latest 10 per backend", async () => {
+  const cfg = registration();
+  cfg.hooks.push({ id: "test.other", transport: { type: "http", url: "https://backend.test/other" } });
+  const client = new Hooks(cfg, { ...options(async () => new Response(null, { status: 503 })),
+    configurationRetry: { initialDelayMs: 1, maxDelayMs: 1 } });
+  try {
+    await client.initialized;
+    for (let i = 0; i < 14; i++) { await sleep(3); await client.toolBefore(input); }
+    for (const id of ["test.backend", "test.other"])
+      assert.equal(client.initializationDiagnostics.filter(diagnostic => diagnostic.backendId === id).length, 10, id);
   } finally { await client.close(); }
 });

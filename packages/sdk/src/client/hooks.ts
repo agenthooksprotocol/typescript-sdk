@@ -65,6 +65,12 @@ type UnavailableBackend = {
   /** A successful host prepare for the event endpoint makes it eligible at once. */
   prepared: boolean;
 };
+/** Stored skip diagnostics per backend; older ones are dropped. */
+const MAX_DIAGNOSTICS_PER_BACKEND = 10;
+/** Compare endpoint URLs in their normalized form. */
+function sameUrl(left: string, right: string): boolean {
+  try { return new URL(left).href === new URL(right).href; } catch { return false; }
+}
 /** JSON-RPC method-not-found: the backend has no configuration advertisement. */
 const METHOD_NOT_FOUND = -32601;
 
@@ -166,6 +172,12 @@ export class Hooks {
   /** The single shared admission re-attempting unavailable backends, while running. */
   private admission: Promise<void> | undefined;
   private unsubscribePrepared: (() => void) | undefined;
+  /** Discovery-configured backends, for matching host prepares. */
+  private readonly discovered = new Map<string, Backend>();
+  /** Host prepares seen per backend, so one arriving during an attempt is not lost. */
+  private readonly prepares = new Map<string, number>();
+  /** Discovery attempts in flight; prepare notifications are needed only while > 0 or a backend is unavailable. */
+  private attempts = 0;
   private readonly managers = new Set<ContentManager>();
   private readonly pending = new Set<Promise<unknown>>();
   private readonly provider;
@@ -201,11 +213,6 @@ export class Hooks {
       }),
     };
     this.provider = options.auth ?? auth();
-    if (typeof this.provider.onPrepared === "function") {
-      try {
-        this.unsubscribePrepared = this.provider.onPrepared(endpoint => this.prepared(endpoint));
-      } catch { /* A provider without working notifications only loses prepare re-attempts. */ }
-    }
     // Explicit subscriptions retain synchronous routing and lazy transport setup.
     // Omitted subscriptions discover defaults during initialized, before dispatch.
     // Configuration failures retain the Promise contract.
@@ -376,12 +383,37 @@ export class Hooks {
         (backend.subscriptions as Subscription[]).forEach((subscription, index) =>
           group.push({ backend, subscription, index, transport }));
       } else {
+        this.discovered.set(backend.id, backend);
         discoveries.push(this.discoverRoutes(position, backend).then(routes => { group.push(...routes); }));
       }
     }
     const install = () => { this.routes.push(...groups.flat()); };
-    if (discoveries.length) return Promise.all(discoveries).then(install);
-    install();
+    if (!discoveries.length) return install();
+    return Promise.allSettled(discoveries).then(async results => {
+      const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (failed || this.lifetime.signal.aborted) {
+        // Closed during initialization: routes that were discovered are never installed.
+        await Promise.allSettled(groups.flat().map(route => route.transport.close()));
+        throw failed ? failed.reason : this.lifetime.signal.reason;
+      }
+      install();
+      this.syncPrepared();
+    });
+  }
+
+  /** Subscribe to host prepares only while an attempt is in flight or a backend is unavailable,
+   * so an unclosed client is not kept referenced by a long-lived provider. */
+  private syncPrepared(): void {
+    const wanted = !this.lifetime.signal.aborted && (this.attempts > 0 || this.unavailable.size > 0);
+    if (wanted && !this.unsubscribePrepared && typeof this.provider.onPrepared === "function") {
+      try {
+        this.unsubscribePrepared = this.provider.onPrepared(endpoint => this.prepared(endpoint));
+      } catch { /* A provider without working notifications only loses prepare re-attempts. */ }
+    } else if (!wanted && this.unsubscribePrepared) {
+      const unsubscribe = this.unsubscribePrepared;
+      this.unsubscribePrepared = undefined;
+      try { unsubscribe(); } catch { /* Best effort. */ }
+    }
   }
 
   private transportFor(backend: Backend): BackendTransport {
@@ -407,18 +439,31 @@ export class Hooks {
   /** Discover one backend's routes with a fresh transport; a skip yields none. */
   private async discoverRoutes(position: number, backend: Backend): Promise<Route[]> {
     const transport = this.transportFor(backend);
-    const subscriptions = await this.discoverConfiguration(position, backend, transport);
-    return subscriptions.map((subscription, index) => ({ backend, subscription, index, transport }));
+    this.attempts++;
+    this.syncPrepared();
+    const preparesBefore = this.prepares.get(backend.id) ?? 0;
+    try {
+      const subscriptions = await this.discoverConfiguration(position, backend, transport, preparesBefore);
+      return subscriptions.map((subscription, index) => ({ backend, subscription, index, transport }));
+    } finally {
+      this.attempts--;
+    }
   }
 
   /** Record a skip. Only `configuration_unavailable` is re-attempted before reinitialization. */
-  private skip(position: number, backend: Backend, code: ConfigurationSkipCode, failure?: DeliveryAuthFailure): void {
+  private skip(position: number, backend: Backend, code: ConfigurationSkipCode, failure?: DeliveryAuthFailure,
+    preparesBefore = this.prepares.get(backend.id) ?? 0): void {
     this.initializationDiagnostics.push({ backendId: backend.id, code, ...(failure ? { auth: failure } : {}) });
+    // Keep only the latest diagnostics per backend.
+    const own = this.initializationDiagnostics.flatMap((diagnostic, index) => diagnostic.backendId === backend.id ? [index] : []);
+    if (own.length > MAX_DIAGNOSTICS_PER_BACKEND) this.initializationDiagnostics.splice(own[0]!, 1);
     if (code !== "configuration_unavailable") {
       this.unavailable.delete(backend.id);
       return;
     }
-    const failures = (this.unavailable.get(backend.id)?.failures ?? 0) + 1;
+    // A host prepare during this attempt makes the backend eligible at once and resets its backoff.
+    const prepared = (this.prepares.get(backend.id) ?? 0) !== preparesBefore;
+    const failures = (prepared ? 0 : this.unavailable.get(backend.id)?.failures ?? 0) + 1;
     // Backoff only when there is no auth error or its recovery is retry: login,
     // configure and none need a host prepare (or reinitialization) first.
     const backoff = failure === undefined || failure.recovery === "retry";
@@ -426,7 +471,7 @@ export class Hooks {
     const maximum = this.options.configurationRetry?.maxDelayMs ?? 3_600_000;
     const delay = Math.min(maximum, initial * 2 ** Math.min(failures - 1, 52));
     this.unavailable.set(backend.id, {
-      index: position, backend, failures, prepared: false,
+      index: position, backend, failures, prepared,
       retryAt: backoff ? Date.now() + delay : undefined,
     });
   }
@@ -435,9 +480,12 @@ export class Hooks {
   private prepared(endpoint: unknown): void {
     if (this.lifetime.signal.aborted || typeof endpoint !== "object" || endpoint === null) return;
     const { backendId, purpose, url } = endpoint as Partial<Record<"backendId" | "purpose" | "url", unknown>>;
-    if (purpose !== "event" || typeof backendId !== "string") return;
+    if (purpose !== "event" || typeof backendId !== "string" || typeof url !== "string") return;
+    const backend = this.discovered.get(backendId);
+    if (!backend || backend.transport.type !== "http" || !sameUrl(String(backend.transport.url), url)) return;
+    this.prepares.set(backendId, (this.prepares.get(backendId) ?? 0) + 1);
     const entry = this.unavailable.get(backendId);
-    if (!entry || entry.backend.transport.type !== "http" || entry.backend.transport.url !== url) return;
+    if (!entry) return;
     entry.prepared = true;
     entry.failures = 0;
   }
@@ -456,9 +504,15 @@ export class Hooks {
     if (!due.length) return Promise.resolve();
     for (const entry of due) entry.prepared = false;
     const work = (async () => {
-      const discovered = await Promise.all(due.map(async entry =>
+      const results = await Promise.allSettled(due.map(async entry =>
         [entry, await this.discoverRoutes(entry.index, entry.backend)] as const));
-      this.lifetime.signal.throwIfAborted();
+      const discovered = results.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
+      const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (failed || this.lifetime.signal.aborted) {
+        // Closed during the re-attempt: close transports that will never be installed.
+        await Promise.allSettled(discovered.flatMap(([, routes]) => routes.map(route => route.transport.close())));
+        throw failed ? failed.reason : this.lifetime.signal.reason;
+      }
       let changed = false;
       for (const [entry, routes] of discovered) {
         if (!routes.length) continue;
@@ -467,12 +521,15 @@ export class Hooks {
         changed = true;
       }
       if (changed) this.routes.splice(0, this.routes.length, ...this.groups.flat());
-    })().finally(() => { this.admission = undefined; });
+    })().finally(() => { this.admission = undefined; this.syncPrepared(); });
     this.admission = work;
     return work;
   }
 
-  private async discoverConfiguration(position: number, backend: Backend, transport: BackendTransport): Promise<Subscription[]> {
+  private async discoverConfiguration(position: number, backend: Backend, transport: BackendTransport,
+    preparesBefore: number): Promise<Subscription[]> {
+    const skip = (code: ConfigurationSkipCode, failure?: DeliveryAuthFailure) =>
+      this.skip(position, backend, code, failure, preparesBefore);
     const budget = deadlineAfter(this.options.configurationTimeoutMs ?? 5000, this.lifetime.signal);
     let retained = false;
     try {
@@ -484,17 +541,17 @@ export class Hooks {
       const rpcError = (response as { error?: { code?: unknown } }).error;
       if (rpcError !== undefined) {
         // Method-not-found means no advertisement; any other JSON-RPC error is unavailable.
-        this.skip(position, backend, rpcError.code === METHOD_NOT_FOUND ? "configuration_invalid" : "configuration_unavailable");
+        skip(rpcError.code === METHOD_NOT_FOUND ? "configuration_invalid" : "configuration_unavailable");
         return [];
       }
       if (validateWire("configuration-response", response).length) {
-        this.skip(position, backend, "configuration_invalid");
+        skip("configuration_invalid");
         return [];
       }
       const configuration = (response as { result: { configuration: Configuration } }).result.configuration;
       // A server may pick its upload destination, not which local secret is read.
       if (configuration.subscriptions.some(subscription => namesLocalSecret((subscription.upload as ContentUpload | undefined)?.auth))) {
-        this.skip(position, backend, "configuration_local_secret");
+        skip("configuration_local_secret");
         return [];
       }
       const subscriptions = (configuration.subscriptions as Subscription[]).flatMap(subscription => {
@@ -504,7 +561,7 @@ export class Hooks {
         return selected.length ? [{ ...subscription, events: selected.map(event => event.event) } as Subscription] : [];
       });
       if (!subscriptions.length) {
-        this.skip(position, backend, "no_applicable_subscriptions");
+        skip("no_applicable_subscriptions");
         return [];
       }
       retained = true;
@@ -517,7 +574,7 @@ export class Hooks {
       // status and authentication failures are unavailable.
       const invalid = auth === undefined && error instanceof HookOperationalError &&
         (error.code === "MALFORMED_JSON_RPC" || error.code === "ID_MISMATCH" || error.code === "MALFORMED_JSON");
-      this.skip(position, backend, invalid ? "configuration_invalid" : "configuration_unavailable", auth);
+      skip(invalid ? "configuration_invalid" : "configuration_unavailable", auth);
       return [];
     } finally {
       budget.dispose();
@@ -1261,8 +1318,8 @@ export class Hooks {
     if (!this.closed) {
       for (const exchange of this.activeElicitations) exchange.retired = true;
       this.lifetime.abort(new Error("Hooks closed"));
-      this.unsubscribePrepared?.();
       this.unavailable.clear();
+      this.syncPrepared();
       this.closed = (async () => {
         await this.initialized.catch(() => {});
         await this.admission?.catch(() => {});
