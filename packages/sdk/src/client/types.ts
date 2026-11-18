@@ -88,6 +88,14 @@ export interface HooksOptions {
   observationTimeoutMs?: number;
   /** Initialization configuration discovery budget per backend; default 5000 ms. */
   configurationTimeoutMs?: number;
+  /**
+   * Backoff before a backend skipped with `configuration_unavailable` is
+   * re-attempted at a later event admission: starts at `initialDelayMs`
+   * (default 30000), doubles after each failed attempt and is capped at
+   * `maxDelayMs` (default 3600000). An auth failure whose recovery is not
+   * `retry` is re-attempted only after a host prepare for that endpoint.
+   */
+  configurationRetry?: { initialDelayMs?: number; maxDelayMs?: number };
   /** Start stdio backends with the full host environment rather than the minimal
    * base environment (PATH, HOME, locale, temp dirs, ...). Registration `env`
    * entries apply on top either way. Default false. */
@@ -127,6 +135,25 @@ export interface DeliveryDiagnostic {
    * the host should run its explicit login (`prepare`) for `backendId`.
    */
   auth?: DeliveryAuthFailure;
+}
+/** Why server-driven configuration discovery skipped a backend. */
+export type ConfigurationSkipCode =
+  | "configuration_unavailable"
+  | "configuration_invalid"
+  | "no_applicable_subscriptions"
+  | "configuration_local_secret";
+/**
+ * A backend skipped by configuration discovery, in the protocol's shape. When
+ * endpoint authentication made the configuration unavailable, `authError` is the
+ * safe auth error code, `recovery` its paired recovery and `requiredScopes` any
+ * validated required scopes. Never credentials, response bodies or event content.
+ */
+export interface InitializationDiagnostic {
+  backendId: string;
+  code: ConfigurationSkipCode;
+  authError?: AuthErrorCode;
+  recovery?: AuthRecovery;
+  requiredScopes?: readonly string[];
 }
 /** Redacted `AuthError` fields; never tokens, URLs, bodies or provider causes. */
 export type DeliveryAuthFailure = Readonly<{

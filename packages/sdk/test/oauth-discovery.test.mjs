@@ -45,11 +45,20 @@ for (const access_token of ['has;separator', 'tokené', 'pad=middle', '=']) {
   });
 }
 
-for (const scope of [' deliver', 'deliver ', 'deliver  deliver', '']) {
+for (const scope of [' deliver', 'deliver ', 'deliver  deliver', 'deliver\tdeliver', 'deliver\n', 7, true, ['deliver'], {}]) {
   test(`rejects a malformed token response scope: ${JSON.stringify(scope)}`, async () => {
     await assert.rejects(acquireClientCredentials(target, options(async () => Response.json({
       access_token: 'valid-token', token_type: 'Bearer', expires_in: 300, scope,
     })), operation()), { code: 'provider_failed' });
+  });
+}
+
+for (const scope of [undefined, null, '', ' ', ' \t\r\n']) {
+  test(`client credentials treat an absent, null or blank scope as omitted: ${JSON.stringify(scope)}`, async () => {
+    const credential = await acquireClientCredentials(target, options(async () => Response.json({
+      access_token: 'valid-token', token_type: 'Bearer', expires_in: 300, ...(scope === undefined ? {} : { scope }),
+    })), operation());
+    assert.deepEqual(credential.scopes, target.client.scopes);
   });
 }
 

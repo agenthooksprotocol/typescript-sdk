@@ -5,6 +5,7 @@ export { ConfigurationError } from "./types.js";
 export type {
   Event, EventType, HarnessValue, HarnessEvent, BoundaryInput, EventInput,
   HooksOptions, BoundaryOptions, DeliveryDiagnostic, DeliveryAuthFailure,
+  InitializationDiagnostic, ConfigurationSkipCode,
   BoundaryState, BoundaryResult, AcceptedResponse, ConfigurationIssue,
 } from "./types.js";
 export { Type } from "@sinclair/typebox";
@@ -17,7 +18,7 @@ export { AuthError, normalizeAuthTarget } from "./auth-routing.js";
 export type { AuthErrorCode, AuthRecovery, AuthTarget, AuthCompositionOptions } from "./auth-routing.js";
 export type {
   Credential, AuthContext, DeliveryCredential, DeliveryAuthContext,
-  AuthChallengeContext, DeliveryAuthProvider, OAuthClient, AuthorizationRequest,
+  AuthChallengeContext, DeliveryAuthProvider, PreparedEndpoint, OAuthClient, AuthorizationRequest,
   OAuthMetadata, TokenRequest, AuthorizationCodeRequest, AuthOptions, AuthProvider,
 } from "./auth.js";
 export { Attachment, AttachmentContent, ContentManager } from "./content.js";

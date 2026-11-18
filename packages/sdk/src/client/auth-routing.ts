@@ -1,5 +1,5 @@
 import { classifyAuthError } from "./auth.js";
-import type { AuthChallengeContext, DeliveryAuthContext, DeliveryAuthProvider, DeliveryCredential } from "./auth.js";
+import type { AuthChallengeContext, DeliveryAuthContext, DeliveryAuthProvider, DeliveryCredential, PreparedEndpoint } from "./auth.js";
 
 export type AuthErrorCode =
   | "invalid_configuration" | "unsupported_binding" | "credential_unavailable"
@@ -166,7 +166,15 @@ export function composeAuth(options: AuthCompositionOptions, defaultBearer: Deli
     if (!provider && target.type !== "discover") throw new AuthError("unsupported_binding");
     return { target, provider };
   }
+  const notifiers = [...new Set([routes.bearer, routes.oauth, routes.discover])]
+    .filter((provider): provider is DeliveryAuthProvider => typeof provider?.onPrepared === "function");
   return {
+    ...(notifiers.length ? {
+      onPrepared(listener: (endpoint: PreparedEndpoint) => void) {
+        const unsubscribe = notifiers.map(provider => provider.onPrepared!(listener));
+        return () => { for (const stop of unsubscribe) stop(); };
+      },
+    } : {}),
     ...(routes.bearer.resolveEnvironmentVariable ? { resolveEnvironmentVariable: routes.bearer.resolveEnvironmentVariable.bind(routes.bearer) } : {}),
     ...(routes.bearer.resolveCredentialReference ? { resolveCredentialReference: routes.bearer.resolveCredentialReference.bind(routes.bearer) } : {}),
     async credential(context) {

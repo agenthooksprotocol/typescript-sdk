@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { auth } from "agenthooksprotocol/client";
 import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
+import { classifyAuthError } from "agenthooksprotocol/client/auth";
 
 // Default delegation uses context composition, not JavaScript call-site `this`.
 test("default authenticate delegation preserves overrides and external token persistence", async () => {
@@ -69,6 +71,34 @@ test("DNS policy rejects private, mixed and empty resolution before fetching met
       /forbidden resolved destination/,
     );
     assert.equal(requests.length, 0);
+  }
+});
+
+test("address policy checks IPv6-embedded IPv4 as IPv4, for resolved addresses and literals", async () => {
+  const refused = [
+    "::ffff:127.0.0.1", "::ffff:7f00:1", "::ffff:a9fe:a9fe", "::ffff:10.0.0.1", "::ffff:0:0",
+    "::127.0.0.1", "::7f00:1", "::a00:1", "::", "::1",
+    "64:ff9b::127.0.0.1", "64:ff9b::7f00:1", "64:ff9b::a9fe:a9fe", "64:ff9b::c0a8:1",
+    "2002:7f00:1::1", "2002:a9fe:a9fe::", "2002:c0a8:101::1", "2002:0a00:0001::",
+    "64:ff9b:1::5db8:d822", "2001:db8::1", "2001:0:5db8:d822::1", "fe80::1", "fc00::1", "ff02::1",
+    "10.0.0.1", "100.64.0.1", "169.254.169.254", "192.0.2.1", "198.18.0.1", "240.0.0.1",
+  ];
+  for (const address of refused) {
+    const { provider, requests } = fixture({ resolveHostname: async () => [address] });
+    await assert.rejects(provider.authenticate({ url, authentication: binding }), /forbidden resolved destination/, address);
+    assert.equal(requests.length, 0);
+  }
+  for (const literal of ["[::ffff:127.0.0.1]", "[::ffff:a9fe:a9fe]", "[::127.0.0.1]", "[64:ff9b::a9fe:a9fe]", "[2002:a9fe:a9fe::1]", "[::ffff:10.0.0.1]"]) {
+    const { provider, requests } = fixture();
+    const issuerUrl = `https://${literal}/tenant`;
+    await assert.rejects(
+      provider.authenticate({ url, authentication: { ...binding, issuer: issuerUrl } }),
+      /forbidden destination/, literal);
+    assert.equal(requests.length, 0);
+  }
+  for (const address of ["::ffff:93.184.216.34", "::ffff:5db8:d822", "64:ff9b::5db8:d822", "2002:5db8:d822::1", "2606:2800:220:1::1", "93.184.216.34"]) {
+    const { provider } = fixture({ resolveHostname: async () => [address] });
+    assert.equal((await provider.authenticate({ url, authentication: binding })).token, "token-1", address);
   }
 });
 
@@ -495,3 +525,91 @@ test("credential acquisition failures redact remote error bodies and reject priv
     /forbidden destination/,
   );
 });
+
+const scopeVectors = JSON.parse(readFileSync(new URL("../testdata/sdk-auth-lifecycle.json", import.meta.url), "utf8"))
+  .token_responses.filter((vector) => /^(?:initial|refresh)-(?:empty|whitespace|null|numeric|array|repeated-separator|leading-separator|tab-separator)-scope$/.test(vector.id));
+for (const vector of scopeVectors) {
+  test(`built-in auth applies the token-response scope rule: ${vector.id}`, async () => {
+    const stored = [];
+    const cached = vector.exchange === "refresh"
+      ? { token: "old", expiresAt: 1, refreshToken: "previous-refresh", scopes: vector.previous_granted }
+      : undefined;
+    const { provider, tokens } = fixture({
+      async fetch(input, init = {}) {
+        const target = String(input);
+        if (target.includes("oauth-protected-resource")) return Response.json({ resource, authorization_servers: [issuer] });
+        if (target.includes("well-known")) return Response.json(metadata);
+        tokens.push(new URLSearchParams(init.body));
+        return Response.json(vector.response);
+      },
+      getToken: () => cached,
+      setToken: (_key, value) => { stored.push(value); },
+      deleteToken() {},
+    });
+    const authentication = { ...binding, scopes: vector.requested.filter((scope) => vector.allowed.includes(scope)), allowedScopes: vector.allowed };
+    const result = provider.authenticate({ url, authentication });
+    if (vector.usable) {
+      const credential = await result;
+      assert.equal(credential.token, vector.response.access_token);
+      assert.deepEqual([...credential.scopes].sort(), [...vector.granted].sort());
+      assert.deepEqual([...stored.at(-1).scopes].sort(), [...vector.granted].sort());
+    } else {
+      await assert.rejects(result, (error) => {
+        assert.match(error.message, /invalid token scope/);
+        assert.equal(classifyAuthError(error).code, vector.error);
+        return true;
+      });
+      assert.ok(stored.every((value) => value.token !== vector.response.access_token), "an invalid response is never dispatched");
+    }
+    assert.equal(tokens.length, 1);
+    if (vector.exchange === "refresh") assert.equal(tokens[0].get("grant_type"), "refresh_token");
+  });
+}
+
+test("built-in refresh with an omitted scope inherits the previous grant, not the current request", async () => {
+  for (const scope of [undefined, null, "", " \r\n"]) {
+    const stored = [];
+    const { provider } = fixture({
+      async fetch(input) {
+        const target = String(input);
+        if (target.includes("oauth-protected-resource")) return Response.json({ resource, authorization_servers: [issuer] });
+        if (target.includes("well-known")) return Response.json(metadata);
+        return Response.json({ access_token: "refreshed", token_type: "Bearer", ...(scope === undefined ? {} : { scope }) });
+      },
+      getToken: () => ({ token: "old", expiresAt: 1, refreshToken: "r", scopes: ["hooks", "admin"] }),
+      setToken: (_key, value) => { stored.push(value); },
+      deleteToken() {},
+    });
+    const credential = await provider.authenticate({ url, authentication: { ...binding, scopes: ["hooks"], allowedScopes: ["hooks"] } });
+    assert.deepEqual(credential.scopes, ["hooks", "admin"], String(scope));
+    assert.equal(stored[0].refreshToken, "r");
+  }
+});
+
+// Initial exchanges with a host-selected ceiling: narrowing, broadening and required scopes.
+const ceilingVectors = JSON.parse(readFileSync(new URL("../testdata/sdk-auth-lifecycle.json", import.meta.url), "utf8"))
+  .token_responses.filter((vector) => ["allowed-added-scope", "narrowed-scope", "unallowed-added-scope-ignored", "required-scope-missing"].includes(vector.id));
+for (const vector of ceilingVectors) {
+  test(`built-in auth intersects initial grants with the selected ceiling: ${vector.id}`, async () => {
+    const stored = [];
+    const { provider, tokens } = fixture({
+      async fetch(input, init = {}) {
+        const target = String(input);
+        if (target.includes("oauth-protected-resource")) return Response.json({ resource, authorization_servers: [issuer] });
+        if (target.includes("well-known")) return Response.json(metadata);
+        tokens.push(new URLSearchParams(init.body));
+        return Response.json(vector.response);
+      },
+      selectClient: () => ({ ...binding, scopes: vector.requested, allowedScopes: vector.allowed, requiredScopes: vector.required }),
+      setToken: (_key, value) => { stored.push(value); },
+      getToken: () => undefined,
+      deleteToken() {},
+    });
+    const result = provider.authenticate({ url, challenged: true });
+    if (vector.usable) assert.equal((await result).token, vector.response.access_token);
+    else await assert.rejects(result, (error) => classifyAuthError(error).code === vector.error);
+    assert.equal(tokens.length, 1);
+    assert.deepEqual([...tokens[0].get("scope").split(" ")].sort(), [...new Set([...vector.requested, ...vector.required])].sort());
+    assert.deepEqual([...stored[0].scopes].sort(), [...vector.granted].sort());
+  });
+}

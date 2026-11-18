@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { inspect } from 'node:util';
 import { managedOAuth } from '../dist/src/oauth/index.js';
+import { auth } from '../dist/src/client/auth.js';
 
 // Static, test-only certificate (testdata is not published).
 const tls = { key: await readFile(new URL('../testdata/tls/key.pem', import.meta.url)), cert: await readFile(new URL('../testdata/tls/cert.pem', import.meta.url)) };
@@ -830,4 +831,24 @@ test('valid consent denial is claimed once without resolving unavailable runtime
   await assert.rejects(managed.complete(pending, denied.href, budget()), { code: 'access_denied' });
   assert.equal(selections, 1); assert.equal(f.tokens.length, 0);
   await assert.rejects(managed.complete(pending, denied.href, budget()), { code: 'interaction_required' });
+});
+
+test('successful host prepares and completed logins notify onPrepared subscribers through composition', async t => {
+  const f = await fixture(t);
+  const route = f.managed.provider({ budget: () => budget() });
+  const composed = auth.compose({ oauth: route });
+  const seen = [];
+  const stop = composed.onPrepared(endpoint => seen.push(endpoint));
+  const pending = await f.prepare();
+  assert.equal(pending.type, 'pending_login');
+  assert.deepEqual(seen, [], 'a pending login is not a successful prepare');
+  await f.managed.complete(pending, f.callback(pending), budget());
+  assert.deepEqual(seen, [{ backendId: 'backend', purpose: 'event', url: f.context.url }]);
+  assert.equal((await f.prepare()).type, 'ready');
+  assert.equal(seen.length, 2);
+  route.onPrepared(() => { throw new Error('listener failure'); });
+  assert.equal((await f.prepare()).type, 'ready', 'a listener failure never fails the prepare');
+  stop();
+  await f.prepare();
+  assert.equal(seen.length, 3);
 });
