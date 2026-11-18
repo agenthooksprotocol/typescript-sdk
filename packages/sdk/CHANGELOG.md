@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.14.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.13.0...agenthooksprotocol-v0.14.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **client:** treat blank token scopes as omitted and retry skipped configuration backends ([#54](https://github.com/agenthooksprotocol/typescript-sdk/issues/54))
+
+### Bug Fixes
+
+* **client:** treat blank token scopes as omitted and retry skipped configuration backends ([#54](https://github.com/agenthooksprotocol/typescript-sdk/issues/54)) ([57991cb](https://github.com/agenthooksprotocol/typescript-sdk/commit/57991cb51d4bcd4e49985b894fb576f6d18c44eb))
+
 ## [0.13.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.12.0...agenthooksprotocol-v0.13.0) (2026-11-17)
 
 
