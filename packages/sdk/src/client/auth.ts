@@ -242,19 +242,32 @@ function loopback(host: string): boolean {
     /^127\./.test(host)
   );
 }
-function publicAddress(address: string): boolean {
-  const host = address.toLowerCase().replace(/^\[|\]$/g, "");
-  if (host.includes(":"))
-    return (
-      /^[23][\da-f]{3}:/.test(host) && !/^(?:2001:(?:db8|0):|2002:)/.test(host)
-    );
-  const octets = host.split(".").map(Number);
-  if (
-    octets.length !== 4 ||
-    octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)
-  )
-    return false;
-  const [a = 0, b = 0, c = 0] = octets;
+/** Expand an IPv6 literal (optionally with a dotted IPv4 tail) to eight hextets. */
+function ipv6Hextets(host: string): number[] | undefined {
+  let text = host;
+  const tail = /^(.*:)(\d+\.\d+\.\d+\.\d+)$/.exec(text);
+  if (tail) {
+    const v4 = ipv4Octets(tail[2]!);
+    if (!v4) return undefined;
+    text = `${tail[1]}${((v4[0]! << 8) | v4[1]!).toString(16)}:${((v4[2]! << 8) | v4[3]!).toString(16)}`;
+  }
+  const halves = text.split("::");
+  if (halves.length > 2) return undefined;
+  const part = (value: string) => (value === "" ? [] : value.split(":"));
+  const head = part(halves[0]!), rest = halves.length === 2 ? part(halves[1]!) : [];
+  const missing = 8 - head.length - rest.length;
+  if (halves.length === 2 ? missing < 1 : missing !== 0) return undefined;
+  const groups = [...head, ...Array<string>(halves.length === 2 ? missing : 0).fill("0"), ...rest];
+  if (groups.some((group) => !/^[\da-f]{1,4}$/.test(group))) return undefined;
+  return groups.map((group) => parseInt(group, 16));
+}
+function ipv4Octets(host: string): number[] | undefined {
+  const parts = host.split(".");
+  if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part))) return undefined;
+  const octets = parts.map(Number);
+  return octets.every((n) => n <= 255) ? octets : undefined;
+}
+function publicIPv4([a = 0, b = 0, c = 0]: readonly number[]): boolean {
   return !(
     a === 0 ||
     a === 10 ||
@@ -267,6 +280,30 @@ function publicAddress(address: string): boolean {
     (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) ||
     (a === 203 && b === 0 && c === 113)
   );
+}
+/**
+ * Only globally routable unicast destinations are public. IPv6 forms that embed an
+ * IPv4 address (IPv4-mapped, IPv4-compatible, NAT64 64:ff9b::/96 and 6to4
+ * 2002::/16) are checked as that IPv4 address.
+ */
+function publicAddress(address: string): boolean {
+  const host = address.toLowerCase().replace(/^\[|\]$/g, "");
+  if (!host.includes(":")) {
+    const octets = ipv4Octets(host);
+    return octets !== undefined && publicIPv4(octets);
+  }
+  const h = ipv6Hextets(host.replace(/%.*$/, ""));
+  if (!h) return false;
+  const v4 = (high: number, low: number) => [high >> 8, high & 0xff, low >> 8, low & 0xff];
+  const zero = (from: number, to: number) => h.slice(from, to).every((n) => n === 0);
+  // ::ffff:a.b.c.d (mapped) and ::a.b.c.d (compatible; also covers :: and ::1).
+  if (zero(0, 5) && (h[5] === 0xffff || h[5] === 0)) return publicIPv4(v4(h[6]!, h[7]!));
+  // 64:ff9b::a.b.c.d (NAT64 well-known prefix).
+  if (h[0] === 0x64 && h[1] === 0xff9b && zero(2, 6)) return publicIPv4(v4(h[6]!, h[7]!));
+  // 2002:AABB:CCDD::/48 (6to4).
+  if (h[0] === 0x2002) return publicIPv4(v4(h[1]!, h[2]!));
+  // Global unicast 2000::/3, except documentation 2001:db8::/32 and Teredo 2001::/32.
+  return (h[0]! & 0xe000) === 0x2000 && !(h[0] === 0x2001 && (h[1] === 0xdb8 || h[1] === 0));
 }
 function secureUrl(value: string, options: AuthOptions = {}): URL {
   const url = new URL(value);
