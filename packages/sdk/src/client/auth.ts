@@ -1,6 +1,7 @@
 import type { Authentication } from "../draft/raw.js";
 import { AuthError, composeAuth, type AuthCompositionOptions, type AuthErrorCode } from "./auth-routing.js";
 import { bearerParameters } from "./challenge.js";
+import { responseScopes } from "./scope.js";
 export { AuthError, normalizeAuthTarget } from "./auth-routing.js";
 export type { AuthErrorCode, AuthRecovery, AuthTarget, AuthCompositionOptions } from "./auth-routing.js";
 
@@ -225,6 +226,8 @@ export interface AuthProvider extends DeliveryAuthProvider {
 const TRANSFER_TIMEOUT_MS = 30_000;
 /** Rotated refresh tokens carried by invalid token responses, keyed by the thrown error. */
 const rotatedRefresh = new WeakMap<object, string>();
+/** Credentials whose token response omitted `scope`: a refresh inherits the previous grant. */
+const inheritedScopes = new WeakSet<object>();
 function error(message: string): never {
   // Never include credential values, callback URLs, or token endpoint bodies.
   throw new Error(`Authentication failed: ${message}`);
@@ -797,14 +800,15 @@ const defaults: AuthProvider = {
         ? Number.isSafeInteger(expires) && expires > 0
         : typeof expires === "string" && /^[0-9]+$/.test(expires) && Number(expires) > 0 && Number.isSafeInteger(Number(expires))))
         error("invalid token expiry");
-      if (body.scope !== undefined && (typeof body.scope !== "string" ||
-          !/^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/.test(body.scope)))
-        error("invalid token scope");
+      // An absent, null or blank scope is omitted and inherits; any other value must
+      // be a strict RFC 6749 scope list.
+      const reported = responseScopes(body.scope);
+      if (reported === null) error("invalid token scope");
       // Granted = response ∩ local ceiling; extra scopes are ignored, not an error.
       const ceiling = client.allowedScopes ?? client.scopes ?? [];
-      const scopes = [...new Set(body.scope === undefined ? client.scopes ?? [] : (body.scope as string).split(" "))]
+      const scopes = [...new Set(reported ?? client.scopes ?? [])]
         .filter(scope => ceiling.includes(scope));
-      return validateCredential(
+      const credential = validateCredential(
         {
           token: string(body.access_token, "access token"),
           ...(expires !== undefined
@@ -817,6 +821,8 @@ const defaults: AuthProvider = {
         },
         options,
       );
+      if (reported === undefined) inheritedScopes.add(credential);
+      return credential;
     } catch (failure) {
       // An invalid response is not dispatched, but a valid rotated refresh token is kept.
       const rotated = body.refresh_token;
@@ -842,10 +848,12 @@ const defaults: AuthProvider = {
       { ...request, parameters },
       options,
     );
-    return {
+    const refreshed = {
       ...credential,
       refreshToken: credential.refreshToken ?? refreshToken,
     };
+    if (inheritedScopes.has(credential)) inheritedScopes.add(refreshed);
+    return refreshed;
   },
   async clientCredentials(context, request, options) {
     if (!request.metadata.grant_types_supported?.includes("client_credentials"))
@@ -945,7 +953,9 @@ const defaults: AuthProvider = {
           }
           throw failure;
         }
-        if (cached.scopes && refreshed.scopes)
+        // Granted = response ∩ previous grant; an omitted response scope inherits it.
+        if (cached.scopes && inheritedScopes.has(refreshed)) refreshed = { ...refreshed, scopes: [...cached.scopes] };
+        else if (cached.scopes && refreshed.scopes)
           refreshed = { ...refreshed, scopes: refreshed.scopes.filter((scope: string) => cached.scopes!.includes(scope)) };
         return commit(refreshed);
       })(), context.signal);

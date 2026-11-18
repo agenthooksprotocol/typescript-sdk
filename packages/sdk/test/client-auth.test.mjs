@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { auth } from "agenthooksprotocol/client";
 import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
+import { classifyAuthError } from "agenthooksprotocol/client/auth";
 
 // Default delegation uses context composition, not JavaScript call-site `this`.
 test("default authenticate delegation preserves overrides and external token persistence", async () => {
@@ -522,4 +524,64 @@ test("credential acquisition failures redact remote error bodies and reject priv
     }),
     /forbidden destination/,
   );
+});
+
+const scopeVectors = JSON.parse(readFileSync(new URL("../testdata/sdk-auth-lifecycle.json", import.meta.url), "utf8"))
+  .token_responses.filter((vector) => /^(?:initial|refresh)-(?:empty|whitespace|null|numeric|array|repeated-separator|leading-separator|tab-separator)-scope$/.test(vector.id));
+for (const vector of scopeVectors) {
+  test(`built-in auth applies the token-response scope rule: ${vector.id}`, async () => {
+    const stored = [];
+    const cached = vector.exchange === "refresh"
+      ? { token: "old", expiresAt: 1, refreshToken: "previous-refresh", scopes: vector.previous_granted }
+      : undefined;
+    const { provider, tokens } = fixture({
+      async fetch(input, init = {}) {
+        const target = String(input);
+        if (target.includes("oauth-protected-resource")) return Response.json({ resource, authorization_servers: [issuer] });
+        if (target.includes("well-known")) return Response.json(metadata);
+        tokens.push(new URLSearchParams(init.body));
+        return Response.json(vector.response);
+      },
+      getToken: () => cached,
+      setToken: (_key, value) => { stored.push(value); },
+      deleteToken() {},
+    });
+    const authentication = { ...binding, scopes: vector.requested.filter((scope) => vector.allowed.includes(scope)), allowedScopes: vector.allowed };
+    const result = provider.authenticate({ url, authentication });
+    if (vector.usable) {
+      const credential = await result;
+      assert.equal(credential.token, vector.response.access_token);
+      assert.deepEqual([...credential.scopes].sort(), [...vector.granted].sort());
+      assert.deepEqual([...stored.at(-1).scopes].sort(), [...vector.granted].sort());
+    } else {
+      await assert.rejects(result, (error) => {
+        assert.match(error.message, /invalid token scope/);
+        assert.equal(classifyAuthError(error).code, vector.error);
+        return true;
+      });
+      assert.ok(stored.every((value) => value.token !== vector.response.access_token), "an invalid response is never dispatched");
+    }
+    assert.equal(tokens.length, 1);
+    if (vector.exchange === "refresh") assert.equal(tokens[0].get("grant_type"), "refresh_token");
+  });
+}
+
+test("built-in refresh with an omitted scope inherits the previous grant, not the current request", async () => {
+  for (const scope of [undefined, null, "", " \r\n"]) {
+    const stored = [];
+    const { provider } = fixture({
+      async fetch(input) {
+        const target = String(input);
+        if (target.includes("oauth-protected-resource")) return Response.json({ resource, authorization_servers: [issuer] });
+        if (target.includes("well-known")) return Response.json(metadata);
+        return Response.json({ access_token: "refreshed", token_type: "Bearer", ...(scope === undefined ? {} : { scope }) });
+      },
+      getToken: () => ({ token: "old", expiresAt: 1, refreshToken: "r", scopes: ["hooks", "admin"] }),
+      setToken: (_key, value) => { stored.push(value); },
+      deleteToken() {},
+    });
+    const credential = await provider.authenticate({ url, authentication: { ...binding, scopes: ["hooks"], allowedScopes: ["hooks"] } });
+    assert.deepEqual(credential.scopes, ["hooks", "admin"], String(scope));
+    assert.equal(stored[0].refreshToken, "r");
+  }
 });

@@ -1,5 +1,6 @@
 import * as oauth from "oauth4webapi";
 import { AuthError, classifyAuthError } from "../client/auth.js";
+import { omittedScope, responseScopes } from "../client/scope.js";
 import { active, checkedFetch, markTransport } from "./discovery.js";
 export { isTransportFailure } from "./discovery.js";
 import type { ManagedOAuthOptions, Operation, ResolvedTarget, TokenValue } from "./types.js";
@@ -78,12 +79,10 @@ function safeToken(value: string): boolean {
   return value.length > 0 && !/[\s\x00-\x1f\x7f-\x9f]/u.test(value);
 }
 
-const SCOPES = /^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/;
-
 /**
  * Initial exchange: granted = response ∩ acquisition ceiling. Refresh: granted =
  * response ∩ previous grant (the current ceiling applies only at use). Extra
- * scopes are ignored, never an error.
+ * scopes are ignored, never an error. An absent, null or blank scope is omitted.
  */
 function parseToken(body: unknown, target: ResolvedTarget, previous?: readonly string[]): TokenResult {
   const json = typeof body === "object" && body !== null ? body as Record<string, unknown> : {};
@@ -91,15 +90,16 @@ function parseToken(body: unknown, target: ResolvedTarget, previous?: readonly s
   const refreshToken = typeof refresh === "string" && safeToken(refresh) ? refresh : undefined;
   const expires = json.expires_in;
   const type = typeof json.token_type === "string" ? json.token_type.toLowerCase() : undefined;
+  const granted = responseScopes(json.scope);
   if (type !== "bearer" || typeof json.access_token !== "string" || !/^[A-Za-z0-9\-._~+/]+=*$/.test(json.access_token) ||
       (expires !== undefined && !(typeof expires === "number" ? Number.isSafeInteger(expires) && expires > 0
         : typeof expires === "string" && /^[0-9]+$/.test(expires) && Number(expires) > 0 && Number.isSafeInteger(Number(expires)))) ||
-      (json.scope !== undefined && (typeof json.scope !== "string" || !SCOPES.test(json.scope))) ||
+      granted === null ||
       (refresh !== undefined && refreshToken === undefined)) {
     return refreshToken === undefined ? {} : { refreshToken };
   }
   const bound = previous ?? target.client.allowedScopes ?? target.client.scopes;
-  const response = typeof json.scope === "string" ? json.scope.split(" ") : previous ?? target.client.scopes;
+  const response = granted ?? previous ?? target.client.scopes;
   const scopes = [...new Set(response)].filter(scope => bound.includes(scope));
   return { value: {
     token: json.access_token, scopes,
@@ -117,13 +117,26 @@ function rawBody(text: string): Record<string, unknown> | undefined {
   return form.has("refresh_token") || form.has("access_token") ? Object.fromEntries(form) : undefined;
 }
 
+/** oauth4webapi rejects a JSON null `scope`; an omitted-equivalent scope is removed
+ * before processing so that it inherits like an absent one. */
+function withoutOmittedScope(response: Response, text: string | undefined): Response {
+  if (text === undefined) return response;
+  let json: unknown;
+  try { json = JSON.parse(text); } catch { return response; }
+  if (typeof json !== "object" || json === null || Array.isArray(json) || !Object.hasOwn(json, "scope") ||
+      !omittedScope((json as { scope?: unknown }).scope)) return response;
+  const { scope: _omitted, ...rest } = json as Record<string, unknown>;
+  return new Response(JSON.stringify(rest), { status: response.status, statusText: response.statusText, headers: response.headers });
+}
+
 async function tokenResult(response: Response, target: ResolvedTarget,
   process: (response: Response) => Promise<unknown>, previous?: readonly string[]): Promise<TokenResult> {
   // Capture the body of any 2xx, whatever its content type, so a rotated refresh
   // token survives a response the OAuth library rejects.
-  const raw = response.status >= 200 && response.status < 300 ? rawBody(await response.clone().text().catch(() => "")) : undefined;
+  const text = response.status >= 200 && response.status < 300 ? await response.clone().text().catch(() => "") : undefined;
+  const raw = text === undefined ? undefined : rawBody(text);
   let body: unknown;
-  try { body = await process(response); }
+  try { body = await process(withoutOmittedScope(response, text)); }
   catch (error) {
     // OAuth error responses are classified by protect(); anything else is an invalid response.
     if (error instanceof oauth.ResponseBodyError) throw error;
