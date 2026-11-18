@@ -126,7 +126,7 @@ async function fixture(t, overrides = {}) {
     url.search = new URLSearchParams({ code: 'code-secret', state: new URL(pending.authorizationUrl).searchParams.get('state'), iss: client.issuer, ...extra }).toString();
     return url.href;
   };
-  const login = async () => { const pending = await prepare(); assert.equal(pending.type, 'pending_login'); return managed.complete(pending, callback(pending), budget()); };
+  const login = async () => { const pending = await prepare(); assert.equal(pending.type, 'pending_login'); return managed.complete(callback(pending), budget()); };
   return { origin, state, requests, checked, tokens, client, context, store, options, denied, managed, prepare, callback, login };
 }
 function classified(codes) {
@@ -145,18 +145,19 @@ test('[pkce-completion] TLS exchange binds state, PKCE, issuer and resource', as
   assert.equal(authorization.searchParams.get('code_challenge_method'), 'S256');
   assert.equal(authorization.searchParams.get('response_type'), 'code'); assert.equal(authorization.searchParams.get('scope'), 'deliver');
   assert.ok(authorization.searchParams.get('state').length >= 32); assert.equal(f.tokens.length, 0);
-  const ready = await f.managed.complete(pending, f.callback(pending), budget()); assert.equal(ready.credential.token, 'access-1');
+  const ready = await f.managed.complete(f.callback(pending), budget()); assert.equal(ready.credential.token, 'access-1');
   const body = f.tokens[0].body;
   assert.equal(body.get('grant_type'), 'authorization_code'); assert.equal(body.get('resource'), f.client.resource);
   assert.equal(body.get('redirect_uri'), f.client.redirectUri); assert.equal(body.get('code'), 'code-secret');
   assert.equal(createHash('sha256').update(body.get('code_verifier')).digest('base64url'), authorization.searchParams.get('code_challenge'));
   assert.ok(f.checked.some(item => item.purpose === 'authorization'));
-  await assert.rejects(f.managed.complete(pending, f.callback(pending), budget()), classified(['interaction_required']));
+  await assert.rejects(f.managed.complete(f.callback(pending), budget()), classified(['interaction_required']));
 });
 for (const [name, changes] of [['state', { state: 'incorrect' }], ['issuer', { iss: 'https://evil.invalid' }]]) {
   test(`[pkce-completion] rejects callback ${name} before exchange`, async t => {
     const f = await fixture(t), pending = await f.prepare();
-    await assert.rejects(f.managed.complete(pending, f.callback(pending, changes), budget()), classified(['access_denied', 'provider_failed']));
+    // A wrong state names no pending login; a wrong issuer fails validation. Neither consumes it.
+    await assert.rejects(f.managed.complete(f.callback(pending, changes), budget()), classified(['access_denied', 'interaction_required']));
     assert.equal(f.tokens.length, 0); assert.equal(f.store.values.size, 0);
   });
 }
@@ -193,7 +194,7 @@ for (const purpose of ['metadata', 'authorization', 'token']) {
     const f = await fixture(t);
     if (purpose === 'token') {
       const pending = await f.prepare(); f.denied.add(purpose);
-      await assert.rejects(f.managed.complete(pending, f.callback(pending), budget()), classified(['untrusted_destination']));
+      await assert.rejects(f.managed.complete(f.callback(pending), budget()), classified(['untrusted_destination']));
     } else { f.denied.add(purpose); await assert.rejects(f.prepare(), classified(['untrusted_destination'])); }
     assert.equal(f.tokens.length, 0); assert.equal(f.store.values.size, 0);
   });
@@ -202,7 +203,7 @@ test('untrusted authorization/token origins never reach transport', async t => {
   for (const kind of ['authorizationEndpoint', 'tokenEndpoint']) {
     const f = await fixture(t); f.state[kind] = 'https://evil.invalid/steal';
     if (kind === 'tokenEndpoint') {
-      const pending = await f.prepare(); await assert.rejects(f.managed.complete(pending, f.callback(pending), budget()), classified(['untrusted_destination']));
+      const pending = await f.prepare(); await assert.rejects(f.managed.complete(f.callback(pending), budget()), classified(['untrusted_destination']));
     } else await assert.rejects(f.prepare(), classified(['untrusted_destination']));
     assert.equal(f.tokens.length, 0);
   }
@@ -250,7 +251,7 @@ test('[stale-401] A rejection cannot invalidate B', async t => {
 test('[deadline-cancel] cancellation after the code exchange is sent returns promptly and still persists the grant', async t => {
   const f = await fixture(t), pending = await f.prepare(); f.state.tokenGate = deferred();
   const controller = new AbortController(), reason = new DOMException('host cancelled', 'AbortError');
-  const completion = f.managed.complete(pending, f.callback(pending), budget(controller.signal));
+  const completion = f.managed.complete(f.callback(pending), budget(controller.signal));
   await f.state.tokenEntered.promise; controller.abort(reason); await assert.rejects(completion, error => error === reason);
   assert.equal(f.store.writes, 0);
   // The spent code's tokens must not be lost: the detached exchange commits them.
@@ -258,7 +259,7 @@ test('[deadline-cancel] cancellation after the code exchange is sent returns pro
 });
 test('[deadline-cancel] deadline is absolute across discovery and exchange', async t => {
   const f = await fixture(t), operation = budget(undefined, 1000), pending = await f.prepare({}, operation); f.state.tokenGate = deferred();
-  await assert.rejects(f.managed.complete(pending, f.callback(pending), { ...operation, deadline: Date.now() + 35 }), error => error.name === 'TimeoutError');
+  await assert.rejects(f.managed.complete(f.callback(pending), { ...operation, deadline: Date.now() + 35 }), error => error.name === 'TimeoutError');
   assert.ok(f.checked.filter(item => item.purpose !== 'token').every(item => item.deadline === operation.deadline));
   f.state.tokenGate.resolve(); assert.equal(f.store.writes, 0);
 });
@@ -284,7 +285,7 @@ test('[purpose-isolation] upload cannot inherit event credential or attempt', as
 test('[redaction] hostile token response is absent from errors and causes', async t => {
   const f = await fixture(t), pending = await f.prepare();
   Object.assign(f.state, { tokenStatus: 400, tokenError: { error: 'invalid_request', error_description: 'description-secret code-secret refresh-1 access-1 client-secret' } });
-  await assert.rejects(f.managed.complete(pending, f.callback(pending), budget()), classified(['provider_failed'])); assert.equal(f.store.values.size, 0);
+  await assert.rejects(f.managed.complete(f.callback(pending), budget()), classified(['provider_failed'])); assert.equal(f.store.values.size, 0);
 });
 
 test('configured bindings require exact local issuer, resource and client identity', async t => {
@@ -342,7 +343,7 @@ test('selectClient receives frozen context, binding and nested scopes', async t 
   } });
   const pending = await managed.prepare({ ...f.context, authentication }, budget());
   assert.ok(selected); assert.equal(pending.type, 'pending_login');
-  const ready = await managed.complete(pending, f.callback(pending), budget());
+  const ready = await managed.complete(f.callback(pending), budget());
   assert.equal(ready.credential.token, 'access-1');
   assert.equal(f.tokens[0].body.get('resource'), f.client.resource);
   assert.equal(new URL(pending.authorizationUrl).searchParams.get('scope'), 'deliver');
@@ -356,7 +357,7 @@ test('prepare snapshots caller identity and binding before its first await', asy
   input.url = `${f.origin}/broader`; input.purpose = 'upload'; input.backendId = 'other-backend';
   input.authentication.resource = f.origin; input.authentication.scopes.push('admin');
   const pending = await preparing;
-  const ready = await f.managed.complete(pending, f.callback(pending), budget());
+  const ready = await f.managed.complete(f.callback(pending), budget());
   assert.equal(ready.credential.token, 'access-1');
   assert.equal(f.tokens[0].body.get('resource'), f.client.resource);
   assert.equal(new URL(pending.authorizationUrl).searchParams.get('scope'), 'deliver');
@@ -370,7 +371,7 @@ test('prepare snapshots caller identity and binding before its first await', asy
 test('cancel pending login invalidates completion and permits fresh login', async t => {
   const f = await fixture(t), pending = await f.prepare();
   await f.managed.cancel(pending, budget());
-  await assert.rejects(f.managed.complete(pending, f.callback(pending), budget()), classified(['interaction_required']));
+  await assert.rejects(f.managed.complete(f.callback(pending), budget()), classified(['interaction_required']));
   const next = await f.prepare(); assert.notEqual(next, pending);
   assert.notEqual(new URL(next.authorizationUrl).searchParams.get('state'), new URL(pending.authorizationUrl).searchParams.get('state'));
   assert.equal(f.tokens.length, 0); assert.equal(f.store.writes, 0);
@@ -470,10 +471,10 @@ for (const vector of lifecycleVectors.keys) {
   test(`shared framed keys: ${vector.id}`, () => {
     const v = vector.input;
     const context = { backendId: v.backend_id, purpose: v.purpose, url: v.destination };
-    const client = { issuer: v.issuer, resource: v.resource, clientId: v.client_id, flow: v.flow,
+    const client = { issuer: v.issuer, resource: v.resource, flow: v.flow,
       scopes: [], allowedScopes: v.allowed_scopes, ...(v.grant_partition === undefined ? {} : { grantPartition: v.grant_partition }) };
     assert.equal(bindingKey(v.namespace, context), vector.binding_key);
-    assert.equal(grantKey(v.namespace, context, client), vector.grant_key);
+    assert.equal(grantKey(v.namespace, context, client, v.client_identity), vector.grant_key);
   });
 }
 for (const vector of lifecycleVectors.token_responses) {
@@ -502,10 +503,10 @@ for (const vector of lifecycleVectors.token_responses) {
       const wire = new URL(pending.authorizationUrl).searchParams.get('scope').split(' ').sort();
       assert.deepEqual(wire, [...vector.wire_request].sort());
       assert.deepEqual(wire, [...new Set([...vector.previous_granted, ...[...vector.requested, ...vector.required].filter(scope => vector.allowed.includes(scope))])].sort());
-      complete = f.managed.complete(pending, f.callback(pending), budget());
+      complete = f.managed.complete(f.callback(pending), budget());
     } else {
       const pending = await f.prepare();
-      complete = f.managed.complete(pending, f.callback(pending), budget());
+      complete = f.managed.complete(f.callback(pending), budget());
     }
     if (vector.usable) assert.equal((await complete).credential.token, vector.response.access_token);
     else await assert.rejects(complete, { code: vector.error ?? 'interaction_required' });
@@ -526,14 +527,15 @@ for (const vector of lifecycleVectors.token_responses) {
 
 test('[invalid-callback-does-not-consume] invalid callback does not consume pending; valid denial and invalid_grant do', async t => {
   const f = await fixture(t), pending = await f.prepare();
-  await assert.rejects(f.managed.complete(pending, f.callback(pending, { state: 'stray' }), budget()), { code: 'access_denied' });
-  assert.equal((await f.managed.complete(pending, f.callback(pending), budget())).credential.token, 'access-1');
+  await assert.rejects(f.managed.complete(f.callback(pending, { state: 'stray' }), budget()), { code: 'interaction_required' });
+  await assert.rejects(f.managed.complete(f.callback(pending, { iss: 'https://evil.invalid' }), budget()), { code: 'access_denied' });
+  assert.equal((await f.managed.complete(f.callback(pending), budget())).credential.token, 'access-1');
   const g = await fixture(t), denied = await g.prepare();
   const denial = new URL(g.callback(denied)); denial.searchParams.delete('code'); denial.searchParams.set('error', 'access_denied');
-  await assert.rejects(g.managed.complete(denied, denial.href, budget()), { code: 'access_denied' });
-  await assert.rejects(g.managed.complete(denied, g.callback(denied), budget()), { code: 'interaction_required' });
+  await assert.rejects(g.managed.complete(denial.href, budget()), { code: 'access_denied' });
+  await assert.rejects(g.managed.complete(g.callback(denied), budget()), { code: 'interaction_required' });
   const h = await fixture(t, { tokenStatus: 400, tokenError: { error: 'invalid_grant' } }), stale = await h.prepare();
-  await assert.rejects(h.managed.complete(stale, h.callback(stale), budget()), { code: 'interaction_required' });
+  await assert.rejects(h.managed.complete(h.callback(stale), budget()), { code: 'interaction_required' });
   assert.notEqual(await h.prepare(), stale);
 });
 
@@ -648,7 +650,7 @@ test('[configured-preset-no-protected-resource-metadata] configured preset never
   const authentication = { type: 'oauth', issuer: f.client.issuer, resource: f.client.resource,
     clientId: f.client.clientId, flow: f.client.flow, scopes: [...f.client.scopes] };
   const pending = await f.prepare({ authentication });
-  await f.managed.complete(pending, f.callback(pending), budget());
+  await f.managed.complete(f.callback(pending), budget());
   assert(f.requests.includes('/.well-known/oauth-authorization-server/issuer'));
   assert(!f.requests.some(path => path.includes('oauth-protected-resource')));
 });
@@ -657,7 +659,7 @@ for (const redirect of ['http://127.0.0.1:42819/callback', 'http://127.0.0.2:428
   test(`[loopback-redirect] literal loopback redirect completes through native HTTPS token endpoint: ${redirect}`, async t => {
     const f = await fixture(t); f.client.redirectUri = redirect;
     const pending = await f.prepare();
-    assert.equal((await f.managed.complete(pending, f.callback(pending), budget())).credential.token, 'access-1');
+    assert.equal((await f.managed.complete(f.callback(pending), budget())).credential.token, 'access-1');
   });
 }
 test('HTTP localhost hostname redirect is not literal loopback', async t => {
@@ -676,7 +678,7 @@ test('[delivery-never-creates-pending-login] anonymous 401 learns the binding; d
   await assert.rejects(provider.credential(f.context), { code: 'interaction_required' }, 'a known binding needing login never sends anonymously');
   assert.equal(f.store.pending.size, 0); assert.equal(f.tokens.length, 0);
   const before = Date.now(), pending = await f.managed.prepare(f.context, budget(undefined, 1000));
-  assert.equal(pending.type, 'pending_login'); assert.equal(f.store.pending.size, 1);
+  assert.equal(pending.type, 'pending_login'); assert.equal(f.store.pending.size, 0, 'pending logins are process-owned by default');
   assert(pending.expiresAt >= before + 600_000, 'default lifetime is ten minutes, not the prepare budget');
 });
 
@@ -756,7 +758,7 @@ test('code completion resolves a rotated client secret outside coordination with
   const pending = await managed.prepare({ ...f.context, challenged: true }, hostBudget);
   const callback = f.callback(pending), authorization = new URL(pending.authorizationUrl);
   f.client.clientSecret = 'rotated-secret'; f.state.expectedClientSecret = 'rotated-secret';
-  const ready = await managed.complete(pending, callback, budget());
+  const ready = await managed.complete(callback, budget());
   assert.equal(ready.credential.token, 'access-1'); assert.equal(selections, 2);
   assert.equal(f.tokens.length, 1, 'revoked secret must never reach the token endpoint');
   assert.equal(decodeURIComponent(Buffer.from(f.tokens[0].authorization.slice(6), 'base64').toString()), 'client:rotated-secret');
@@ -770,17 +772,16 @@ for (const [field, changed] of [
   ['resource', client => `${client.resource}/other`],
   ['clientId', () => 'other-client'],
   ['flow', () => 'client_credentials'],
-  ['redirectUri', client => `${client.redirectUri}/other`],
   ['grantPartition', () => 'other-partition'],
 ]) {
   test(`code completion denies incompatible current ${field} without consuming original consent`, async t => {
     const f = await fixture(t); f.client.clientSecret = 'secret'; f.client.allowedScopes = ['deliver', 'audit'];
     const pending = await f.prepare(), callback = f.callback(pending);
     const original = f.client[field]; f.client[field] = changed(f.client);
-    await assert.rejects(f.managed.complete(pending, callback, budget()), { code: 'invalid_configuration' });
+    await assert.rejects(f.managed.complete(callback, budget()), { code: 'invalid_configuration' });
     assert.equal(f.tokens.length, 0);
     if (original === undefined) delete f.client[field]; else f.client[field] = original;
-    assert.equal((await f.managed.complete(pending, callback, budget())).credential.token, 'access-1');
+    assert.equal((await f.managed.complete(callback, budget())).credential.token, 'access-1');
   });
 }
 
@@ -794,10 +795,10 @@ test('host credential lookup failure before callback claim preserves the origina
   } });
   const pending = await managed.prepare({ ...f.context, challenged: true }, budget()), callback = f.callback(pending);
   unavailable = true;
-  await assert.rejects(managed.complete(pending, callback, budget()), { code: 'credential_unavailable' });
+  await assert.rejects(managed.complete(callback, budget()), { code: 'credential_unavailable' });
   assert.equal(f.tokens.length, 0);
   unavailable = false;
-  assert.equal((await managed.complete(pending, callback, budget())).credential.token, 'access-1');
+  assert.equal((await managed.complete(callback, budget())).credential.token, 'access-1');
 });
 
 test('completion cancellation during current-client selection does not claim or replace host consent', async t => {
@@ -811,12 +812,12 @@ test('completion cancellation during current-client selection does not claim or 
   const pending = await managed.prepare({ ...f.context, challenged: true }, budget()), callback = f.callback(pending);
   block = true;
   const controller = new AbortController(), reason = new Error('host cancelled callback processing');
-  const completing = managed.complete(pending, callback, budget(controller.signal));
+  const completing = managed.complete(callback, budget(controller.signal));
   await entered.promise; controller.abort(reason);
   await assert.rejects(completing, error => error === reason);
   assert.equal(f.tokens.length, 0);
   block = false; release.resolve();
-  assert.equal((await managed.complete(pending, callback, budget())).credential.token, 'access-1');
+  assert.equal((await managed.complete(callback, budget())).credential.token, 'access-1');
 });
 
 test('valid consent denial is claimed once without resolving unavailable runtime client credentials', async t => {
@@ -828,9 +829,9 @@ test('valid consent denial is claimed once without resolving unavailable runtime
   const pending = await managed.prepare({ ...f.context, challenged: true }, budget());
   const denied = new URL(f.callback(pending)); denied.searchParams.delete('code'); denied.searchParams.set('error', 'access_denied');
   unavailable = true;
-  await assert.rejects(managed.complete(pending, denied.href, budget()), { code: 'access_denied' });
+  await assert.rejects(managed.complete(denied.href, budget()), { code: 'access_denied' });
   assert.equal(selections, 1); assert.equal(f.tokens.length, 0);
-  await assert.rejects(managed.complete(pending, denied.href, budget()), { code: 'interaction_required' });
+  await assert.rejects(managed.complete(denied.href, budget()), { code: 'interaction_required' });
 });
 
 test('successful host prepares and completed logins notify onPrepared subscribers through composition', async t => {
@@ -842,7 +843,7 @@ test('successful host prepares and completed logins notify onPrepared subscriber
   const pending = await f.prepare();
   assert.equal(pending.type, 'pending_login');
   assert.deepEqual(seen, [], 'a pending login is not a successful prepare');
-  await f.managed.complete(pending, f.callback(pending), budget());
+  await f.managed.complete(f.callback(pending), budget());
   assert.deepEqual(seen, [{ backendId: 'backend', purpose: 'event', url: f.context.url }]);
   assert.equal((await f.prepare()).type, 'ready');
   assert.equal(seen.length, 2);

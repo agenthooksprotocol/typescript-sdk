@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
-import { managedOAuth, registrationKey } from '../dist/src/oauth/index.js';
-import { acceptRegistration, chooseSource, failureKey, requestDigest } from '../dist/src/oauth/registration.js';
+import { clientIdentity, managedOAuth, registrationKey } from '../dist/src/oauth/index.js';
+import { acceptRegistration, chooseSource, failureKey, registrationRequest } from '../dist/src/oauth/registration.js';
 
 const vectors = JSON.parse(readFileSync(new URL('../testdata/sdk-auth-lifecycle.json', import.meta.url), 'utf8'));
 const budget = (ms = 5000) => ({ signal: new AbortController().signal, deadline: Date.now() + ms });
@@ -106,48 +106,43 @@ function fixture({ client: overrides = {}, metadata = {}, options: extra = {}, s
   };
   const oauth = managedOAuth(options);
   const provider = (instance = oauth) => instance.provider({ budget: () => budget() });
+  // A callback arrives at the login's own redirect, named in its authorization URL.
   const callback = (pending, extra = {}) => {
-    const url = new URL(REDIRECT);
+    const url = new URL(new URL(pending.authorizationUrl).searchParams.get('redirect_uri'));
     url.search = new URLSearchParams({ code: 'code', state: new URL(pending.authorizationUrl).searchParams.get('state'), ...extra }).toString();
     return url.href;
   };
   const login = async (instance = oauth, ctx = context, prepareOptions) => {
     const pending = await instance.prepare({ ...ctx, challenged: true }, budget(), prepareOptions);
-    return instance.complete(pending, callback(pending), budget());
+    return instance.complete(callback(pending), budget());
   };
   const expire = () => { for (const [key, value] of store.values) if (value.kind === 'grant') store.values.set(key, { ...value, expiresAt: Date.now() - 1 }); };
   const registrations = () => store.of('ahp.oauth.registration:');
+  const grants = () => store.of('ahp.oauth.grant:');
   const markers = () => store.of('ahp.oauth.registration-failure:');
-  const key = registrationKey('account', client.issuer, client.flow, client.flow === 'client_credentials' ? '' : client.redirectUri);
+  const key = registrationKey('account', client.issuer);
   const patchRecord = patch => store.values.set(key, { ...store.values.get(key), ...patch });
-  return { oauth, options, store, secrets, state, client, context, provider, callback, login, expire, registrations, markers, key,
+  return { oauth, options, store, secrets, state, client, context, provider, callback, login, expire, registrations, grants, markers, key,
     patchRecord, destinations };
 }
 function withoutSelect({ select: _select, ...client }) { return client; }
 const cc = (rest = {}) => ({ client: { flow: 'client_credentials', redirectUri: undefined, ...rest } });
-/** Wait for unawaited background work (proactive renewal) to settle. */
-const until = async (predicate, ms = 2000) => {
-  for (const end = Date.now() + ms; !predicate() && Date.now() < end;) await new Promise(resolve => setTimeout(resolve, 5));
-  await new Promise(resolve => setTimeout(resolve, 20));
-};
 const errorCode = code => error => { assert.equal(error.code, code); return true; };
 const clientIdOf = pending => new URL(pending.authorizationUrl).searchParams.get('client_id');
+const redirectOf = pending => new URL(pending.authorizationUrl).searchParams.get('redirect_uri');
+/** Bind a real loopback listener on an ephemeral port, as MCP clients do per login. */
+async function ephemeralRedirect() {
+  const { createServer } = await import('node:http');
+  const server = createServer((_request, response) => response.end());
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  return { redirect: `http://127.0.0.1:${server.address().port}/callback`, close: () => new Promise(resolve => server.close(resolve)) };
+}
 
 // ---- Shared vectors ---------------------------------------------------------
 
-test('registration key vectors frame namespace, exact issuer, flow and redirect only', () => {
+test('registration key vectors frame namespace and exact issuer only', () => {
   for (const vector of vectors.registration_keys) {
-    const { namespace, issuer, flow, redirect } = vector.input;
-    assert.equal(registrationKey(namespace, issuer, flow, redirect), vector.registration_key, vector.id);
-  }
-});
-
-test('registration request digest vectors', async () => {
-  for (const vector of vectors.registration_request_digests) {
-    const input = vector.input;
-    const digest = await requestDigest({ clientName: input.client_name, softwareId: input.software_id,
-      softwareVersion: input.software_version, scopes: input.registration_scope, initialAccessTokenRef: input.initial_access_token_ref });
-    assert.equal(digest, vector.request_digest, vector.id);
+    assert.equal(registrationKey(vector.input.namespace, vector.input.issuer), vector.registration_key, vector.id);
   }
 });
 
@@ -165,6 +160,7 @@ test('client selection vectors', () => {
     }
     const choice = chooseSource(client, input.as_metadata, input.secret_hook);
     assert.equal(choice.source, vector.expect.source, vector.id);
+    assert.equal(clientIdentity(choice), vector.expect.client_identity, vector.id);
     if (vector.expect.client_id) assert.equal(choice.clientId, vector.expect.client_id, vector.id);
     if (vector.expect.token_endpoint_auth_method) assert.equal(choice.method, vector.expect.token_endpoint_auth_method, vector.id);
   }
@@ -178,10 +174,12 @@ test('registration response vectors', () => {
     assert.equal(accepted.clientId, vector.expect.record.client_id, vector.id);
     assert.equal(accepted.clientSecretExpiresAt ?? null, vector.expect.record.client_secret_expires_at, vector.id);
     assert.equal(accepted.clientSecret !== undefined, vector.expect.record.secret_ref, vector.id);
-    for (const field of ['registration_access_token', 'registration_client_uri', 'client_secret', 'scope']) {
-      assert.equal(Object.hasOwn(accepted.metadata, field), false, `${vector.id} keeps ${field}`);
-    }
   }
+  // The SDK builds the vectors' PKCE request for a loopback redirect.
+  const pkce = vectors.registration_responses.find(vector => vector.id === 'pkce-minimal');
+  assert.deepEqual(registrationRequest({ flow: 'authorization_code_pkce', redirectUri: REDIRECT, registration: POLICY }, 'none'), pkce.request);
+  assert.equal(registrationRequest({ flow: 'authorization_code_pkce', redirectUri: 'https://app.example/cb', registration: POLICY }, 'none')
+    .application_type, undefined, 'native only for a loopback redirect');
 });
 
 // ---- Selection order --------------------------------------------------------
@@ -206,12 +204,12 @@ test('[dcr-preregistered-wins] a pre-registered client beats CIMD and DCR and ma
   assert.equal((await provider.credential({ ...f.context, challenged: true })).token, 'access-1');
   assert.equal(f.state.tokenCalls.at(-1).id, 'dcr-1');
   Object.assign(f.client, { clientId: 'pre', clientSecret: 'pre-secret' });
-  // The lookup: a new grant key, so the old DCR token is never presented under the new client.
+  // The lookup: another client identity is another grant key, so the DCR token is never presented under it.
   assert.equal((await provider.credential(f.context)).token, 'access-2');
   assert.deepEqual(f.state.tokenCalls.map(call => call.id), ['dcr-1', 'pre']);
   assert.equal(f.state.registrations.length, 1);
-  assert.equal(f.store.of('ahp.oauth.binding:')[0].client.source, 'preregistered');
-  assert.equal(f.store.of('ahp.oauth.grant:').length, 2);
+  assert.deepEqual(f.store.of('ahp.oauth.binding:')[0].client, { source: 'preregistered', clientId: 'pre' });
+  assert.equal(f.grants().length, 2);
 });
 
 // ---- CIMD -------------------------------------------------------------------
@@ -229,6 +227,7 @@ test('[cimd-used-when-supported] the CIMD URL is the client_id; no secret, auth 
   assert.deepEqual(f.registrations(), []);
   assert.equal(f.secrets.values.size, 0);
   assert.equal(f.store.of('ahp.oauth.binding:')[0].client.source, 'cimd');
+  assert.match(f.store.of('ahp.oauth.binding:')[0].grantKey, /:cimd:https:\/\/adapter\.example\/oauth\/client\.json/);
   assert.doesNotMatch(JSON.stringify([...f.store.values]), /never-sent/);
 });
 
@@ -241,11 +240,37 @@ test('[cimd-not-supported-falls-back-to-dcr] absent or non-true support skips CI
   }
 });
 
-test('[cimd-redirect-mismatch-invalid-configuration] a redirect not in the document fails before any login or registration', async () => {
-  const f = fixture(cimd({ registration: POLICY, redirectUri: 'http://127.0.0.1:9999/callback' }));
-  await assert.rejects(f.oauth.prepare(f.context, budget()), errorCode('invalid_configuration'));
-  assert.deepEqual(f.store.of('ahp.oauth.pending:'), []);
-  assert.equal(f.state.registrations.length, 0);
+test('[cimd-redirect-mismatch-invalid-configuration] a redirect matching no declared entry fails before any login or registration', async () => {
+  for (const redirectUri of ['http://127.0.0.1:8765/other', 'http://[::1]:8765/callback', 'https://adapter.example/other']) {
+    const f = fixture(cimd({ registration: POLICY }));
+    await assert.rejects(f.oauth.prepare(f.context, budget(), { redirectUri }), errorCode('invalid_configuration'), redirectUri);
+    assert.deepEqual(f.store.of('ahp.oauth.pending:'), []);
+    assert.equal(f.state.registrations.length, 0);
+    assert.equal(f.state.requests.some(({ purpose }) => purpose === 'token'), false);
+  }
+});
+
+test('[cimd-portless-loopback-redirect-matches] a declared loopback redirect matches any port; the exact redirect is sent; localhost never', async () => {
+  for (const [declared, redirect] of [['http://127.0.0.1/callback', 'http://127.0.0.1:51004/callback'],
+    ['http://127.0.0.1:8765/callback', 'http://127.0.0.1:51005/callback'], ['http://[::1]/callback', 'http://[::1]:51006/callback']]) {
+    const f = fixture(cimd({ clientMetadataDocument: { url: CIMD, redirectUris: [declared] } }));
+    const pending = await f.oauth.prepare(f.context, budget(), { redirectUri: redirect });
+    assert.equal(clientIdOf(pending), CIMD);
+    assert.equal(redirectOf(pending), redirect, 'the authorization request carries the port');
+    await f.oauth.complete(f.callback(pending), budget());
+    assert.equal(f.state.tokenCalls[0].body.get('redirect_uri'), redirect);
+  }
+  // Not a loopback match: userinfo, or https compared exactly.
+  const userinfo = fixture(cimd({ clientMetadataDocument: { url: CIMD, redirectUris: ['http://127.0.0.1/callback'] } }));
+  await assert.rejects(userinfo.oauth.prepare(userinfo.context, budget(), { redirectUri: 'http://user@127.0.0.1:51004/callback' }),
+    errorCode('invalid_configuration'));
+  // localhost is invalid_configuration even when declared, and for a pre-registered client, before any network.
+  for (const client of [{ clientMetadataDocument: { url: CIMD, redirectUris: ['http://localhost:51004/callback'] } }, { clientId: 'client' }]) {
+    const f = fixture(cimd(client));
+    await assert.rejects(f.oauth.prepare(f.context, budget(), { redirectUri: 'http://localhost:51004/callback' }), errorCode('invalid_configuration'));
+    assert.equal(f.state.registrations.length + f.state.tokenCalls.length, 0);
+    assert.equal(f.destinations.some(([, purpose]) => purpose === 'authorization'), false);
+  }
 });
 
 test('[cimd-never-fetched-by-sdk] no request targets the CIMD URL or anything derived from it', async () => {
@@ -269,10 +294,10 @@ test('[cimd-invalid-client-no-dcr-fallback] invalid_client for a CIMD client is 
   const f = fixture(cimd({ registration: POLICY }));
   f.state.invalid.add(CIMD);
   const pending = await f.oauth.prepare(f.context, budget());
-  await assert.rejects(f.oauth.complete(pending, f.callback(pending), budget()), errorCode('invalid_configuration'));
+  await assert.rejects(f.oauth.complete(f.callback(pending), budget()), errorCode('invalid_configuration'));
   // The authorization endpoint reporting invalid_client is also misconfiguration.
   const again = await f.oauth.prepare(f.context, budget());
-  await assert.rejects(f.oauth.complete(again, f.callback(again, { error: 'invalid_client', code: undefined }).replace('code=undefined&', ''), budget()),
+  await assert.rejects(f.oauth.complete(f.callback(again, { error: 'invalid_client', code: undefined }).replace('code=undefined&', ''), budget()),
     errorCode('invalid_configuration'));
   // A refresh rejected with invalid_client too.
   f.state.invalid.clear();
@@ -308,20 +333,166 @@ test('[dcr-registration-endpoint-destination-policy] insecure, refused or redire
   assert.ok(redirecting.state.requests.every(({ url }) => !url.startsWith('https://evil.example')));
 });
 
-test('[dcr-pkce-registers-only-in-prepare] PKCE registers only in host prepare; client credentials in any acquisition', async () => {
+// ---- PKCE: DCR per login, as in MCP clients -------------------------------------
+
+test('[dcr-pkce-registers-per-login] only host prepare registers, inside each login, with its exact redirect and application_type native', async () => {
   const f = fixture();
+  // Delivery, challenge handling and the lookup never register a PKCE client.
   await assert.rejects(f.provider().credential({ ...f.context, challenged: true }), errorCode('interaction_required'));
+  await f.oauth.challenge({ ...f.context, response: new Response(null, { status: 401, headers: { 'www-authenticate': 'Bearer' } }), credential: undefined }, budget());
+  await assert.rejects(f.provider().credential(f.context), errorCode('interaction_required'));
   assert.equal(f.state.registrations.length, 0);
-  await f.oauth.prepare(f.context, budget());
+  // Each login registers anew, with its own redirect, and is authorized with its own client.
+  const first = await f.oauth.prepare(f.context, budget(), { redirectUri: 'http://127.0.0.1:50001/callback' });
+  const second = await f.oauth.prepare(f.context, budget(), { redirectUri: 'https://app.example/callback' });
+  assert.deepEqual(f.state.registrations.map(({ body }) => [body.redirect_uris, body.application_type]),
+    [[['http://127.0.0.1:50001/callback'], 'native'], [['https://app.example/callback'], undefined]]);
+  assert.deepEqual([clientIdOf(first), clientIdOf(second)], ['dcr-1', 'dcr-2']);
+  assert.deepEqual(f.registrations(), [], 'no registration record for PKCE');
+  // Each callback completes only its own login, with its own client.
+  await f.oauth.complete(f.callback(second), budget());
+  await f.oauth.complete(f.callback(first), budget());
+  assert.deepEqual(f.state.tokenCalls.map(call => call.id), ['dcr-2', 'dcr-1']);
+  assert.equal(f.state.registrations.length, 2);
+});
+
+test('[dcr-issued-client-stored-with-grant] completion commits the issued client with the tokens under the dcr identity; refresh uses it', async () => {
+  const f = fixture();
+  await f.login();
+  const [grant] = f.grants();
+  assert.deepEqual([grant.clientId, grant.token, grant.refreshToken], ['dcr-1', 'access-1', 'refresh-1']);
+  const [key] = [...f.store.values.keys()].filter(key => key.startsWith('ahp.oauth.grant:'));
+  assert.match(key, /3:dcr23:authorization_code_pkce/);
+  assert.doesNotMatch(key, /dcr-1/, 'an issued client_id never enters the grant key');
+  assert.deepEqual(f.store.of('ahp.oauth.binding:')[0].client, { source: 'dcr' });
+  // A re-registered client replaces the stored one under the same key (here after the tokens were dropped).
+  f.store.values.set(key, { ...f.store.values.get(key), token: undefined, refreshToken: undefined });
+  await f.login();
+  assert.equal(f.grants().length, 1);
+  assert.deepEqual([f.grants()[0].clientId, f.grants()[0].token], ['dcr-2', 'access-2']);
+  assert.equal(f.store.values.get(key).clientId, 'dcr-2');
+  // Refresh presents the stored client and keeps it with the rotated tokens.
+  f.expire();
+  assert.equal((await f.provider().credential(f.context)).token, 'access-3');
+  assert.deepEqual([f.state.tokenCalls.at(-1).id, f.state.tokenCalls.at(-1).body.get('refresh_token')], ['dcr-2', 'refresh-2']);
+  assert.deepEqual([f.grants()[0].clientId, f.grants()[0].refreshToken], ['dcr-2', 'refresh-3']);
+  // A grant without its client cannot refresh: the next login is needed.
+  f.store.values.set(key, { ...f.store.values.get(key), clientId: undefined });
+  f.expire();
+  await assert.rejects(f.provider().credential(f.context), errorCode('interaction_required'));
+  assert.equal(f.state.tokenCalls.length, 3);
+});
+
+test('[dcr-pkce-invalid-client-drops-grant] invalid_client ends only its login at completion; at refresh it compare-and-deletes the matching grant', async () => {
+  const f = fixture({ client: { allowedScopes: ['deliver', 'audit'] } });
+  await f.login();
+  const before = f.grants()[0];
+  // Completion of a step-up login: its client is rejected. The stored grant (an older valid client) is kept.
+  const pending = await f.oauth.prepare(f.context, budget(), { requiredScopes: ['audit'] });
+  f.state.invalid.add(clientIdOf(pending));
+  await assert.rejects(f.oauth.complete(f.callback(pending), budget()), errorCode('interaction_required'));
+  assert.deepEqual(f.grants(), [before]);
+  await assert.rejects(f.oauth.complete(f.callback(pending), budget()), errorCode('interaction_required'), 'that login has ended');
+  // Refresh: a rejected stored client deletes the grant it was presented for.
+  f.state.invalid.add('dcr-1');
+  f.expire();
+  await assert.rejects(f.provider().credential(f.context), errorCode('interaction_required'));
+  assert.deepEqual(f.grants(), []);
+  assert.equal(f.state.registrations.length, 2, 'no registration outside prepare');
+  // A newer grant (another client or refresh token) written meanwhile is kept.
+  const g = fixture();
+  await g.login();
+  const [key] = [...g.store.values.keys()].filter(key => key.startsWith('ahp.oauth.grant:'));
+  g.state.invalid.add('dcr-1');
+  g.expire();
+  const fetch = g.options.policyFetch;
+  const racing = managedOAuth({ ...g.options, async policyFetch(url, init, context) {
+    const response = await fetch(url, init, context);
+    if (url.endsWith('/token')) g.store.values.set(key, { ...g.store.values.get(key), generation: 'newer', clientId: 'dcr-9', refreshToken: 'refresh-9' });
+    return response;
+  } });
+  await assert.rejects(g.provider(racing).credential(g.context), errorCode('interaction_required'));
+  assert.deepEqual([g.grants()[0].clientId, g.grants()[0].refreshToken], ['dcr-9', 'refresh-9']);
+  // Same client but a rotated refresh token is newer too.
+  g.state.invalid.add('dcr-9');
+  const rotating = managedOAuth({ ...g.options, async policyFetch(url, init, context) {
+    const response = await fetch(url, init, context);
+    if (url.endsWith('/token')) g.store.values.set(key, { ...g.store.values.get(key), generation: 'newest', refreshToken: 'refresh-10' });
+    return response;
+  } });
+  g.store.values.set(key, { ...g.store.values.get(key), expiresAt: Date.now() - 1 });
+  await assert.rejects(g.provider(rotating).credential(g.context), errorCode('interaction_required'));
+  assert.equal(g.grants()[0].refreshToken, 'refresh-10');
+});
+
+test('[loopback-redirect-ephemeral-port-per-login] each login binds its own port; authorization, DCR, token and callback use it exactly', async () => {
+  const f = fixture();
+  const listeners = [await ephemeralRedirect(), await ephemeralRedirect()];
+  try {
+    const [a, b] = listeners.map(listener => listener.redirect);
+    assert.notEqual(a, b);
+    const first = await f.oauth.prepare(f.context, budget(), { redirectUri: a });
+    const second = await f.oauth.prepare(f.context, budget(), { redirectUri: b });
+    assert.deepEqual([redirectOf(first), redirectOf(second)], [a, b]);
+    assert.deepEqual(f.state.registrations.map(({ body }) => body.redirect_uris), [[a], [b]]);
+    // A callback on another port is not this login's redirect, and consumes nothing.
+    const moved = new URL(f.callback(first)); moved.port = new URL(b).port;
+    await assert.rejects(f.oauth.complete(moved.href, budget()), errorCode('access_denied'));
+    await f.oauth.complete(f.callback(first), budget());
+    await f.oauth.complete(f.callback(second), budget());
+    assert.deepEqual(f.state.tokenCalls.map(call => call.body.get('redirect_uri')), [a, b]);
+  } finally { await Promise.all(listeners.map(listener => listener.close())); }
+});
+
+test('[lookup-never-registers-pkce] the up-front lookup never registers PKCE; client credentials may', async () => {
+  const f = fixture();
+  await f.login();
+  for (const key of [...f.store.values.keys()]) if (key.startsWith('ahp.oauth.grant:')) f.store.values.delete(key);
+  await assert.rejects(f.provider().credential(f.context), errorCode('interaction_required'));
   assert.equal(f.state.registrations.length, 1);
   const c = fixture(cc());
-  assert.equal((await c.provider().credential({ ...c.context, challenged: true })).token, 'access-1');
-  assert.equal(c.state.registrations.length, 1);
-  // Challenge handling may register a client-credentials client too.
-  const h = fixture(cc());
-  await h.oauth.challenge({ ...h.context, response: new Response(null, { status: 401, headers: { 'www-authenticate': 'Bearer' } }), credential: undefined }, budget());
-  assert.equal(h.state.registrations.length, 1);
+  await c.oauth.prepare(c.context, budget());
+  c.store.values.delete(c.key);
+  c.expire();
+  assert.equal((await c.provider().credential(c.context)).token, 'access-2');
+  assert.equal(c.state.registrations.length, 2);
 });
+
+test('[dcr-metadata-change-keeps-selection] new CIMD support or a removed registration_endpoint keeps the recorded client', async () => {
+  const f = fixture({ client: { clientMetadataDocument: { url: CIMD, redirectUris: [REDIRECT] } } });
+  await f.login();
+  f.state.metadata[ISSUER] = { client_id_metadata_document_supported: true, registration_endpoint: undefined };
+  f.expire();
+  // Host prepare rediscovers metadata and refreshes with the grant's DCR client.
+  assert.equal((await f.oauth.prepare({ ...f.context, challenged: true }, budget())).credential.token, 'access-2');
+  assert.equal(f.state.tokenCalls.at(-1).id, 'dcr-1');
+  const [binding] = f.store.of('ahp.oauth.binding:');
+  assert.equal(binding.metadata.client_id_metadata_document_supported, true);
+  assert.deepEqual(binding.client, { source: 'dcr' });
+  assert.equal(f.state.registrations.length, 1);
+});
+
+test('[dcr-response-validation-invalid-configuration] an invalid 2xx registration persists nothing and is not retried', async () => {
+  for (const response of [{ client_id: 'dcr', redirect_uris: ['https://evil.example/cb'] }, { client_id: 'dcr', redirect_uris: ['http://127.0.0.1:9999/callback'] },
+    { client_id: 'dcr', token_endpoint_auth_method: 'client_secret_basic' }]) {
+    const f = fixture();
+    f.state.register = () => Response.json(response, { status: 201 });
+    await assert.rejects(f.oauth.prepare(f.context, budget()), errorCode('invalid_configuration'));
+    assert.equal(f.state.registrations.length, 1);
+    assert.equal(f.store.values.size, 1, 'only the binding');
+    assert.equal(f.secrets.values.size, 0);
+    assert.equal(f.destinations.some(([, purpose]) => purpose === 'authorization'), false, 'no login');
+  }
+  // A PKCE secret is ignored, never persisted.
+  const f = fixture();
+  f.state.register = () => Response.json({ client_id: 'dcr-public', client_secret: 'pkce-secret', client_secret_expires_at: 1 }, { status: 201 });
+  await f.login();
+  assert.equal(f.state.tokenCalls[0].secret, null);
+  assert.equal(f.secrets.values.size, 0);
+  assert.doesNotMatch(JSON.stringify([...f.store.values]), /pkce-secret/);
+});
+
+// ---- Client credentials: one persisted registration -----------------------------
 
 test('[dcr-registers-once-across-processes] concurrent processes register once; a losing compare-and-set uses the winner', async () => {
   const f = fixture(cc());
@@ -341,15 +512,29 @@ test('[dcr-registers-once-across-processes] concurrent processes register once; 
   assert.ok(racing.state.tokenCalls.every(call => call.id === record.clientId), 'both processes use the winning record');
 });
 
-test('[dcr-registration-reused-across-grants] grants in other bindings and partitions reuse one registration', async () => {
+test('[dcr-registration-reused-across-grants] every client-credentials grant in the namespace at the issuer reuses one registration', async () => {
   const f = fixture(cc());
   await f.oauth.prepare(f.context, budget());
   await f.oauth.prepare({ ...f.context, purpose: 'upload' }, budget());
   f.client.grantPartition = 'shared';
   await f.oauth.prepare({ ...f.context, backendId: 'other' }, budget());
   assert.equal(f.state.registrations.length, 1);
-  assert.equal(f.store.of('ahp.oauth.grant:').length, 3);
+  assert.equal(f.grants().length, 3);
   assert.ok(f.state.tokenCalls.every(call => call.id === 'dcr-1'));
+  const [record] = f.registrations();
+  assert.deepEqual(Object.keys(record).sort(), ['clientId', 'generation', 'kind', 'secretRef', 'tokenEndpointAuthMethod']);
+  assert.equal(record.tokenEndpointAuthMethod, 'client_secret_basic');
+});
+
+test('client credentials authenticate with the registered method even when metadata changes', async () => {
+  const f = fixture(cc());
+  f.state.metadata[ISSUER] = { token_endpoint_auth_methods_supported: ['client_secret_post'] };
+  await f.oauth.prepare(f.context, budget());
+  assert.equal(f.registrations()[0].tokenEndpointAuthMethod, 'client_secret_post');
+  f.state.metadata[ISSUER] = { token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'] };
+  f.expire();
+  await f.oauth.prepare({ ...f.context, challenged: true }, budget());
+  assert.ok(f.state.tokenCalls.every(call => call.body.get('client_secret') === 'secret-1'), 'client_secret_post both times');
 });
 
 test('[dcr-expired-secret-reregisters] an expired or unresolvable secret re-registers before any token request, including in the lookup', async () => {
@@ -376,53 +561,13 @@ test('[dcr-invalid-client-reregisters-once] invalid_client deletes the registrat
   assert.equal((await f.provider().credential(f.context)).token, 'access-2');
   assert.deepEqual(f.state.tokenCalls.map(call => call.id), ['dcr-1', 'dcr-1', 'dcr-2']);
   assert.equal(f.state.requests.filter(({ purpose }) => purpose === 'metadata').length, metadata, 'no metadata refetch');
-  // The replacement is rejected too: at most one re-registration, then credential_unavailable and a marker.
+  assert.equal(f.grants().length, 1, 'the grant key does not move');
+  // The replacement is rejected too: at most one re-registration, then credential_unavailable.
   f.state.invalid.add('dcr-2').add('dcr-3');
   f.expire();
   await assert.rejects(f.provider().credential(f.context), errorCode('credential_unavailable'));
   assert.equal(f.state.registrations.length, 3);
-  assert.equal(f.markers()[0].attempts, 1);
-  // PKCE: interaction_required, and the next prepare registers a new client.
-  const p = fixture();
-  await p.login();
-  p.state.invalid.add('dcr-1');
-  p.expire();
-  await assert.rejects(p.provider().credential(p.context), errorCode('interaction_required'));
-  assert.deepEqual(p.registrations(), []);
-  assert.equal(clientIdOf(await p.oauth.prepare(p.context, budget())), 'dcr-2');
-});
-
-test('[dcr-new-client-id-new-grant] a replacement client_id is a new grant key; the old grant is not migrated', async () => {
-  const grantKeys = f => [...f.store.values.keys()].filter(key => key.startsWith('ahp.oauth.grant:'));
-  for (const grantPartition of [undefined, 'shared']) {
-    const f = fixture(cc({ ...(grantPartition ? { grantPartition } : {}) }));
-    await f.oauth.prepare(f.context, budget());
-    const [oldGrant] = f.store.of('ahp.oauth.grant:');
-    f.state.invalid.add('dcr-1');
-    f.expire();
-    assert.equal((await f.provider().credential(f.context)).token, 'access-2');
-    const keys = grantKeys(f);
-    assert.ok(keys.some(key => key.includes('5:dcr-2')));
-    const old = keys.find(key => key.includes('5:dcr-1'));
-    // Replacement compare-and-deletes the old binding-scoped grant; a shared partition is kept.
-    if (grantPartition) assert.equal(f.store.values.get(old).generation, oldGrant.generation, 'not migrated');
-    else assert.equal(old, undefined);
-    assert.equal(f.store.of('ahp.oauth.binding:')[0].client.clientId, 'dcr-2');
-    // A forced re-registration does the same.
-    await f.oauth.prepare(f.context, budget(), { forceRegistration: true });
-    const forced = grantKeys(f);
-    assert.ok(forced.some(key => key.includes('5:dcr-3')));
-    assert.equal(forced.some(key => key.includes('5:dcr-2')), grantPartition !== undefined, String(grantPartition));
-  }
-  const p = fixture();
-  await p.login();
-  p.state.invalid.add('dcr-1');
-  p.expire();
-  await assert.rejects(p.provider().credential(p.context), errorCode('interaction_required'));
-  const pending = await p.oauth.prepare(p.context, budget());
-  assert.match(p.store.of('ahp.oauth.pending:')[0].grantKey, /5:dcr-2/);
-  assert.equal(p.store.of('ahp.oauth.grant:').length, 1, 'the old grant is left, not migrated');
-  assert.equal((await p.oauth.complete(pending, p.callback(pending), budget())).credential.token, 'access-2');
+  assert.deepEqual(f.registrations(), []);
 });
 
 test('[dcr-secret-not-in-token-record] the client secret is written only through the secret hook', async () => {
@@ -440,9 +585,10 @@ test('[dcr-secret-not-in-token-record] the client secret is written only through
   // Both rejected registrations are compare-and-deleted with their secrets.
   assert.equal(f.secrets.values.size, 0);
   assert.equal(f.secrets.deleted.length, 2);
-  // A PKCE pending login never holds a secret either.
-  const p = fixture({ client: { clientSecret: 'host-secret' } });
+  // A persisted PKCE pending login never holds a secret either.
+  const p = fixture({ client: { clientId: 'client', clientSecret: 'host-secret' }, options: { persistPendingLogins: true } });
   await p.oauth.prepare(p.context, budget());
+  assert.equal(p.store.of('ahp.oauth.pending:').length, 1);
   assert.doesNotMatch(JSON.stringify([...p.store.values]), /host-secret/);
 });
 
@@ -452,20 +598,6 @@ test('[dcr-no-secret-hook-no-confidential-registration] without a secret hook cl
   assert.equal(f.state.registrations.length, 0);
   const p = fixture({ secrets: null });
   assert.equal(clientIdOf(await p.oauth.prepare(p.context, budget())), 'dcr-1');
-});
-
-test('[dcr-metadata-change-keeps-selection] new CIMD support or a removed registration_endpoint keeps the recorded client', async () => {
-  const f = fixture({ client: { clientMetadataDocument: { url: CIMD, redirectUris: [REDIRECT] } } });
-  await f.login();
-  f.state.metadata[ISSUER] = { client_id_metadata_document_supported: true, registration_endpoint: undefined };
-  f.expire();
-  // Host prepare rediscovers metadata and refreshes with the recorded DCR client.
-  assert.equal((await f.oauth.prepare({ ...f.context, challenged: true }, budget())).credential.token, 'access-2');
-  assert.equal(f.state.tokenCalls.at(-1).id, 'dcr-1');
-  const [binding] = f.store.of('ahp.oauth.binding:');
-  assert.equal(binding.metadata.client_id_metadata_document_supported, true);
-  assert.deepEqual([binding.client.source, binding.client.clientId], ['dcr', 'dcr-1']);
-  assert.equal(f.state.registrations.length, 1);
 });
 
 test('[dcr-management-fields-not-persisted] registration_access_token and registration_client_uri are ignored', async () => {
@@ -490,116 +622,9 @@ test('[dcr-initial-access-token-scoped] an initial access token goes only to its
     [[`${ISSUER}/register`, 'Bearer iat-value'], [`${OTHER}/register`, undefined]]);
   assert.doesNotMatch(JSON.stringify([...f.store.values]), /iat-value/);
   // An unresolvable reference sends no request.
-  f.secrets.values.delete('vault:iat');
-  await f.oauth.prepare(f.context, budget(), { forceRegistration: true }).catch(error => assert.equal(error.code, 'credential_unavailable'));
-  assert.equal(f.state.registrations.length, 2);
-});
-
-test('[lookup-never-registers-pkce] the up-front lookup never registers PKCE; client credentials may', async () => {
-  const f = fixture();
-  await f.login();
-  f.store.values.delete(f.key);
-  await assert.rejects(f.provider().credential(f.context), errorCode('interaction_required'));
-  assert.equal(f.state.registrations.length, 1);
-  const c = fixture(cc());
-  await c.oauth.prepare(c.context, budget());
-  c.store.values.delete(c.key);
-  c.expire();
-  assert.equal((await c.provider().credential(c.context)).token, 'access-2');
-  assert.equal(c.state.registrations.length, 2);
-});
-
-// ---- Failed marker ------------------------------------------------------------
-
-test('[dcr-failed-marker-bounds-registration] a failure persists a marker; only prepare, success or a policy change clear it', async () => {
-  const f = fixture(cc());
-  f.state.register = () => Response.json({ error: 'invalid_client_metadata' }, { status: 400 });
-  const before = Date.now();
-  await assert.rejects(f.provider().credential({ ...f.context, challenged: true }), errorCode('invalid_configuration'));
-  const [marker] = f.markers();
-  assert.equal(marker.attempts, 1);
-  assert.ok(marker.failedAt >= before && marker.nextAttemptAt === marker.failedAt + 60_000);
-  assert.equal(marker.requestDigest, await requestDigest(POLICY));
-  // Other paths and processes send nothing until it elapses.
-  for (const instance of [f.oauth, managedOAuth(f.options)]) {
-    await assert.rejects(f.provider(instance).credential({ ...f.context, challenged: true }), errorCode('credential_unavailable'));
-  }
-  assert.equal(f.state.registrations.length, 1);
-  // Elapsed: the next attempt doubles the backoff.
-  f.store.values.set(failureKey(f.key), { ...marker, nextAttemptAt: Date.now() - 1 });
-  await assert.rejects(f.provider().credential({ ...f.context, challenged: true }), errorCode('invalid_configuration'));
-  const [second] = f.markers();
-  assert.deepEqual([second.attempts, second.nextAttemptAt - second.failedAt], [2, 120_000]);
-  // Host prepare clears it and sends immediately.
-  await assert.rejects(f.oauth.prepare(f.context, budget()), errorCode('invalid_configuration'));
-  assert.equal(f.state.registrations.length, 3);
-  assert.equal(f.markers()[0].attempts, 1);
-  // A changed request digest clears it.
-  f.state.register = undefined;
-  f.client.registration = { ...POLICY, softwareVersion: '2' };
-  assert.equal((await f.provider().credential({ ...f.context, challenged: true })).token, 'access-1');
-  assert.deepEqual(f.markers(), []);
-  // A success clears it.
-  f.store.values.set(failureKey(f.key), { ...marker, requestDigest: await requestDigest(f.client.registration), nextAttemptAt: 0 });
-  f.store.values.delete(f.key);
-  f.expire();
-  await f.provider().credential(f.context);
-  assert.deepEqual(f.markers(), []);
-});
-
-test('[dcr-response-validation-invalid-configuration] an invalid 2xx registration persists nothing and is not retried', async () => {
-  for (const response of [{ client_id: 'dcr', client_secret: 'secret' }, { client_id: 'dcr', redirect_uris: ['https://evil.example/cb'] },
-    { client_id: 'dcr', token_endpoint_auth_method: 'client_secret_basic' }]) {
-    const f = fixture();
-    f.state.register = () => Response.json(response, { status: 201 });
-    await assert.rejects(f.oauth.prepare(f.context, budget()), errorCode('invalid_configuration'));
-    assert.equal(f.state.registrations.length, 1);
-    assert.deepEqual(f.registrations(), []);
-    assert.equal(f.secrets.values.size, 0);
-    assert.deepEqual(f.store.of('ahp.oauth.pending:'), []);
-  }
-});
-
-test('[prepare-force-reregistration] forceRegistration replaces the registration and clears the marker; an expired login alone never does', async () => {
-  const f = fixture({ options: { loginLifetimeMs: 30 } });
-  const first = await f.oauth.prepare(f.context, budget());
-  await new Promise(resolve => setTimeout(resolve, 50));
-  assert.equal(clientIdOf(await f.oauth.prepare(f.context, budget())), clientIdOf(first), 'expiry alone keeps the client');
-  assert.equal(f.state.registrations.length, 1);
-  const [old] = f.registrations();
-  f.store.values.set(failureKey(f.key), { kind: 'registration_failure', generation: 'm', requestDigest: old.requestDigest,
-    failedAt: Date.now(), attempts: 3, nextAttemptAt: Date.now() + 60_000 });
-  const forced = await f.oauth.prepare(f.context, budget(), { forceRegistration: true });
-  assert.equal(clientIdOf(forced), 'dcr-2');
-  const [replacement] = f.registrations();
-  assert.notEqual(replacement.generation, old.generation);
-  assert.deepEqual(f.markers(), []);
-  // A confidential record's secret is deleted with it.
-  const c = fixture(cc());
-  await c.oauth.prepare(c.context, budget());
-  const [secretRef] = c.secrets.values.keys();
-  await c.oauth.prepare(c.context, budget(), { forceRegistration: true });
-  assert.deepEqual(c.secrets.deleted, [secretRef]);
-  assert.equal(c.registrations()[0].clientId, 'dcr-2');
-});
-
-test('[dcr-policy-change-reregisters] a changed name, software id, scope or token reference re-registers with the new policy', async () => {
-  for (const change of [{ clientName: 'Renamed' }, { softwareId: 'id' }, { scopes: ['read'] }, { initialAccessTokenRef: 'vault:iat' }]) {
-    const f = fixture(cc());
-    f.secrets.values.set('vault:iat', 'iat');
-    await f.oauth.prepare(f.context, budget());
-    const [old] = f.registrations();
-    f.client.registration = { ...POLICY, ...change };
-    f.expire();
-    await f.provider().credential(f.context);
-    const body = f.state.registrations[1].body;
-    assert.equal(body.client_name, change.clientName ?? POLICY.clientName);
-    if (change.softwareId) assert.equal(body.software_id, 'id');
-    if (change.scopes) assert.equal(body.scope, 'read');
-    if (change.initialAccessTokenRef) assert.equal(f.state.registrations[1].authorization, 'Bearer iat');
-    assert.ok(f.secrets.deleted.includes(old.secretRef));
-    assert.equal(f.registrations()[0].requestDigest, await requestDigest(f.client.registration));
-  }
+  const p = fixture({ client: { registration: { ...POLICY, initialAccessTokenRef: 'vault:missing' } } });
+  await assert.rejects(p.oauth.prepare(p.context, budget()), errorCode('credential_unavailable'));
+  assert.equal(p.state.registrations.length, 0);
 });
 
 test('[dcr-replaced-secret-deleted] a replaced record\'s secret is deleted after the compare-and-set, and only that one', async () => {
@@ -630,190 +655,64 @@ test('[dcr-replaced-secret-deleted] a replaced record\'s secret is deleted after
   assert.ok(losing.secrets.values.has(kept.secretRef));
 });
 
-test('[cc-registration-auto-repairs-after-backoff] an unattended host re-registers after the backoff without prepare', async () => {
-  const f = fixture(cc());
-  f.state.register = () => new Response('', { status: 503 });
-  await assert.rejects(f.provider().credential({ ...f.context, challenged: true }), errorCode('provider_failed'));
-  await assert.rejects(f.provider().credential({ ...f.context, challenged: true }), errorCode('credential_unavailable'));
-  assert.equal(f.state.registrations.length, 1);
-  f.state.register = undefined;
-  const [marker] = f.markers();
-  f.store.values.set(failureKey(f.key), { ...marker, nextAttemptAt: Date.now() - 1 });
-  assert.equal((await f.provider().credential({ ...f.context, challenged: true })).token, 'access-1');
-  assert.equal(f.state.registrations.length, 2);
-  assert.deepEqual(f.markers(), []);
-});
-
-// ---- Proactive renewal --------------------------------------------------------
-
-test('[cc-proactive-reregistration-before-expiry] inside the margin a successful acquisition re-registers; outside it does not', async () => {
-  const f = fixture(cc());
-  const now = Math.floor(Date.now() / 1000);
-  f.state.expiresAt = now + 100;
-  // client_id_issued_at far in the past would put it inside the margin if it were relied on.
-  f.state.register = (_body, n) => Response.json({ client_id: `dcr-${n}`, client_secret: `secret-${n}`,
-    client_secret_expires_at: f.state.expiresAt, client_id_issued_at: now - 100_000 }, { status: 201 });
-  await f.oauth.prepare(f.context, budget());
-  assert.equal(f.state.registrations.length, 1, 'remaining 100s, margin 10s: not due');
-  // Registered 1000s ago: margin min(110s, 1h) covers the remaining 100s.
-  f.patchRecord({ registeredAt: Date.now() - 1_000_000 });
-  f.expire();
-  const before = f.state.requests.length;
-  assert.equal((await f.provider().credential(f.context)).token, 'access-2');
-  await until(() => f.registrations()[0].clientId === 'dcr-2');
-  assert.deepEqual(f.state.requests.slice(before).map(({ purpose }) => purpose), ['token', 'registration']);
-  assert.equal(f.state.tokenCalls.at(-1).id, 'dcr-1', 'the operation used the current client');
-  assert.equal(f.registrations()[0].clientId, 'dcr-2');
-  // The one-hour cap: a long-lived secret renews only within its last hour.
-  const capped = fixture(cc());
-  capped.state.expiresAt = now + 3 * 3600;
-  await capped.oauth.prepare(capped.context, budget());
-  capped.patchRecord({ registeredAt: Date.now() - 100 * 3600_000 });
-  capped.expire();
-  await capped.provider().credential(capped.context);
-  await until(() => false, 30);
-  assert.equal(capped.state.registrations.length, 1);
-  capped.patchRecord({ clientSecretExpiresAt: now + 3500 });
-  capped.expire();
-  await capped.provider().credential(capped.context);
-  await until(() => capped.state.registrations.length === 2);
-  assert.equal(capped.state.registrations.length, 2);
-});
-
-test('[proactive-reregistration-once-across-processes] concurrent renewals inside the margin register once', async () => {
-  const f = fixture(cc());
-  f.state.expiresAt = Math.floor(Date.now() / 1000) + 100;
-  const contexts = ['a', 'b', 'c'].map(backendId => ({ ...f.context, backendId }));
-  for (const context of contexts) await f.oauth.prepare(context, budget());
-  assert.equal(f.state.registrations.length, 1);
-  f.state.expiresAt = Math.floor(Date.now() / 1000) + 7200;
-  f.patchRecord({ registeredAt: Date.now() - 1_000_000 });
-  f.expire();
-  await Promise.all(contexts.map(context => f.provider(managedOAuth(f.options)).credential(context)));
-  await until(() => f.registrations()[0].clientId === 'dcr-2', 2000);
-  await until(() => false, 50);
-  assert.equal(f.state.tokenCalls.length, 6, 'each grant acquired');
-  assert.equal(f.state.registrations.length, 2, 'exactly one renewal');
-});
-
-test('[proactive-renewal-failure-keeps-current-registration] a failed renewal advances the marker but the operation succeeds', async () => {
-  const f = fixture(cc());
-  f.state.expiresAt = Math.floor(Date.now() / 1000) + 100;
-  await f.oauth.prepare(f.context, budget());
-  const [record] = f.registrations();
-  f.patchRecord({ registeredAt: Date.now() - 1_000_000 });
-  f.state.register = () => new Response('', { status: 429, headers: { 'retry-after': '30' } });
-  f.expire();
-  assert.equal((await f.provider().credential(f.context)).token, 'access-2');
-  await until(() => f.markers().length === 1);
-  assert.equal(f.markers()[0].attempts, 1);
-  const [current] = f.registrations();
-  assert.deepEqual([current.clientId, current.secretRef], [record.clientId, record.secretRef]);
-  assert.deepEqual(f.secrets.deleted, []);
-  // The marker suppresses the next renewal; the current client keeps acquiring.
-  f.expire();
-  assert.equal((await f.provider().credential(f.context)).token, 'access-3');
-  await until(() => false, 30);
-  assert.equal(f.state.registrations.length, 2);
-  assert.deepEqual(f.state.tokenCalls.map(call => call.id), ['dcr-1', 'dcr-1', 'dcr-1']);
-});
-
-test('[marker-blocks-only-registration] an active marker still sends a valid token; PKCE still needs interaction', async () => {
+test('host prepare keeps a usable client-credentials registration', async () => {
   const f = fixture(cc());
   await f.oauth.prepare(f.context, budget());
-  const digest = await requestDigest(POLICY);
-  f.store.values.set(failureKey(f.key), { kind: 'registration_failure', generation: 'm', requestDigest: digest,
-    failedAt: Date.now(), attempts: 1, nextAttemptAt: Date.now() + 60_000 });
-  f.patchRecord({ clientSecretExpiresAt: 1 });
-  assert.equal((await f.provider().credential(f.context)).token, 'access-1');
   f.expire();
-  await assert.rejects(f.provider().credential(f.context), errorCode('credential_unavailable'));
-  assert.equal(f.state.registrations.length, 1);
-  const p = fixture();
-  await p.login();
-  p.store.values.delete(p.key);
-  p.store.values.set(failureKey(p.key), { kind: 'registration_failure', generation: 'm', requestDigest: digest,
-    failedAt: Date.now(), attempts: 1, nextAttemptAt: Date.now() + 60_000 });
-  p.expire();
-  await assert.rejects(p.provider().credential(p.context), errorCode('interaction_required'));
-});
-
-test('a forced re-registration reissuing the same client_id never reuses the stale-generation login', async () => {
-  const f = fixture();
-  f.state.register = () => Response.json({ client_id: 'dcr-same' }, { status: 201 });
-  const stale = await f.oauth.prepare(f.context, budget());
-  assert.deepEqual(await f.oauth.prepare(f.context, budget()), stale, 'same generation: reused');
-  const fresh = await f.oauth.prepare(f.context, budget(), { forceRegistration: true });
-  assert.equal(clientIdOf(fresh), 'dcr-same');
-  assert.notEqual(fresh.id, stale.id);
-  assert.equal(f.store.of('ahp.oauth.pending:')[0].registration.generation, f.registrations()[0].generation);
-  await assert.rejects(f.oauth.complete(stale, f.callback(stale), budget()), errorCode('interaction_required'));
-});
-
-test('host prepare clears a failed marker even when a valid token means it registers nothing', async () => {
-  const f = fixture(cc());
   await f.oauth.prepare(f.context, budget());
-  f.store.values.set(failureKey(f.key), { kind: 'registration_failure', generation: 'm', requestDigest: await requestDigest(POLICY),
-    failedAt: Date.now(), attempts: 4, nextAttemptAt: Date.now() + 60_000 });
-  assert.equal((await f.oauth.prepare(f.context, budget())).credential.token, 'access-1');
-  assert.deepEqual(f.markers(), []);
+  await f.oauth.prepare({ ...f.context, purpose: 'upload' }, budget());
   assert.equal(f.state.registrations.length, 1);
 });
 
-test('a stale failed-marker write never overwrites a newer one (compare-and-set without exclusive locks)', async () => {
-  const f = fixture({ ...cc(), store: memoryStore({ exclusive: key => !key.startsWith('ahp.oauth.registration:') }),
-    options: { registrationBackoff: { initialMs: 0, maxMs: 0 } } });
-  let release;
-  const gate = new Promise(resolve => { release = resolve; });
-  f.state.register = async (_body, n) => { if (n === 1) await gate; return new Response('', { status: 503 }); };
-  const slow = f.provider().credential({ ...f.context, challenged: true });
-  while (f.state.registrations.length < 1) await new Promise(resolve => setImmediate(resolve));
-  for (let i = 0; i < 3; i++) {
-    await assert.rejects(f.provider(managedOAuth(f.options)).credential({ ...f.context, challenged: true }), errorCode('provider_failed'));
-  }
-  assert.equal(f.markers()[0].attempts, 3);
-  release();
-  await assert.rejects(slow, errorCode('provider_failed'));
-  assert.equal(f.markers()[0].attempts, 3, 'the stale writer read no marker and loses its compare-and-set');
-});
+// ---- Client-credentials backoff -------------------------------------------------
 
-test('[stale-callback-does-not-delete-new-registration] invalid_client at completion deletes only the login\'s generation', async () => {
-  const f = fixture();
-  f.state.register = () => Response.json({ client_id: 'dcr-same' }, { status: 201 });
-  const upload = { ...f.context, purpose: 'upload' };
-  const stale = await f.oauth.prepare(f.context, budget());
-  const fresh = await f.oauth.prepare(upload, budget(), { forceRegistration: true });
-  const [current] = f.registrations();
-  assert.notEqual(f.store.of('ahp.oauth.pending:').find(login => login.id === stale.id).registration.generation, current.generation);
-  f.state.invalid.add('dcr-same');
-  await assert.rejects(f.oauth.complete(stale, f.callback(stale), budget()), errorCode('interaction_required'));
-  assert.equal(f.registrations()[0].generation, current.generation, 'the newer registration survives');
-  f.state.invalid.clear();
-  assert.equal((await f.oauth.complete(fresh, f.callback(fresh), budget())).credential.token, 'access-1');
-  // A login at the current generation is deleted by its own invalid_client.
-  const next = await f.oauth.prepare(f.context, budget());
-  f.state.invalid.add('dcr-same');
-  await assert.rejects(f.oauth.complete(next, f.callback(next), budget()), errorCode('interaction_required'));
-  assert.deepEqual(f.registrations(), []);
-});
-
-test('[registration-transient-failure-backs-off] 5xx, 408, 429, network and 401/403 failures suppress further requests', async () => {
+test('[registration-transient-failure-backs-off] no request until the shared backoff passes; the last code is returned; prepare bypasses it', async () => {
   const outcomes = [[503, 'provider_failed'], [408, 'provider_failed'], [429, 'provider_failed'], ['network', 'provider_failed'],
-    [401, 'credential_unavailable'], [403, 'credential_unavailable']];
+    [401, 'credential_unavailable'], [403, 'credential_unavailable'], [400, 'invalid_configuration']];
   for (const [status, code] of outcomes) {
     const f = fixture(cc());
     await f.oauth.prepare(f.context, budget());
     f.patchRecord({ clientSecretExpiresAt: 1 });
     f.expire();
     f.state.register = () => { if (status === 'network') throw new TypeError('fetch failed'); return new Response('', { status }); };
+    const before = Date.now();
     await assert.rejects(f.provider().credential(f.context), errorCode(code), String(status));
+    // Other paths and processes sharing the store send nothing and keep the code (retry advice for retryable failures).
     for (let i = 0; i < 3; i++) {
-      await assert.rejects(f.provider(managedOAuth(f.options)).credential(f.context), errorCode('credential_unavailable'));
-      await assert.rejects(f.provider().credential({ ...f.context, purpose: 'upload', challenged: true }), errorCode('credential_unavailable'));
+      await assert.rejects(f.provider(managedOAuth(f.options)).credential(f.context), errorCode(code), String(status));
+      await assert.rejects(f.provider().credential({ ...f.context, purpose: 'upload', challenged: true }), errorCode(code), String(status));
     }
     assert.equal(f.state.registrations.length, 2, String(status));
-    assert.equal(f.markers()[0].attempts, 1);
+    const [marker] = f.markers();
+    assert.equal(marker.attempts, 1);
+    assert.ok(marker.nextAttemptAt >= before + 60_000 && marker.nextAttemptAt <= Date.now() + 60_000);
+    if (code === 'provider_failed') {
+      const error = await f.provider().credential(f.context).catch(error => error);
+      assert.equal(error.recovery, 'retry');
+    }
   }
+  // Once elapsed the next attempt doubles; host prepare bypasses it; a success clears it.
+  const f = fixture(cc());
+  f.state.register = () => new Response('', { status: 503 });
+  await assert.rejects(f.provider().credential({ ...f.context, challenged: true }), errorCode('provider_failed'));
+  f.store.values.set(failureKey(f.key), { ...f.markers()[0], nextAttemptAt: Date.now() - 1 });
+  const before = Date.now();
+  await assert.rejects(f.provider().credential({ ...f.context, challenged: true }), errorCode('provider_failed'));
+  assert.equal(f.markers()[0].attempts, 2);
+  assert.ok(f.markers()[0].nextAttemptAt >= before + 120_000);
+  await assert.rejects(f.oauth.prepare(f.context, budget()), errorCode('provider_failed'));
+  assert.equal(f.state.registrations.length, 3, 'prepare sent a request during the backoff');
+  f.state.register = undefined;
+  assert.equal((await f.oauth.prepare(f.context, budget())).credential.token, 'access-1');
+  assert.deepEqual(f.markers(), []);
+  // An unattended host recovers by itself once the backoff passes.
+  const u = fixture(cc());
+  u.state.register = () => new Response('', { status: 503 });
+  await assert.rejects(u.provider().credential({ ...u.context, challenged: true }), errorCode('provider_failed'));
+  u.state.register = undefined;
+  u.store.values.set(failureKey(u.key), { ...u.markers()[0], nextAttemptAt: Date.now() - 1 });
+  assert.equal((await u.provider().credential({ ...u.context, challenged: true })).token, 'access-1');
+  assert.deepEqual(u.markers(), []);
 });
 
 test('[registration-retry-after-honoured] Retry-After sets the next attempt no earlier than itself or the backoff, capped', async () => {
@@ -821,19 +720,21 @@ test('[registration-retry-after-honoured] Retry-After sets the next attempt no e
   for (const [header, expected] of [['120', 120_000], ['10', 60_000], ['7200', 3_600_000], [date, 300_000]]) {
     const f = fixture(cc());
     f.state.register = () => new Response('', { status: 429, headers: { 'retry-after': header } });
+    const before = Date.now();
     await assert.rejects(f.oauth.prepare(f.context, budget()), errorCode('provider_failed'));
     const [marker] = f.markers();
-    const delay = marker.nextAttemptAt - marker.failedAt;
+    const delay = marker.nextAttemptAt - before;
     assert.ok(Math.abs(delay - expected) <= 2000, `${header}: ${delay}`);
   }
   const custom = fixture({ ...cc(), options: { registrationBackoff: { initialMs: 1000, maxMs: 5000 } } });
   custom.state.register = () => new Response('', { status: 503, headers: { 'retry-after': '60' } });
+  const before = Date.now();
   await assert.rejects(custom.oauth.prepare(custom.context, budget()), errorCode('provider_failed'));
   const [marker] = custom.markers();
-  assert.equal(marker.nextAttemptAt - marker.failedAt, 5000);
+  assert.ok(Math.abs(marker.nextAttemptAt - before - 5000) <= 2000);
 });
 
-test('[marker-update-atomic-across-processes] concurrent failures send one request per permitted attempt and keep the count', async () => {
+test('concurrent client-credentials failures send one registration request per permitted attempt and keep the count', async () => {
   const f = fixture(cc());
   await f.oauth.prepare(f.context, budget());
   f.patchRecord({ clientSecretExpiresAt: 1 });
@@ -841,12 +742,10 @@ test('[marker-update-atomic-across-processes] concurrent failures send one reque
   for (let round = 1; round <= 3; round++) {
     f.expire();
     const results = await Promise.allSettled(Array.from({ length: 4 }, () => f.provider(managedOAuth(f.options)).credential(f.context)));
-    assert.deepEqual(results.map(result => result.reason.code).sort(),
-      ['credential_unavailable', 'credential_unavailable', 'credential_unavailable', 'provider_failed']);
+    assert.deepEqual(results.map(result => result.reason.code), Array(4).fill('provider_failed'));
     assert.equal(f.state.registrations.length, 1 + round);
     const [marker] = f.markers();
     assert.equal(marker.attempts, round);
-    assert.equal(marker.nextAttemptAt - marker.failedAt, 60_000 * 2 ** (round - 1));
     f.store.values.set(failureKey(f.key), { ...marker, nextAttemptAt: Date.now() - 1 });
   }
 });
@@ -882,64 +781,3 @@ test('a registration sent before the caller aborts is still persisted with its s
   } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });
 
-test('a slow proactive renewal never fails the operation; it completes later under the commit budget', async () => {
-  const { createServer } = await import('node:http');
-  let received = 0;
-  const server = createServer(async (request, response) => {
-    for await (const _chunk of request);
-    received++;
-    await new Promise(resolve => setTimeout(resolve, 200));
-    response.setHeader('content-type', 'application/json');
-    response.statusCode = 201;
-    response.end(JSON.stringify({ client_id: 'dcr-renewed', client_secret: 'secret-renewed' }));
-  });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const rejections = [];
-  const onRejection = reason => rejections.push(reason);
-  process.on('unhandledRejection', onRejection);
-  try {
-    const f = fixture(cc());
-    f.state.expiresAt = Math.floor(Date.now() / 1000) + 100;
-    await f.oauth.prepare(f.context, budget());
-    f.patchRecord({ registeredAt: Date.now() - 1_000_000 });
-    f.expire();
-    const inner = f.options.policyFetch;
-    const oauth = managedOAuth({ ...f.options, policyFetch: (url, init, context) => url.endsWith('/register')
-      ? fetch(`http://127.0.0.1:${server.address().port}/register`, init) : inner(url, init, context) });
-    const started = Date.now();
-    const credential = await oauth.provider({ budget: () => budget(100) }).credential(f.context);
-    assert.equal(credential.token, 'access-2');
-    assert.ok(Date.now() - started < 150, 'the operation does not wait for the renewal');
-    assert.equal(f.registrations()[0].clientId, 'dcr-1');
-    await until(() => f.registrations()[0].clientId === 'dcr-renewed');
-    const [record] = f.registrations();
-    assert.equal(record.clientId, 'dcr-renewed');
-    assert.equal(f.secrets.values.get(record.secretRef), 'secret-renewed');
-    assert.equal(received, 1);
-    assert.deepEqual(f.markers(), []);
-    assert.deepEqual(rejections, []);
-  } finally {
-    process.off('unhandledRejection', onRejection);
-    server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
-  }
-});
-
-test('a renewal that is not due starts no background work and takes no registration lock', async () => {
-  const store = memoryStore();
-  const f = fixture({ ...cc(), store });
-  f.state.expiresAt = Math.floor(Date.now() / 1000) + 3600;
-  await f.oauth.prepare(f.context, budget());
-  const locks = [];
-  const coordinate = store.coordinate;
-  store.coordinate = (key, signal, work) => { locks.push(key); return coordinate(key, signal, work); };
-  f.expire();
-  assert.equal((await f.provider().credential(f.context)).token, 'access-2');
-  await until(() => false, 30);
-  assert.deepEqual(locks.filter(key => key.startsWith('ahp.oauth.registration:')), []);
-  // Once due, exactly the registration key is locked.
-  f.patchRecord({ registeredAt: Date.now() - 100 * 3600_000, clientSecretExpiresAt: Math.floor(Date.now() / 1000) + 60 });
-  f.expire();
-  await f.provider().credential(f.context);
-  await until(() => f.state.registrations.length === 2);
-  assert.deepEqual(locks.filter(key => key.startsWith('ahp.oauth.registration:')), [f.key]);
-});

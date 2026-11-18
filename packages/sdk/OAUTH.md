@@ -30,9 +30,12 @@ Supply all of these capabilities:
   Waiting and storage operations must honor cancellation; do not invoke queued
   work after cancellation. Never expose store keys or values in logs. Records are
   `StoredRecord`s with a `kind`: a `binding` (non-secret discovery result under the
-  binding key: namespace, backend, purpose, full endpoint), a `grant` (under the
-  grant key: namespace, issuer, resource, client, flow and partition) and a
-  `pending_login`. The allowed ceiling, secrets, token-endpoint auth method and
+  binding key: namespace, backend, purpose, full endpoint) and a `grant` (under the
+  grant key: namespace, issuer, resource, client identity, flow and partition).
+  The client identity is the configured client source (`preregistered:<id>`,
+  `cimd:<url>` or `dcr`), never an issued client_id. Client-credentials DCR adds
+  `registration` and `registration_failure` records; persisted pending logins
+  add `pending_login` and `pending_index`. The allowed ceiling, secrets, token-endpoint auth method and
   scope sets are not identity: widening or narrowing the ceiling never orphans a
   grant. Default grants are isolated per binding; an explicit `grantPartition`
   shares consent only after each destination and purpose independently passes
@@ -103,29 +106,36 @@ const result = await oauth.prepare(deliveryContext, budget);
 if (result.type === "pending_login") {
   // The host chooses whether/how to show UI and receive the complete callback URL.
   const callback = await host.receiveCallback(result.authorizationUrl, budget);
-  const ready = await oauth.complete(result, callback, budget);
+  const ready = await oauth.complete(callback, budget);
   // Use ready.credential only with the original destination and binding.
 }
 ```
 
-`PendingLogin` is a plain-data handle with an authorization URL and `expiresAt`.
-Keep it private: the URL contains OAuth state. The login is a stored record, so
-the handle may be serialized and completed or cancelled from any process sharing
-the store. Its lifetime is fixed at creation by `loginLifetimeMs` (default and
-maximum ten minutes), independent of the creating budget or its cancellation.
-A later `prepare` reuses it when the grant key and redirect match and the new
-requested plus required scopes are covered; otherwise it supersedes it. With the
-same grant key and redirect, the new login requests old ∪ ((new requested ∪ new
-required) ∩ new ceiling) and stores the union of both ceilings; otherwise it uses
-only the new caller's scopes and ceiling. Because reuse requires the exact
-redirect, hosts sharing a store must keep the redirect stable per grant key (or
-give per-process ephemeral loopback redirects distinct grant partitions). A login ends by
-completion (a claimed valid callback, including consent denial), supersede,
-`cancel` or expiry; a callback for an ended login fails `interaction_required`.
-Redirect, state and issuer are validated before the login is claimed, so a stray
-callback cannot burn it. Completion reselects current host client authentication
-outside store coordination before it claims the callback; secret rotation does
-not require new consent. Records never contain client secrets.
+As in MCP clients, each login may use its own redirect: pass
+`prepare(context, budget, { redirectUri })`, for example a loopback listener
+bound to `127.0.0.1:0` for that login (otherwise `ClientConfig.redirectUri` is
+used). HTTP redirects must use a literal loopback IP (`127.0.0.1` or `[::1]`);
+`localhost` is `invalid_configuration` (RFC 8252 §8.3). The authorization, DCR
+and token requests use the login's exact redirect, including its port.
+
+`PendingLogin` is a plain-data handle with an authorization URL, `expiresAt` and
+`state`. Keep it private: the URL contains OAuth state. `complete(callback,
+budget)` finds the login by the callback's `state`. By default the login belongs
+to the instance that created it, which receives its callback. With
+`persistPendingLogins: true` it is stored instead, so another process sharing the
+store can complete it from a pasted callback URL; the PKCE verifier is then held
+only in that pending record. Its lifetime is fixed at creation by
+`loginLifetimeMs` (default and maximum ten minutes), independent of the creating
+budget or its cancellation; expired logins are deleted. Several logins may be
+pending for one grant key, up to `maxPendingLogins` (default 5) per instance, or
+per store when persisted; a new one beyond the cap cancels the oldest. Each
+completion replaces the grant, so the newest completed login wins. A login ends by
+completion (a claimed valid callback, including consent denial), `cancel`
+(including by the cap) or expiry; a callback for an ended login fails
+`interaction_required`. Redirect, state and issuer are validated before the login
+is claimed, so a stray callback cannot burn it. Completion reselects current host
+client authentication outside store coordination before it claims the callback;
+secret rotation does not require new consent. Records never contain client secrets.
 
 For step-up, an `interaction_required` from a 403 `insufficient_scope` carries
 `requiredScopes`; pass them back with `oauth.prepare(context, budget, { requiredScopes })`.
@@ -154,7 +164,8 @@ Each grant's `client_id` comes from one source, chosen per issuer and flow:
 2. **Client ID Metadata Document**: PKCE only, when `clientMetadataDocument`
    (`{ url, redirectUris }`) is set and the issuer advertises
    `client_id_metadata_document_supported: true`. The URL is the `client_id`; the
-   SDK never fetches it. The redirect must equal one of `redirectUris`.
+   SDK never fetches it. The redirect must equal one of `redirectUris`; a loopback
+   redirect is compared without its port (RFC 8252 §7.3).
 3. **Dynamic registration (RFC 7591)**: when `registration` (`{ clientName,
    softwareId?, softwareVersion?, scopes?, initialAccessTokenRef? }`) is set on the
    config for that exact issuer and it advertises `registration_endpoint`.
@@ -165,16 +176,26 @@ Each grant's `client_id` comes from one source, chosen per issuer and flow:
 
 Otherwise the operation fails `credential_unavailable`. The selection is recorded
 on the binding and survives metadata changes until host policy changes it.
-Registrations are `registration` records shared per namespace, issuer, flow and
-redirect, created once under `coordinate`. Only host `prepare` registers a PKCE
-client; client credentials may register in any acquisition. A failed registration
-writes a `registration_failure` backoff marker (`registrationBackoff`, default 1
-minute doubling to 1 hour, honouring `Retry-After`); until it elapses only
-`prepare` sends a request. Client credentials re-register when the secret expires
-or the token endpoint answers `invalid_client` (once per operation), and renew
-proactively within `min(10% of the secret lifetime, renewalMarginMs)` of expiry.
-A PKCE client deleted by the server cannot be detected; repair it with
-`prepare(context, budget, { forceRegistration: true })`.
+
+PKCE registration works as in MCP clients: only host `prepare` registers, inside
+the login it creates, with that login's redirect (and `application_type:
+"native"` for a loopback redirect). There is no registration record: completion
+stores the issued `client_id` in the grant with its tokens, and refresh uses it.
+A re-registered client never moves the grant. `invalid_client` at completion ends
+only that login (`interaction_required`; the stored grant is kept); at refresh it
+deletes the grant if it still holds the presented client and refresh token, and
+returns `interaction_required`. Any secret issued to a PKCE client is ignored.
+
+Client credentials keep one `registration` record per namespace and issuer,
+created once under `coordinate` and reused by every client-credentials grant
+there. It stores the registered token-endpoint auth method and a secret reference.
+It is replaced when the secret expires or cannot be resolved, or when the token
+endpoint answers `invalid_client` (at most once per operation; a repeated one is
+`credential_unavailable`). After a failed registration a `registration_failure`
+record, shared through the store, holds off further requests (`registrationBackoff`,
+default 1 minute doubling to 1 hour, honouring `Retry-After`); meanwhile
+operations fail with the last failure's code, so a retryable failure stays
+`provider_failed` (`retry`). Host `prepare` bypasses the backoff.
 
 The built-in `auth()` provider uses pre-registered clients only: it has no
 coordinated store, secret hook or `prepare`, so a missing `clientId` fails
