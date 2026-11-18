@@ -371,6 +371,8 @@ test("configuration-auth-diagnostic: an auth failure during discovery carries th
 
 // Skipped-backend diagnostics and re-attempts (server-driven configuration, "Skipped backends").
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+/** Dispatch one event, then let a background re-attempt it started settle. */
+const admit = async (client, extra = {}) => { const result = await client.toolBefore({ ...input, ...extra }); await sleep(25); return result; };
 const advertisement = message => Response.json({ jsonrpc: "2.0", id: message.id,
   result: { protocolVersion: "draft", configuration: configuration() } });
 const accepted = message => Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "draft", effects: [] } });
@@ -436,23 +438,23 @@ test("[configuration-unavailable-retried-after-prepare] a host prepare re-attemp
   try {
     await client.initialized;
     assert.equal(client.initializationDiagnostics[0].auth.recovery, "login");
-    await client.toolBefore(input);
+    await admit(client);
     assert.equal(discoveries, 0);
     // A prepare for another backend, purpose or URL does not make this one eligible.
     authorized = true;
     host.prepare(endpoint("test.other"));
     host.prepare(endpoint("test.backend", "https://backend.test/hooks", "upload"));
     host.prepare(endpoint("test.backend", "https://backend.test/other"));
-    await client.toolBefore(input);
+    await admit(client);
     assert.equal(discoveries, 0);
     host.prepare(endpoint());
-    const result = await client.toolBefore({ ...input, callId: "after-prepare" });
+    await admit(client, { callId: "after-prepare" });
     assert.equal(discoveries, 1);
-    assert.equal(called.length, 1, "the admitting event reaches the retried backend");
+    assert.equal(called.length, 0, "the admitting event uses the routes current at its admission");
     assert.equal(client.intercepts(events.toolBefore), true);
-    assert.equal(result.interrupted, false);
     // Installed once: later admissions neither rediscover nor duplicate routes.
-    await client.toolBefore(input);
+    await admit(client);
+    await admit(client);
     assert.equal(discoveries, 1);
     assert.equal(called.length, 2);
   } finally { await client.close(); }
@@ -479,16 +481,18 @@ test("[configuration-unavailable-backoff] an unavailable backend is re-attempted
       assert.equal(attempts.length, 1);
       const expected = cause === "status" ? undefined : { code: "provider_failed", recovery: "retry" };
       assert.deepEqual(plainDiagnostics(client)[0].auth, expected);
-      await client.toolBefore(input);
+      await admit(client);
       assert.equal(attempts.length, 1, "no re-attempt before the first backoff ends");
       // Delays 60, 120, then capped at 120: each due admission makes one attempt.
       for (const [wait, count] of [[80, 2], [60, 2], [80, 3], [60, 3], [80, 4]]) {
-        await sleep(wait);
-        await client.toolBefore(input);
+        await sleep(wait - 25);
+        await admit(client);
         assert.equal(attempts.length, count, `after waiting ${wait} ms`);
       }
       assert.ok(attempts[2] - attempts[1] >= 120 && attempts[3] - attempts[2] >= 120);
-      assert.equal(delivered, 1, "only the admission that installed the routes delivers");
+      assert.equal(delivered, 0, "the admitting event used the routes current at its admission");
+      await client.toolBefore(input);
+      assert.equal(delivered, 1);
       assert.equal(client.initializationDiagnostics.length, 3);
       assert.ok(client.initializationDiagnostics.every(diagnostic => diagnostic.code === "configuration_unavailable"));
     } finally { await client.close(); }
@@ -511,14 +515,14 @@ test("[configuration-auth-failure-not-retried-on-backoff] login, configure and n
       await client.initialized;
       assert.deepEqual(plainDiagnostics(client), [{ backendId: "test.backend", code: "configuration_unavailable", auth: { code, recovery } }]);
       await sleep(30);
-      await client.toolBefore(input);
+      await admit(client);
       await sleep(30);
-      await client.toolBefore(input);
+      await admit(client);
       assert.equal(attempts, 1, `${recovery} is not re-attempted on backoff`);
       assert.equal(client.intercepts(events.toolBefore), false);
       authorized = true;
       host.prepare(endpoint());
-      await client.toolBefore(input);
+      await admit(client);
       assert.equal(client.intercepts(events.toolBefore), true);
     } finally { await client.close(); }
   }
@@ -545,8 +549,8 @@ test("[configuration-invalid-not-retried] invalid, inapplicable and local-secret
       assert.deepEqual(plainDiagnostics(client), [{ backendId: "test.backend", code }]);
       host.prepare(endpoint());
       await sleep(30);
-      await client.toolBefore(input);
-      await client.toolBefore(input);
+      await admit(client);
+      await admit(client);
       assert.equal(discoveries, 1, code);
       assert.equal(client.initializationDiagnostics.length, 1);
     } finally { await client.close(); }
@@ -585,18 +589,21 @@ test("[configuration-retry-atomic-routes] a retry installs complete routes in on
     available = true;
     await sleep(60);
     const concurrent = [client.toolBefore({ ...input, callId: "admitting" }), client.toolBefore({ ...input, callId: "concurrent" })];
+    // The triggering and concurrent events never wait for the re-attempt.
+    await Promise.all(concurrent);
     await firstDone;
     await sleep(10);
     // One backend's discovery finished, the other has not: no partial route set is visible.
     assert.equal(client.intercepts(events.toolBefore), false);
+    await client.toolBefore({ ...input, callId: "during" });
     assert.deepEqual(delivered, []);
     release();
-    await Promise.all(concurrent);
+    await sleep(25);
     assert.equal(client.intercepts(events.toolBefore), true);
-    const order = delivered.filter(([, id]) => id === "admitting").map(([name]) => name);
+    await client.toolBefore({ ...input, callId: "after" });
+    const order = delivered.filter(([, id]) => id === "after").map(([name]) => name);
     assert.deepEqual(order, ["first", "second"], "registration order is retained");
-    assert.deepEqual(delivered.filter(([, id]) => id === "before-retry"), [], "earlier events are not replayed");
-    assert.equal(delivered.length, 4);
+    assert.equal(delivered.length, 2, "events admitted before the retry succeeded are not replayed");
     assert.deepEqual(discoveries, { first: 1, second: 1 }, "concurrent admissions share one re-attempt per backend");
   } finally { await client.close(); }
 });
@@ -624,6 +631,7 @@ test("a host prepare that arrives during an attempt is not lost", async () => {
         host.prepare(endpoint());
         release();
         await admitting;
+        await sleep(25);
         assert.equal(attempts, 2);
       } else {
         await started;
@@ -634,53 +642,22 @@ test("a host prepare that arrives during an attempt is not lost", async () => {
       }
       // The attempt still failed, but the prepare made during it keeps the backend eligible.
       authorized = true;
-      await client.toolBefore(input);
+      await admit(client);
       assert.equal(client.intercepts(events.toolBefore), true, phase);
     } finally { await client.close(); }
   }
 });
 
-test("closing during discovery closes transports of backends that were discovered but not installed", async () => {
-  const { nodeSpawn } = await import("agenthooksprotocol/client");
-  const script = `require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
-    const request = JSON.parse(line);
-    process.stdout.write(JSON.stringify(process.env.AHP_FAIL ? { jsonrpc: '2.0', id: request.id, error: { code: -32004, message: 'unavailable' } }
-      : { jsonrpc: '2.0', id: request.id, result: { protocolVersion: 'draft', configuration: ${JSON.stringify(configuration())} } }) + '\\n');
-  });`;
+test("closing during discovery closes transports of backends that were discovered but not installed", () => {
+  // A child process reports and exits explicitly, so a leaked stdio backend fails
+  // the assertion instead of keeping the test process alive.
   for (const phase of ["initialization", "re-attempt"]) {
-    const processes = [];
-    let hang = phase === "initialization", hanging;
-    const reached = new Promise(resolve => { hanging = resolve; });
-    const cfg = registration();
-    cfg.hooks = [{ id: "test.stdio", transport: { type: "stdio", command: process.execPath, args: ["-e", script], lifecycle: "persistent" } },
-      { id: "test.http", transport: { type: "http", url: "https://backend.test/hooks" } }];
-    const client = new Hooks(cfg, { ...options(async (_url, init) => {
-      if (!hang) return new Response(null, { status: 503 });
-      hanging();
-      return new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason)));
-    }), configurationRetry: { initialDelayMs: 20, maxDelayMs: 20 },
-    spawn: request => {
-      const child = nodeSpawn(phase === "re-attempt" && processes.length === 0
-        ? { ...request, env: { ...request.env, AHP_FAIL: "1" } } : request);
-      const entry = { killed: false, exited: false };
-      processes.push(entry);
-      child.onClose(() => { entry.exited = true; });
-      return { ...child, write: child.write.bind(child), onStdout: child.onStdout.bind(child), onError: child.onError.bind(child),
-        onClose: child.onClose.bind(child), kill() { entry.killed = true; child.kill(); } };
-    } });
-    if (phase === "re-attempt") {
-      await client.initialized;
-      assert.equal(client.initializationDiagnostics.length, 2);
-      await sleep(40);
-      hang = true;
-      void client.toolBefore(input).catch(() => {});
-    }
-    await reached;
-    // Let the stdio discovery succeed while the HTTP one is still pending.
-    await sleep(phase === "initialization" ? 300 : 300);
-    await client.close();
-    assert.ok(processes.length >= 1, phase);
-    assert.ok(processes.every(entry => entry.killed || entry.exited), `${phase}: every spawned backend is closed`);
+    const run = spawnSync(process.execPath, [new URL("./fixtures/close-during-discovery.mjs", import.meta.url).pathname, phase],
+      { encoding: "utf8", timeout: 20_000 });
+    assert.equal(run.status, 0, `${phase}: ${run.stdout}${run.stderr}`);
+    const report = JSON.parse(run.stdout.trim().split("\n").at(-1));
+    assert.ok(report.spawned >= 1, phase);
+    assert.equal(report.leaked, 0, `${phase}: every spawned backend is closed`);
   }
 });
 
@@ -693,7 +670,7 @@ test("prepare matching compares normalized endpoint URLs", async () => {
     await client.initialized;
     authorized = true;
     host.prepare(endpoint("test.backend", "https://BACKEND.test:443/hooks"));
-    await client.toolBefore(input);
+    await admit(client);
     assert.equal(client.intercepts(events.toolBefore), true);
   } finally { await client.close(); }
 });
@@ -716,7 +693,7 @@ test("Hooks subscribes to prepare notifications only while a backend is unavaila
     assert.equal(host.listeners.size, 1, "an unavailable backend keeps one subscription");
     authorized = true;
     host.prepare(endpoint());
-    await client.toolBefore(input);
+    await admit(client);
     assert.equal(host.listeners.size, 0, "recovery releases the subscription");
   } finally { await Promise.all([client.close(), fixed.close(), discovered.close()]); }
 });
@@ -731,5 +708,40 @@ test("stored skip diagnostics keep only the latest 10 per backend", async () => 
     for (let i = 0; i < 14; i++) { await sleep(3); await client.toolBefore(input); }
     for (const id of ["test.backend", "test.other"])
       assert.equal(client.initializationDiagnostics.filter(diagnostic => diagnostic.backendId === id).length, 10, id);
+  } finally { await client.close(); }
+});
+
+test("a hung re-attempt never holds delivery to other backends", async () => {
+  const cfg = registration();
+  cfg.hooks = [
+    { id: "test.discovered", transport: { type: "http", url: "https://backend.test/discovered" } },
+    { id: "test.enforced", transport: { type: "http", url: "https://backend.test/enforced" },
+      subscriptions: [{ ...selected(), failurePolicy: "fail-closed" }] },
+  ];
+  let hang = false, discoveries = 0;
+  const delivered = [];
+  const client = new Hooks(cfg, { ...options(async (url, init) => {
+    const message = JSON.parse(init.body);
+    const name = new URL(url).pathname.slice(1);
+    if (message.method === "hooks/configuration") {
+      discoveries++;
+      if (!hang) return new Response(null, { status: 503 });
+      return new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason)));
+    }
+    delivered.push([name, message.params.event.call.id]);
+    return accepted(message);
+  }), configurationRetry: { initialDelayMs: 10, maxDelayMs: 10 } });
+  try {
+    await client.initialized;
+    hang = true;
+    await sleep(20);
+    const started = Date.now();
+    const triggering = await client.toolBefore({ ...input, callId: "triggering" }, { signal: AbortSignal.timeout(50) });
+    const concurrent = await client.toolBefore({ ...input, callId: "concurrent" }, { signal: AbortSignal.timeout(50) });
+    assert.ok(Date.now() - started < 1000, "events do not wait for the configuration budget");
+    assert.equal(discoveries, 2, "the re-attempt is running in the background");
+    assert.equal(triggering.interrupted, false);
+    assert.equal(concurrent.interrupted, false);
+    assert.deepEqual(delivered, [["enforced", "triggering"], ["enforced", "concurrent"]]);
   } finally { await client.close(); }
 });

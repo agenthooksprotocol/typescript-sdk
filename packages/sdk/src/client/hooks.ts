@@ -491,10 +491,10 @@ export class Hooks {
   }
 
   /**
-   * The single shared admission: re-attempt due unavailable backends, then install
-   * every newly discovered route set in one synchronous step. Concurrent callers
-   * wait for the same operation, so none observes a partial route set; events
-   * admitted earlier are never replayed.
+   * The single shared admission: re-attempt due unavailable backends in the
+   * background, then install every newly discovered route set in one synchronous
+   * step. Callers never wait for it: each event uses the routes current at its
+   * admission, so none observes a partial set and earlier events are never replayed.
    */
   private admit(): Promise<void> {
     if (this.admission) return this.admission;
@@ -743,9 +743,10 @@ export class Hooks {
       // Calls after close are misuse. Active calls return interruption evidence.
       this.lifetime.signal.throwIfAborted();
       await this.initialized;
-      // Re-attempt due skipped backends inside the single shared admission. A
-      // cancelled caller stops waiting; run() then reports the interruption.
-      await raceAbort(this.admit(), signal).catch(error => { if (!signal.aborted) throw error; });
+      // Start a due re-attempt in the background on its own discovery budget. This
+      // event and concurrent ones use the current routes and never wait for it; a
+      // successful re-attempt installs its routes atomically for later events.
+      void this.admit().catch(() => {});
       return this.run(type, input, options, signal, manager, exchange);
     })();
     this.pending.add(work);
