@@ -254,6 +254,12 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       attempts: count, nextAttemptAt: now + delay, code: error.code };
     await write(failureKey(key), prior?.generation, value, commit());
   }
+  /** A token request with the registered client succeeded: reset the failure count. */
+  async function clearFailure(key: string): Promise<void> {
+    const settle = commit();
+    const marker = await read(failureKey(key), "registration_failure", settle).catch(() => undefined);
+    if (marker) await write(failureKey(key), marker.generation, undefined, settle).catch(() => false);
+  }
   /** Store the secret under a fresh reference, then compare-and-set the record, under the commit budget. */
   async function save(key: string, current: StoredRegistration | undefined, accepted: AcceptedRegistration,
     method: AuthMethod): Promise<Registered> {
@@ -301,9 +307,9 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         await failed(key, marker, attempt.error, attempt.retryAfterMs);
         throw attempt.error;
       }
-      const saved = await save(key, current, attempt.accepted, method!);
-      if (marker) await write(markerKey, marker.generation, undefined, commit()).catch(() => false);
-      return saved;
+      // The failure count survives until a token request with the client succeeds, so a server
+      // that accepts registrations but rejects the clients keeps backing off.
+      return save(key, current, attempt.accepted, method!);
     }));
   }
   function withRegistration(target: Selected, registered: Registered): Selected {
@@ -438,7 +444,9 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         const prior = current ? effective(current, target) : [];
         if (target.client.flow === "client_credentials") {
           const token = await acquireClientCredentials(acquisition(target, current), options, operation);
-          return ready(await saveGrant(key, current?.generation, token, commit()), key, binding, target, required);
+          const saved = await saveGrant(key, current?.generation, token, commit());
+          if (target.registration) await clearFailure(target.registration.key);
+          return ready(saved, key, binding, target, required);
         }
         // A DCR grant refreshes with the client issued to the login that produced it.
         const refreshing = target.selection.source !== "dcr" ? target

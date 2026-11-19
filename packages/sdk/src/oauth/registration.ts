@@ -127,7 +127,9 @@ export function acceptRegistration(flow: ClientConfig["flow"], request: Record<s
     const { client_id: clientId, client_secret: secret, client_secret_expires_at: expires } = json;
     const redirects = json.redirect_uris, grants = json.grant_types;
     if (typeof clientId !== "string" || !clientId ||
-        (redirects !== undefined && (!list(redirects) || !requested.every(uri => (redirects as string[]).includes(uri)))) ||
+        // Client credentials request no redirect: any echoed list is accepted, a non-list is not.
+        (redirects !== undefined && (pkce ? !list(redirects) || !requested.every(uri => (redirects as string[]).includes(uri))
+          : !Array.isArray(redirects))) ||
         (grants !== undefined && (!list(grants) || !(grants as string[]).includes(pkce ? "authorization_code" : "client_credentials"))) ||
         (json.token_endpoint_auth_method !== undefined && json.token_endpoint_auth_method !== request.token_endpoint_auth_method) ||
         (!pkce && (typeof secret !== "string" || !secret ||

@@ -175,6 +175,15 @@ test('registration response vectors', () => {
     assert.equal(accepted.clientSecretExpiresAt ?? null, vector.expect.record.client_secret_expires_at, vector.id);
     assert.equal(accepted.clientSecret !== undefined, vector.expect.record.secret_ref, vector.id);
   }
+  // Client credentials request no redirect: any echoed list is accepted, a non-list is not.
+  const request = { grant_types: ['client_credentials'], token_endpoint_auth_method: 'client_secret_basic', client_name: 'Example Adapter' };
+  for (const redirects of [[], ['https://other.example/cb'], [42]]) {
+    assert.equal(acceptRegistration('client_credentials', request, 201, { client_id: 'cc', client_secret: 's', redirect_uris: redirects }, 0).clientId, 'cc');
+  }
+  for (const redirects of ['https://other.example/cb', null, {}]) {
+    assert.throws(() => acceptRegistration('client_credentials', request, 201, { client_id: 'cc', client_secret: 's', redirect_uris: redirects }, 0),
+      errorCode('invalid_configuration'));
+  }
   // The SDK builds the vectors' PKCE request for a loopback redirect.
   const pkce = vectors.registration_responses.find(vector => vector.id === 'pkce-minimal');
   assert.deepEqual(registrationRequest({ flow: 'authorization_code_pkce', redirectUri: REDIRECT, registration: POLICY }, 'none'), pkce.request);
@@ -602,6 +611,19 @@ test('[dcr-invalid-client-reregisters-once] invalid_client deletes the registrat
     await assert.rejects(f.provider(instance).credential(f.context), errorCode('credential_unavailable'));
   }
   assert.equal(f.state.registrations.length, 3);
+  // The count survives the successful re-registrations of the next attempt, so the backoff grows.
+  f.state.invalid.add('dcr-4').add('dcr-5');
+  f.store.values.set(failureKey(f.key), { ...f.markers()[0], nextAttemptAt: Date.now() - 1 });
+  const before = Date.now();
+  await assert.rejects(f.provider().credential(f.context), errorCode('credential_unavailable'));
+  assert.equal(f.state.registrations.length, 5);
+  assert.equal(f.markers()[0].attempts, 2);
+  assert.ok(f.markers()[0].nextAttemptAt >= before + 120_000);
+  // A successful token request with a registered client resets it.
+  f.store.values.set(failureKey(f.key), { ...f.markers()[0], nextAttemptAt: Date.now() - 1 });
+  assert.equal((await f.provider().credential(f.context)).token, 'access-3');
+  assert.equal(f.state.tokenCalls.at(-1).id, 'dcr-6');
+  assert.deepEqual(f.markers(), []);
 });
 
 test('[dcr-secret-not-in-token-record] the client secret is written only through the secret hook', async () => {
