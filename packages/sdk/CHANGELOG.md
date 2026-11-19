@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.16.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.15.0...agenthooksprotocol-v0.16.0) (2026-11-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **oauth:** name the refused scopes on access_denied ([#58](https://github.com/agenthooksprotocol/typescript-sdk/issues/58))
+
+### Bug Fixes
+
+* **oauth:** name the refused scopes on access_denied ([#58](https://github.com/agenthooksprotocol/typescript-sdk/issues/58)) ([e317e41](https://github.com/agenthooksprotocol/typescript-sdk/commit/e317e416429b57b9d3708100a62f0c8ce7bcd980))
+
 ## [0.15.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.14.0...agenthooksprotocol-v0.15.0) (2026-11-19)
 
 
