@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.15.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.14.0...agenthooksprotocol-v0.15.0) (2026-11-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **oauth:** grants are keyed by the configured client identity, so stored grants from earlier versions are not found and users sign in again. complete() finds the login by state, PendingLogin is { type, authorizationUrl, expiresAt, state }, and an unknown callback state returns interaction_required. PKCE logins register per login with their own redirect; pending logins are process-owned unless persisted, capped, and completed by state; loopback CIMD redirects match without the port and localhost is rejected. forceRegistration applies to client credentials only; renewalMarginMs, request digests and PKCE registration records are removed.
+
+### Features
+
+* **oauth:** align client registration and pending logins with MCP clients ([3ffc754](https://github.com/agenthooksprotocol/typescript-sdk/commit/3ffc75487975fe7b8291941b395bf3e7f08971fb))
+
 ## [0.14.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.13.0...agenthooksprotocol-v0.14.0) (2026-11-18)
 
 
