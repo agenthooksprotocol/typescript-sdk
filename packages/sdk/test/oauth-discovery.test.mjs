@@ -152,7 +152,7 @@ for (const flow of ['client_credentials', 'authorization_code_pkce']) {
     const metadata = { ...target.metadata, grant_types_supported: ['client_credentials', 'authorization_code'],
       authorization_endpoint: `${issuer}authorize`, code_challenge_methods_supported: ['S256'] };
     const resolved = await resolveTarget({ url: resource, authentication: { ...preset, flow },
-      challenge: 'Bearer resource_metadata="https://attacker.example/metadata", scope="extra"' }, {
+      challenge: 'Bearer resource_metadata="https://attacker.example/metadata", error="insufficient_scope", scope="extra"' }, {
       ...options(async url => { requests.push(url); return Response.json(metadata); }), selectClient: () => client,
     }, operation());
     assert.deepEqual(requests, ['https://issuer.example/.well-known/oauth-authorization-server/tenant']);

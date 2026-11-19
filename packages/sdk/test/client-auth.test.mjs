@@ -370,9 +370,9 @@ test("discovery honors quoted challenge metadata after realm and enforces scope 
     provider.authenticate({
       url,
       authentication: binding,
-      challenge: 'Bearer scope="admin"',
+      challenge: 'Bearer error="insufficient_scope", scope="admin"',
     }),
-    { code: "access_denied", recovery: "none" },
+    { code: "access_denied", recovery: "none", requiredScopes: ["admin"] },
   );
 });
 

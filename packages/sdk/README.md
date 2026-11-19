@@ -269,8 +269,12 @@ prepare an unknown endpoint explicitly before an unsafe first call.
 (`bearer`, `oauth`, or `discover`) without resolving credentials or doing I/O. It
 validates local structure, not destination trust. Providers still own destination,
 issuer, resource, scope and client policy. `AuthError` exposes safe `code` and
-`recovery` fields (`configure`, `login`, `retry`, or `none`). For example, a host
-provider can throw `new AuthError("interaction_required")` to request login.
+`recovery` fields (`configure`, `login`, `retry`, or `none`). `access_denied` and
+`interaction_required` may also carry `requiredScopes`: the operation's full
+required set, sorted. Errors from `managedOAuth().complete()` carry `loginEnded`
+(see [OAUTH.md](OAUTH.md)). For example, a host provider can throw
+`new AuthError("interaction_required")` to request login; scopes a host policy
+callback attaches are dropped by `managedOAuth`.
 Recovery is guidance, never permission to replay an effectful delivery.
 
 Routed provider exceptions become redacted `AuthError`s without cause chains.

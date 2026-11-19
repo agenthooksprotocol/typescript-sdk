@@ -1,6 +1,6 @@
 import type { Authentication } from "../draft/raw.js";
 import { AuthError, composeAuth, type AuthCompositionOptions, type AuthErrorCode } from "./auth-routing.js";
-import { bearerParameters } from "./challenge.js";
+import { bearerParameters, challengeScopes } from "./challenge.js";
 import { responseScopes } from "./scope.js";
 export { AuthError, normalizeAuthTarget } from "./auth-routing.js";
 export type { AuthErrorCode, AuthRecovery, AuthTarget, AuthCompositionOptions } from "./auth-routing.js";
@@ -674,13 +674,15 @@ const defaults: AuthProvider = {
     if (!client.clientId) throw new AuthError("credential_unavailable");
     if (!["authorization_code_pkce", "client_credentials"].includes(client.flow))
       error("invalid client configuration");
-    const requiredScopes =
-      challengeParameter(context.challenge, "scope")
-        ?.split(/\s+/)
-        .filter(Boolean) ?? [];
-    if (requiredScopes.some((scope) => !(client.allowedScopes ?? client.scopes ?? []).includes(scope)))
-      throw new AuthError("access_denied");
-    client = { ...client, requiredScopes: [...new Set([...(client.requiredScopes ?? []), ...requiredScopes])] };
+    // Only a 403 insufficient_scope `scope` is a requirement (strict RFC 6749 list, else
+    // access_denied with no scopes); a 401 `scope` only widens the request within the ceiling.
+    const ceiling = client.allowedScopes ?? client.scopes ?? [];
+    const challenged = challengeScopes(bearerParameters(context.challenge));
+    const requiredScopes = [...new Set([...(client.requiredScopes ?? []), ...challenged.required])].sort();
+    // A requirement (host or challenged) outside the ceiling is refused, naming the full set.
+    if (requiredScopes.some((scope) => !ceiling.includes(scope)))
+      throw new AuthError("access_denied", requiredScopes);
+    client = { ...client, requiredScopes };
     const path =
       issuer.pathname === "/" ? "" : issuer.pathname.replace(/\/$/, "");
     const discovered = await metadataAt(
@@ -913,13 +915,25 @@ const defaults: AuthProvider = {
         cached.expiresAt > now + (options.expirySkewMs ?? 30_000))
     ) {
       if (client.requiredScopes?.some((scope: string) => !cached.scopes?.includes(scope)))
-        throw new AuthError("access_denied");
+        throw new AuthError("access_denied", client.requiredScopes);
       return validateCredential(cached, options);
     }
-    // Step-up requirements are requested with this acquisition but are not identity.
+    // Server says insufficient, but the cached grant records the whole requirement:
+    // replaying it or a new acquisition cannot help.
+    if (
+      cached?.scopes && client.requiredScopes?.length &&
+      bearerParameters(context.challenge).get("error") === "insufficient_scope" &&
+      client.requiredScopes.every((scope: string) => cached.scopes!.includes(scope))
+    ) {
+      throw new AuthError("access_denied", client.requiredScopes);
+    }
+    // Step-up requirements, and a 401 challenge's `scope` within the ceiling, are
+    // requested with this acquisition but are not identity.
     const required = client.requiredScopes ?? [];
+    const ceiling = client.allowedScopes ?? client.scopes ?? [];
+    const hinted = challengeScopes(bearerParameters(context.challenge)).hinted.filter((scope) => ceiling.includes(scope));
     const request: TokenRequest = {
-      client: { ...client, scopes: [...new Set([...(client.scopes ?? []), ...required])] },
+      client: { ...client, scopes: [...new Set([...(client.scopes ?? []), ...hinted, ...required])] },
       metadata,
       parameters: new URLSearchParams(),
     };
@@ -1075,7 +1089,7 @@ const defaults: AuthProvider = {
     }
     discoveryCache.set(discoveryKey, discovered);
     if (client.requiredScopes?.some((scope: string) => !credential.scopes?.includes(scope)))
-      throw new AuthError("access_denied");
+      throw new AuthError("access_denied", client.requiredScopes);
     return credential;
   },
 };

@@ -132,20 +132,55 @@ per store when persisted; a new one beyond the cap cancels the oldest. Each
 completion replaces the grant, so the newest completed login wins. A login ends by
 completion (a claimed valid callback, including consent denial), `cancel`
 (including by the cap) or expiry; a callback for an ended login fails
-`interaction_required`. Redirect, state and issuer are validated before the login
-is claimed, so a stray callback cannot burn it. Completion reselects current host
+`interaction_required`. Redirect, state, issuer and a single authorization code
+are validated before the login is claimed, so a stray callback cannot burn it. Completion reselects current host
 client authentication outside store coordination before it claims the callback;
 secret rotation does not require new consent. Records never contain client secrets.
 
-For step-up, an `interaction_required` from a 403 `insufficient_scope` carries
-`requiredScopes`; pass them back with `oauth.prepare(context, budget, { requiredScopes })`.
-Required scopes outside the caller's ceiling fail `access_denied` with
-`requiredScopes` naming the full required set (host-required, explicit and
-challenged; sorted, deduplicated), on fresh discovery, a cached binding,
-challenge handling and `prepare` alike. A client-credentials or refreshed grant
-that comes back without the required scopes also fails `access_denied` naming
-them. Other `access_denied` causes (untrusted issuer, consent refused, malformed
-challenge, a 403 that is not `insufficient_scope`) carry no scopes.
+An operation's required set is R = host-required (`ClientConfig.requiredScopes`)
+∪ explicit (`prepare(..., { requiredScopes })`) ∪ the scopes of a Bearer 403
+`insufficient_scope` challenge. Requested scopes (`ClientConfig.scopes`, and a
+preset binding's `scopes`) are requested, never required: a grant without them
+still satisfies an operation whose R it covers. Every scoped `AuthError` carries
+the operation's full R as `requiredScopes`, deduplicated and sorted in ascending
+byte order; only `access_denied` and `interaction_required` carry scopes.
+
+- For step-up, an `interaction_required` from a 403 `insufficient_scope` carries
+  R; pass it back with `oauth.prepare(context, budget, { requiredScopes })`.
+- R outside the caller's ceiling (including a host-required scope) fails
+  `access_denied` carrying R. The decision is local and precedes all network I/O
+  whenever the client is known: a cached binding, a preset binding, `prepare`,
+  `credential` and challenge handling. Only an unknown, unbound endpoint first
+  fetches its protected-resource metadata, which names the issuers `selectClient`
+  chooses from.
+- Requested scopes outside the ceiling are `invalid_configuration`, also decided
+  locally: a stored binding is not rediscovered to repair it.
+- A 401 rejects the token. Its `scope` (within the ceiling) only joins the scopes
+  requested by the next acquisition or sign-in (pass the challenge on the
+  `prepare` context); it is never a requirement and never `access_denied`.
+- A 403 `insufficient_scope` without `scope` uses host-required ∪ explicit; if that
+  is empty it fails `access_denied` with no scopes.
+- A malformed challenge `scope` (empty, repeated, leading or trailing spaces, an
+  invalid character, or a duplicated parameter) fails closed: `access_denied`, no
+  scopes. Hooks does not replay a 403 whose challenge cannot be parsed.
+- A 403 `insufficient_scope` whose R the grant behind the rejected token already
+  records as granted (within the current ceiling) fails `access_denied` carrying R:
+  no replay of the same token, no new login and no `interaction_required` loop.
+- A pending login stores the R it was prepared with. `complete()` succeeds only if
+  the granted scopes ∩ the current ceiling cover it; otherwise it fails
+  `access_denied` carrying that R, with the grant (and any rotated refresh token)
+  persisted and the login consumed. A refreshed or client-credentials grant
+  narrower than R likewise fails `access_denied` carrying R, grant persisted.
+- Errors from host policy (`selectClient`, `checkDestination`, the store,
+  `budget`) never carry scopes; other `access_denied` causes (untrusted issuer,
+  consent refused, a 403 that is not `insufficient_scope`) carry none either.
+
+Every error thrown by `complete()` carries `loginEnded`: `true` when the pending
+login named by the callback's `state` no longer exists after the call (it was
+consumed, had expired or was unknown), `false` when it is still pending, for
+example after a stray or invalid callback rejected before the claim, or an
+invalid budget. Codes and recovery are unchanged. Native cancellation and
+deadline errors keep their identity and carry the flag when they are extensible.
 
 For unattended use, return a `ClientConfig` with `flow: "client_credentials"`,
 a locally resolved `clientSecret`, and permitted `scopes`. `prepare` returns
@@ -211,7 +246,10 @@ replaces the record (deleting its old secret) and acquires a token with the new 
 
 The built-in `auth()` provider uses pre-registered clients only: it has no
 coordinated store, secret hook or `prepare`, so a missing `clientId` fails
-`credential_unavailable`.
+`credential_unavailable`. It follows the same scope rules: refusals carry R
+(`OAuthClient.requiredScopes` ∪ a 403 `insufficient_scope` challenge's scopes),
+the challenge `scope` uses the strict RFC 6749 grammar, and a 401 `scope` is only
+requested.
 
 ## Rotation, rejection and failure
 
@@ -254,6 +292,7 @@ deadline) is preserved. There is no anonymous/alternate-provider fallback after
 configured authentication fails.
 
 A Bearer `403 insufficient_scope` challenge permits step-up only within the
-locally allowed ceiling (beyond it, `access_denied` names the required scopes),
-and only for the challenged operation: requirements are never persisted. Without a challenge scope, supply explicit host-required scopes
-or the challenge is denied. Hooks alone decides replay (see the README).
+locally allowed ceiling (beyond it, `access_denied` carries R), and only for the
+challenged operation: requirements are never persisted. Without a challenge
+scope, supply explicit host-required scopes or the challenge is denied. Hooks
+alone decides replay (see the README).

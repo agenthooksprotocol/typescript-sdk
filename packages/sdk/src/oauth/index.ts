@@ -1,7 +1,7 @@
 import { AuthError, normalizeAuthTarget, classifyAuthError } from "../client/auth.js";
 import type { AuthChallengeContext, AuthErrorCode, DeliveryAuthContext, DeliveryAuthProvider, DeliveryCredential, PreparedEndpoint } from "../client/auth.js";
 import { bearerParameters } from "../client/challenge.js";
-import { isPolicyRefusal, resolveTarget } from "./discovery.js";
+import { challengeScopes, isLocalScopePolicy, isPolicyRefusal, markUnauthorized, resolveTarget, scoped, withoutHostScopes } from "./discovery.js";
 import {
   acquireClientCredentials, exchangeCode, isInvalidClient, isTransportFailure, pkce, refreshCredential, startLogin, validateCallback,
 } from "./protocol.js";
@@ -126,8 +126,21 @@ async function run<T>(budget: Operation, extra: AbortSignal | undefined, work: (
   try {
     return await race(signal, Promise.resolve().then(() => work(Object.freeze({ signal, deadline }))));
   } catch (error) {
-    throw classifyAuthError(error, "provider_failed", signal);
+    // Only the SDK's own scope checks attach scopes; a host callback's never survive.
+    throw withoutHostScopes(classifyAuthError(error, "provider_failed", signal));
   }
+}
+
+/**
+ * A `complete()` failure carrying `loginEnded`. An AuthError is copied (code, recovery
+ * and scopes unchanged); a native cancellation or deadline error keeps its identity.
+ */
+function loginEndedError(error: unknown, ended: boolean): unknown {
+  const target = error instanceof AuthError ? new AuthError(error.code, error.requiredScopes) : error;
+  if (target instanceof Error && Object.isExtensible(target)) {
+    try { Object.defineProperty(target, "loginEnded", { value: ended, enumerable: true }); } catch { /* Keep the original error. */ }
+  }
+  return target;
 }
 
 /** No browser, listener, global fetch, background refresh or default storage. */
@@ -208,7 +221,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     return grant.scopes.filter(scope => ceiling.includes(scope));
   }
   function ready(grant: StoredGrant, key: string, binding: string, target: ResolvedTarget, required: readonly string[]): Ready {
-    if (!within(required, effective(grant, target))) throw new AuthError("access_denied", required);
+    if (!within(required, effective(grant, target))) throw scoped("access_denied", required);
     if (!grant.token || !/^[A-Za-z0-9\-._~+/]+=*$/.test(grant.token)) throw new AuthError("credential_unavailable");
     const attempt = Object.freeze({});
     attempts.set(attempt, { key, generation: grant.generation, identity: binding });
@@ -421,8 +434,9 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         operation.signal.throwIfAborted();
         // Only a host selectClient rejection is a policy refusal; other errors propagate.
         if (mode === "lookup" && isPolicyRefusal(error)) return LOOKUP_MISS;
-        // A ceiling refusal names its scopes and is local policy: rediscovery cannot repair it.
-        if (!repairable || !(error instanceof AuthError) || error.requiredScopes !== undefined) throw error;
+        // Local scope policy (a ceiling refusal, requested scopes outside the ceiling):
+        // rediscovery cannot repair it, so it fails before any network I/O.
+        if (!repairable || !(error instanceof AuthError) || isLocalScopePolicy(error)) throw error;
       }
       target = resolved ? await withClient(resolved, recordedFor(cached, resolved), operation, redirect)
         : await discoverBinding(context, cached, operation, false, redirect, explicitScopes);
@@ -431,7 +445,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     }
     const withExplicit = <T extends ResolvedTarget>(resolved: T): T => {
       const all = scopes([...(resolved.client.requiredScopes ?? []), ...explicitScopes]);
-      if (!within(all, ceilingOf(resolved.client))) throw new AuthError("access_denied", all);
+      if (!within(all, ceilingOf(resolved.client))) throw scoped("access_denied", all);
       return { ...resolved, client: { ...resolved.client, requiredScopes: all } };
     };
     target = withExplicit(target);
@@ -477,7 +491,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         if (current?.refreshToken && refreshing && within(required, prior)) {
           return ready(await refresh(key, current, current.scopes, refreshing, operation), key, binding, target, required);
         }
-        if (mode !== "host") throw new AuthError("interaction_required", required);
+        if (mode !== "host") throw scoped("interaction_required", required);
         return login(context, acquisition(target, current), key, operation);
       }));
     };
@@ -557,7 +571,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         if (latest?.refreshToken === presented && latest.clientId === client) await write(key, latest.generation, undefined, settle);
       }
       operation.signal.throwIfAborted();
-      if (unknownClient) throw new AuthError("interaction_required", target.client.requiredScopes);
+      if (unknownClient) throw scoped("interaction_required", target.client.requiredScopes);
       throw error;
     }
     if (!result.value) {
@@ -676,8 +690,9 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
    * host policy still selects that source for the same grant key.
    */
   async function completionTarget(record: StoredPendingLogin, context: DeliveryAuthContext, operation: Operation): Promise<ResolvedTarget> {
+    // The login's stored R is enforced against the grant once the login is claimed.
     const reselected = await resolveTarget(context, options, operation,
-      { issuer: record.client.issuer, resource: record.client.resource, metadata: record.metadata });
+      { issuer: record.client.issuer, resource: record.client.resource, metadata: record.metadata }, [], false);
     const host = reselected.client;
     let client: ClientConfig = host, selection: ClientSelection;
     if (record.source === "preregistered") {
@@ -721,59 +736,75 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
   /** Complete the pending login named by the callback's `state`. */
   async function complete(callback: string, budget: Operation): Promise<Ready> {
     let completed: DeliveryAuthContext | undefined;
-    const result: Ready = await run(budget, undefined, async (operation) => {
-      if (typeof callback !== "string") throw new AuthError("invalid_configuration");
-      let state: string | null;
-      try { state = new URL(callback).searchParams.get("state"); } catch { throw new AuthError("access_denied"); }
-      const record = state ? await find(state, operation) : undefined;
-      // Completed, cancelled, evicted, expired or owned by another process.
-      if (!record) throw new AuthError("interaction_required");
-      if (record.expiresAt <= Date.now()) {
-        await claim(record, operation);
-        throw new AuthError("interaction_required");
-      }
-      const stored: ResolvedTarget = { client: record.client as ClientConfig, metadata: record.metadata };
-      const login = { authorizationUrl: record.authorizationUrl, state: record.state, verifier: record.verifier };
-      // Validate redirect, state and issuer before anything can consume the login.
-      let denied: boolean;
-      try { denied = validateCallback(stored, login, callback); }
-      catch { throw new AuthError("access_denied"); }
-      // Consent fixes identity, not runtime client authentication: reselect current
-      // host secrets outside coordination, before claiming the callback.
-      const context = snapshotContext(record.context as DeliveryAuthContext);
-      const current = denied ? stored : await completionTarget(record, context, operation);
-      // Claim once: a validated callback (including denial) ends the login.
-      if (!await claim(record, operation)) throw new AuthError("interaction_required");
-      if (denied) {
-        // An authorization endpoint invalid_client for a CIMD client is misconfiguration.
-        if (record.source === "cimd" && new URL(callback).searchParams.get("error") === "invalid_client") throw new AuthError("invalid_configuration");
-        throw new AuthError("access_denied");
-      }
-      const prior = (await read(record.grantKey, "grant", operation))?.scopes ?? [];
-      const exchange: ResolvedTarget = { ...current, client: { ...current.client,
-        scopes: record.client.scopes, allowedScopes: [...new Set([...prior, ...ceilingOf(record.client as ClientConfig)])] } };
-      let result: TokenResult;
-      try {
-        result = await exchangeCode(exchange, login, callback, options, operation);
-      } catch (error) {
-        if (isInvalidClient(error) && record.source === "cimd") throw new AuthError("invalid_configuration");
-        // A rejected DCR client ends only this login: the stored grant may hold an older valid client.
-        if (isInvalidClient(error) && record.source === "dcr") throw new AuthError("interaction_required", record.client.requiredScopes);
-        throw error;
-      }
-      // An invalid initial exchange persists nothing.
-      if (!result.value) throw new AuthError("provider_failed");
-      // The issued client is committed with its tokens; the newest completed login wins.
-      const token = { ...result.value, ...(record.source === "dcr" ? { clientId: record.client.clientId! } : {}) };
-      const settle = commit();
-      const grant = await race(operation.signal, store.coordinate(record.grantKey, settle.signal, async () => {
-        const latest = await read(record.grantKey, "grant", settle);
-        return saveGrant(record.grantKey, latest?.generation, token, settle);
-      }));
-      const done: Ready = ready(grant, record.grantKey, identity(context), current, record.client.requiredScopes ?? []);
-      completed = context;
-      return done;
-    });
+    // Whether the login named by the callback's `state` no longer exists: true when no
+    // login is named, false from when one is named until it is found ended or claimed.
+    let named: string | null = null;
+    try { if (typeof callback === "string") named = new URL(callback).searchParams.get("state"); } catch { /* No login named. */ }
+    let ended = !named;
+    let result: Ready;
+    try {
+      result = await run(budget, undefined, async (operation) => {
+        if (typeof callback !== "string") throw new AuthError("invalid_configuration");
+        let state: string | null;
+        try { state = new URL(callback).searchParams.get("state"); } catch { throw new AuthError("access_denied"); }
+        const record = state ? await find(state, operation) : undefined;
+        // Completed, cancelled, evicted, expired or owned by another process.
+        if (!record) {
+          ended = true;
+          throw new AuthError("interaction_required");
+        }
+        if (record.expiresAt <= Date.now()) {
+          ended = true;
+          await claim(record, operation);
+          throw new AuthError("interaction_required");
+        }
+        const stored: ResolvedTarget = { client: record.client as ClientConfig, metadata: record.metadata };
+        const login = { authorizationUrl: record.authorizationUrl, state: record.state, verifier: record.verifier };
+        // Validate redirect, state and issuer before anything can consume the login.
+        let denied: boolean;
+        try { denied = validateCallback(stored, login, callback); }
+        catch { throw new AuthError("access_denied"); }
+        // Consent fixes identity, not runtime client authentication: reselect current
+        // host secrets outside coordination, before claiming the callback.
+        const context = snapshotContext(record.context as DeliveryAuthContext);
+        const current = denied ? stored : await completionTarget(record, context, operation);
+        // Claim once: a validated callback (including denial) ends the login.
+        const claimed = await claim(record, operation);
+        ended = true;
+        if (!claimed) throw new AuthError("interaction_required");
+        if (denied) {
+          // An authorization endpoint invalid_client for a CIMD client is misconfiguration.
+          if (record.source === "cimd" && new URL(callback).searchParams.get("error") === "invalid_client") throw new AuthError("invalid_configuration");
+          throw new AuthError("access_denied");
+        }
+        const prior = (await read(record.grantKey, "grant", operation))?.scopes ?? [];
+        const exchange: ResolvedTarget = { ...current, client: { ...current.client,
+          scopes: record.client.scopes, allowedScopes: [...new Set([...prior, ...ceilingOf(record.client as ClientConfig)])] } };
+        let result: TokenResult;
+        try {
+          result = await exchangeCode(exchange, login, callback, options, operation);
+        } catch (error) {
+          if (isInvalidClient(error) && record.source === "cimd") throw new AuthError("invalid_configuration");
+          // A rejected DCR client ends only this login: the stored grant may hold an older valid client.
+          if (isInvalidClient(error) && record.source === "dcr") throw scoped("interaction_required", record.client.requiredScopes);
+          throw error;
+        }
+        // An invalid initial exchange persists nothing.
+        if (!result.value) throw new AuthError("provider_failed");
+        // The issued client is committed with its tokens; the newest completed login wins.
+        const token = { ...result.value, ...(record.source === "dcr" ? { clientId: record.client.clientId! } : {}) };
+        const settle = commit();
+        const grant = await race(operation.signal, store.coordinate(record.grantKey, settle.signal, async () => {
+          const latest = await read(record.grantKey, "grant", settle);
+          return saveGrant(record.grantKey, latest?.generation, token, settle);
+        }));
+        const done: Ready = ready(grant, record.grantKey, identity(context), current, record.client.requiredScopes ?? []);
+        completed = context;
+        return done;
+      });
+    } catch (error) {
+      throw loginEndedError(error, ended);
+    }
     if (completed) prepared(completed);
     return result;
   }
@@ -789,18 +820,22 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
   async function challenge(input: AuthChallengeContext, budget: Operation): Promise<void> {
     const { response, credential } = input;
     const header = response.headers.get("www-authenticate") ?? undefined;
-    const context = snapshotContext({ ...input, ...(header === undefined ? {} : { challenge: header }), challenged: true });
+    const snapshot = snapshotContext({ ...input, ...(header === undefined ? {} : { challenge: header }), challenged: true });
+    // A 401 rejects the token: its `scope` only widens the next request, never a requirement.
+    const context = response.status === 401 ? markUnauthorized(snapshot) : snapshot;
     return run(budget, context.signal, async (operation) => {
-      const parameters = bearerParameters(header);
-      const insufficient = response.status === 403 && parameters.get("error") === "insufficient_scope";
+      if (response.status !== 401 && response.status !== 403) return;
+      let parameters: Map<string, string> | undefined;
+      try { parameters = bearerParameters(header); } catch { /* Malformed: fails closed below. */ }
+      const insufficient = response.status === 403 && parameters?.get("error") === "insufficient_scope";
+      // Only a Bearer 403 insufficient_scope is an auth retry; an unparseable one fails closed.
       if (response.status === 403 && !insufficient) throw new AuthError("access_denied");
-      if (response.status !== 401 && !insufficient) return;
       const owner = credential ? attempts.get(credential.attempt as object) : undefined;
       if (credential && (!owner || owner.identity !== identity(context))) throw new AuthError("invalid_configuration");
       if (!insufficient && owner) {
         // Drop the rejected access token first (keeping refresh material) unless a newer
-        // generation exists, under the commit budget: a later discovery failure or caller
-        // abort must not leave the revoked token stored and resent.
+        // generation exists, under the commit budget: a later failure (including a
+        // malformed challenge) or caller abort must not leave the revoked token stored and resent.
         const settle = commit();
         await race(operation.signal, store.coordinate(owner.key, settle.signal, async () => {
           const current = await read(owner.key, "grant", settle);
@@ -809,17 +844,41 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
           await saveGrant(owner.key, current.generation, rest, settle);
         }));
       }
+      // A malformed challenge or challenge `scope` fails closed with no scopes.
+      if (!parameters) throw new AuthError("access_denied");
+      challengeScopes(parameters, !insufficient);
       const cached = await read(bindingKey(namespace, context), "binding", operation);
-      // Challenge handling runs full discovery, honouring a resource_metadata hint.
-      const target = await discoverBinding(context, cached, operation);
+      let target: Selected | undefined;
+      if (cached) {
+        // Decided locally from the known binding, before any network I/O: R outside the
+        // ceiling is refused, naming the full required set.
+        try {
+          const resolved = await resolveTarget(context, options, operation, cached);
+          target = await withClient(resolved, recordedFor(cached, resolved), operation);
+        } catch (error) {
+          operation.signal.throwIfAborted();
+          if (!(error instanceof AuthError) || isLocalScopePolicy(error)) throw error;
+        }
+      }
+      // A 401 (or an unknown or unresolvable binding) runs full discovery, honouring a
+      // resource_metadata hint; a step-up with a known binding needs none. A preset
+      // binding still refuses before any I/O.
+      if (!insufficient || !target) target = await discoverBinding(context, cached, operation);
       if (insufficient) {
-        // Operation-scoped: validated against the ceiling, never persisted. The replay
-        // carries the same challenge, so its acquisition sees the same requirement.
-        const advertised = parameters.get("scope");
-        const required = advertised === undefined ? scopes(target.hostRequiredScopes ?? []) : scopes(advertised.split(" "));
+        // Operation-scoped R = host-required ∪ challenged (or host-required alone when
+        // the challenge names none), validated against the ceiling, never persisted. The
+        // replay carries the same challenge, so its acquisition sees the same requirement.
+        const required = scopes(target.client.requiredScopes ?? []);
         if (required.length === 0) throw new AuthError("access_denied");
-        if (!within(required, ceilingOf(target.client))) throw new AuthError("access_denied", required);
-        if (target.client.flow === "authorization_code_pkce") throw new AuthError("interaction_required", required);
+        if (!within(required, ceilingOf(target.client))) throw scoped("access_denied", required);
+        // The server says insufficient, but the grant whose token was sent records R as
+        // granted: replaying it or a fresh login cannot help.
+        const key = owner?.key ?? grantKey(namespace, context, target.client, target.identity);
+        const grant = await read(key, "grant", operation);
+        if (grant && (!owner || grant.generation === owner.generation) && within(required, effective(grant, target))) {
+          throw scoped("access_denied", required);
+        }
+        if (target.client.flow === "authorization_code_pkce") throw scoped("interaction_required", required);
       }
       // Prepare the next attempt (the replay, or the next notification/upload that is
       // never replayed): discovery and client-credentials acquisition, never a login.
@@ -847,9 +906,9 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
           // Without a budget an unbound endpoint with no stored binding still sends anonymously.
           let known: unknown;
           try { known = await store.load(bindingKey(namespace, context), context.signal ?? new AbortController().signal); }
-          catch (failure) { throw classifyAuthError(failure, "provider_failed", context.signal); }
+          catch (failure) { throw withoutHostScopes(classifyAuthError(failure, "provider_failed", context.signal)); }
           if (lookup && known === undefined) return undefined;
-          throw classifyAuthError(error);
+          throw withoutHostScopes(classifyAuthError(error));
         }
         const result = await run(budget, context.signal, operation => acquire(context, operation, lookup ? "lookup" : "delivery"));
         // The up-front lookup is anonymous only on a store miss or a host policy refusal.
@@ -862,7 +921,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         let budget: Operation;
         try { budget = host.budget(input); } catch (error) {
           input.signal?.throwIfAborted();
-          throw classifyAuthError(error);
+          throw withoutHostScopes(classifyAuthError(error));
         }
         return challenge(input, budget);
       },

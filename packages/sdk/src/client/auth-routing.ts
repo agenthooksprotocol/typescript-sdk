@@ -18,9 +18,17 @@ export class AuthError extends Error {
   readonly recovery: AuthRecovery;
   /**
    * Validated scope tokens the failed operation requires, on `interaction_required`
-   * or `access_denied` only. Pass them back to a host `prepare` for step-up consent.
+   * or `access_denied` only, deduplicated and sorted in ascending byte order. Pass
+   * them back to a host `prepare` for step-up consent.
    */
   readonly requiredScopes?: readonly string[];
+  /**
+   * Set on every error thrown by `managedOAuth().complete()`: true when the pending
+   * login named by the callback's `state` no longer exists after the call (consumed,
+   * expired or unknown), false when it is still pending (for example after a stray
+   * or invalid callback rejected before the login was claimed).
+   */
+  declare readonly loginEnded?: boolean;
   constructor(code: AuthErrorCode, requiredScopes?: readonly string[]) {
     const safe = typeof code === "string" && Object.hasOwn(recovery, code) ? code : "provider_failed";
     super(`Authentication failed: ${safe}`);
@@ -29,7 +37,7 @@ export class AuthError extends Error {
     this.recovery = recovery[safe];
     if ((safe === "interaction_required" || safe === "access_denied") && Array.isArray(requiredScopes) &&
         requiredScopes.length > 0 && requiredScopes.every(scope => typeof scope === "string" && /^[\x21\x23-\x5B\x5D-\x7E]+$/.test(scope))) {
-      this.requiredScopes = Object.freeze([...new Set(requiredScopes)]);
+      this.requiredScopes = Object.freeze([...new Set(requiredScopes)].sort());
     }
   }
 }

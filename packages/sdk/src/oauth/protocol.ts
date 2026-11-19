@@ -253,12 +253,17 @@ export function callbackParameters(target: ResolvedTarget, login: LoginState, ca
   }
   if (!login.state || !login.verifier || actual.searchParams.getAll("state").length !== 1 ||
       actual.searchParams.get("state") !== login.state || actual.searchParams.getAll("iss").length > 1) throw new AuthError("access_denied");
+  let parameters: URLSearchParams;
   try {
-    return oauth.validateAuthResponse(target.metadata, client(target), actual, login.state);
+    parameters = oauth.validateAuthResponse(target.metadata, client(target), actual, login.state);
   } catch (error) {
     if (error instanceof oauth.AuthorizationResponseError) throw error;
     throw new AuthError("access_denied");
   }
+  // A success response carries exactly one non-empty code, checked before the login is claimed.
+  const codes = actual.searchParams.getAll("code");
+  if (codes.length !== 1 || !codes[0]) throw new AuthError("access_denied");
+  return parameters;
 }
 
 /** Return whether a correctly bound callback denies authorization. */

@@ -1,5 +1,6 @@
 import { AuthError, classifyAuthError, type DeliveryAuthContext } from "../client/auth.js";
-import { bearerParameters } from "../client/challenge.js";
+import { bearerParameters, challengeScopes } from "../client/challenge.js";
+export { challengeScopes } from "../client/challenge.js";
 import { processDiscoveryResponse, type AuthorizationServer } from "oauth4webapi";
 import type { ClientConfig, ManagedOAuthOptions, NetworkPurpose, Operation, ResolvedTarget, StoredBinding } from "./types.js";
 
@@ -20,7 +21,32 @@ export function https(value: string): URL {
   return url;
 }
 
-const transport = new WeakSet<AuthError>(), refusals = new WeakSet<AuthError>();
+const transport = new WeakSet<AuthError>(), refusals = new WeakSet<AuthError>(), own = new WeakSet<AuthError>();
+/**
+ * An `access_denied` or `interaction_required` from the SDK's own scope checks,
+ * carrying the operation's full required set. Only these keep scopes at the API boundary.
+ */
+export function scoped(code: "access_denied" | "interaction_required", required: readonly string[] | undefined): AuthError {
+  const error = new AuthError(code, required);
+  own.add(error);
+  return error;
+}
+/**
+ * A decision from local scope policy alone (a ceiling refusal, or requested scopes
+ * outside the ceiling): rediscovery cannot repair it, so it never triggers network I/O.
+ */
+export function isLocalScopePolicy(error: unknown): boolean {
+  return error instanceof AuthError && (own.has(error) || localPolicies.has(error));
+}
+const localPolicies = new WeakSet<AuthError>();
+function localScopePolicy(error: AuthError): AuthError { localPolicies.add(error); return error; }
+/** Contexts of a 401 challenge: their `scope` is never a requirement, whatever `error` says. */
+const unauthorizedContexts = new WeakSet<object>();
+export function markUnauthorized<T extends object>(context: T): T { unauthorizedContexts.add(context); return context; }
+/** Host-policy errors (client selection, destination checks, stores, budgets) never carry scopes. */
+export function withoutHostScopes(error: AuthError): AuthError {
+  return error.requiredScopes === undefined || own.has(error) ? error : new AuthError(error.code);
+}
 /** True when the host's selectClient rejected the binding: the only lookup policy refusal. */
 export function isPolicyRefusal(error: unknown): boolean {
   return error instanceof AuthError && refusals.has(error);
@@ -157,11 +183,13 @@ function validateClient(client: ClientConfig): void {
 /**
  * With `cached`, performs no network I/O: only local client policy runs.
  * `explicit` (validated host `prepare` requirements) only joins the ceiling check.
+ * Completion passes `enforceRequired = false`: it enforces the login's stored R
+ * against the grant instead, after the login is claimed.
  */
 export async function resolveTarget(context: DeliveryAuthContext, options: ManagedOAuthOptions, operation: Operation, cached?: CachedBinding,
-  explicit: readonly string[] = []): Promise<ResolvedTarget> {
+  explicit: readonly string[] = [], enforceRequired = true): Promise<ResolvedTarget> {
   try {
-    return await discover(context, options, operation, cached, explicit);
+    return await discover(context, options, operation, cached, explicit, enforceRequired);
   } catch (error) {
     active(operation);
     throw classifyAuthError(error, "discovery_failed");
@@ -169,12 +197,18 @@ export async function resolveTarget(context: DeliveryAuthContext, options: Manag
 }
 
 async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptions, operation: Operation, cached: CachedBinding | undefined,
-  explicit: readonly string[]): Promise<ResolvedTarget> {
+  explicit: readonly string[], enforceRequired: boolean): Promise<ResolvedTarget> {
   active(operation);
   const binding = context.authentication;
   if (binding !== undefined && binding.type !== "oauth") throw new AuthError("unsupported_binding");
   const endpoint = https(context.url);
-  const challenge = bearerParameters(context.challenge);
+  let challenge: Map<string, string>;
+  try {
+    challenge = bearerParameters(context.challenge);
+  } catch {
+    // An unparseable challenge (for example a duplicated parameter) fails closed, with no scopes.
+    throw localScopePolicy(new AuthError("access_denied"));
+  }
   const advertised = challenge.get("resource_metadata");
   if (advertised !== undefined && advertised === "") throw new AuthError("discovery_failed");
   const path = endpoint.pathname === "/" ? "" : endpoint.pathname;
@@ -207,7 +241,7 @@ async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptio
     selected = await options.selectClient(Object.freeze(binding ? [binding.issuer] : [...issuers]), resource, context, operation);
   } catch (error) {
     active(operation);
-    const refusal = classifyAuthError(error, "credential_unavailable");
+    const refusal = withoutHostScopes(classifyAuthError(error, "credential_unavailable"));
     refusals.add(refusal);
     throw refusal;
   }
@@ -227,18 +261,20 @@ async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptio
   const validScope = (scope: unknown): scope is string => typeof scope === "string" && /^[\x21\x23-\x5B\x5D-\x7E]+$/.test(scope);
   if (!Array.isArray(allowedScopes) || !allowedScopes.every(validScope) ||
       !Array.isArray(scopePolicy.requiredScopes ?? []) || !requiredScopes.every(validScope) ||
-      selected.scopes.some(scope => !allowedScopes.includes(scope))) throw new AuthError("invalid_configuration");
+      selected.scopes.some(scope => !allowedScopes.includes(scope))) throw localScopePolicy(new AuthError("invalid_configuration"));
   const hostRequiredScopes = Object.freeze([...new Set(requiredScopes)]);
-  const required = challenge.get("scope");
-  if (required !== undefined) {
-    if (!/^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/.test(required)) throw new AuthError("access_denied");
-    requiredScopes.push(...required.split(" "));
-  }
+  // A 401 `scope` (as in MCP clients) only widens what the next acquisition requests,
+  // within the ceiling; only a 403 insufficient_scope adds a requirement.
+  let scopes: ReturnType<typeof challengeScopes>;
+  try { scopes = challengeScopes(challenge, unauthorizedContexts.has(context)); }
+  catch (error) { throw localScopePolicy(error as AuthError); }
+  const { required, hinted } = scopes;
+  requiredScopes.push(...required);
   // A requirement (host, explicit or challenged) outside the ceiling is refused, naming the full required set.
   const operationScopes = [...requiredScopes, ...explicit];
-  if (operationScopes.some(scope => !allowedScopes.includes(scope))) throw new AuthError("access_denied", [...new Set(operationScopes)].sort());
+  if (enforceRequired && operationScopes.some(scope => !allowedScopes.includes(scope))) throw scoped("access_denied", operationScopes);
   const client: ClientConfig = Object.freeze({ ...selected,
-    scopes: Object.freeze([...new Set(selected.scopes)]),
+    scopes: Object.freeze([...new Set([...selected.scopes, ...hinted.filter(scope => allowedScopes.includes(scope))])]),
     allowedScopes: Object.freeze([...new Set(allowedScopes)]),
     requiredScopes: Object.freeze([...new Set(requiredScopes)]),
   });

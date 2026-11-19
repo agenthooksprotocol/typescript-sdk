@@ -186,7 +186,7 @@ for (const kind of ['resource', 'issuer']) {
   });
 }
 test('local scope policy rejects challenge escalation', async t => {
-  const f = await fixture(t); await assert.rejects(f.prepare({ challenge: 'Bearer scope="deliver admin"' }), classified(['access_denied']));
+  const f = await fixture(t); await assert.rejects(f.prepare({ challenge: 'Bearer error="insufficient_scope", scope="deliver admin"' }), classified(['access_denied']));
   assert.equal(f.checked.some(item => item.purpose === 'authorization'), false); assert.equal(f.tokens.length, 0);
 });
 for (const purpose of ['metadata', 'authorization', 'token']) {
