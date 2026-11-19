@@ -7,13 +7,13 @@ export type NetworkPurpose = "metadata" | "token" | "authorization" | "registrat
 export type PolicyFetch = (url: string, init: RequestInit, context: {
   readonly purpose: NetworkPurpose; readonly operation: Operation;
 }) => Promise<Response>;
-/** How a grant's `client_id` was obtained, in selection order. */
+/** The host-configured client source, in selection order; with its client it is the grant key's client identity. */
 export type ClientSource = "preregistered" | "cimd" | "dcr";
 /** A Client ID Metadata Document the host publishes; the SDK never fetches it. */
 export interface ClientMetadataDocument {
   /** HTTPS URL with a path; sent verbatim as the `client_id`. */
   readonly url: string;
-  /** The document's `redirect_uris`; the login redirect must equal one exactly. */
+  /** The document's `redirect_uris`; a loopback entry may omit the port, which is then not compared. */
   readonly redirectUris: readonly string[];
 }
 /** Host permission to register a client (RFC 7591) at this config's exact issuer. */
@@ -36,26 +36,27 @@ export interface ClientConfig {
   readonly allowedScopes?: readonly string[];
   readonly requiredScopes?: readonly string[];
   readonly grantPartition?: string;
-  readonly clientSecret?: string; readonly redirectUri?: string;
+  readonly clientSecret?: string;
+  /** Default PKCE redirect; `prepare` may supply each login's own (for example an ephemeral loopback port). */
+  readonly redirectUri?: string;
   /** PKCE only, used when the issuer advertises `client_id_metadata_document_supported: true`. */
   readonly clientMetadataDocument?: ClientMetadataDocument;
   /** Permits dynamic registration at `issuer` when it advertises `registration_endpoint`. */
   readonly registration?: RegistrationPolicy;
 }
-/** Selected client identity recorded on a binding. */
+/** Selected client source recorded on a binding. */
 export interface ClientSelection {
   readonly source: ClientSource;
-  readonly clientId: string;
-  /** DCR only. */
-  readonly registrationKey?: string;
-  /** DCR only: the registration policy digest the selection was made under. */
-  readonly requestDigest?: string;
+  /** Pre-registered or CIMD only; an issued DCR client_id is never part of the selection. */
+  readonly clientId?: string;
 }
 export interface ResolvedTarget {
   readonly client: ClientConfig;
   readonly metadata: AuthorizationServer;
   /** Current host policy only; never inferred from a challenge. */
   readonly hostRequiredScopes?: readonly string[];
+  /** A registered client-credentials client's registered token endpoint auth method. */
+  readonly authMethod?: "client_secret_basic" | "client_secret_post";
 }
 export interface TokenValue {
   readonly token: string; readonly expiresAt?: number;
@@ -71,6 +72,8 @@ export interface StoredGrant {
   readonly refreshToken?: string;
   /** Recorded granted scopes; re-intersected with the current ceiling at use. */
   readonly scopes: readonly string[];
+  /** PKCE with DCR: the client issued to the login that produced these tokens, used to refresh them. */
+  readonly clientId?: string;
 }
 /** Non-secret discovery result for one destination, stored under its binding key. */
 export interface StoredBinding {
@@ -87,51 +90,52 @@ export interface StoredBinding {
   /** Client source; kept while only authorization-server metadata changes. */
   readonly client?: ClientSelection;
 }
-/** A dynamically registered client, shared by every grant with its registration key. */
+/** A client-credentials client registered by DCR, shared per namespace and issuer. */
 export interface StoredRegistration {
   readonly kind: "registration";
   readonly generation: string;
   readonly clientId: string;
+  readonly tokenEndpointAuthMethod: "client_secret_basic" | "client_secret_post";
   /** Unix seconds; absent or 0 means no known expiry. */
   readonly clientSecretExpiresAt?: number;
-  /** Local Unix milliseconds when stored. */
-  readonly registeredAt: number;
-  /** Accepted, non-secret issued metadata. */
-  readonly metadata: Readonly<Record<string, unknown>>;
-  readonly requestDigest: string;
-  /** Confidential clients only: opaque `secrets` reference, never the secret. */
-  readonly secretRef?: string;
+  /** Opaque `secrets` reference, never the secret. */
+  readonly secretRef: string;
 }
-/** Backoff after a failed registration, under `frame("ahp.oauth.registration-failure:", [registrationKey])`. */
+/** Backoff after a failed client-credentials registration, under `frame("ahp.oauth.registration-failure:", [registrationKey])`. */
 export interface StoredRegistrationFailure {
   readonly kind: "registration_failure";
   readonly generation: string;
-  readonly requestDigest: string;
-  /** Unix milliseconds. */
-  readonly failedAt: number;
   readonly attempts: number;
   /** Unix milliseconds before which only host `prepare` registers. */
   readonly nextAttemptAt: number;
+  /** The last failure's `AuthError` code, returned while the backoff lasts. */
+  readonly code: string;
 }
-/** A host-created login awaiting its callback. Completable from any process sharing the store. */
+/**
+ * A login awaiting its callback, found by `state`. Held by the creating process, or in
+ * the store when `persistPendingLogins` is set. Only this record holds the PKCE verifier.
+ */
 export interface StoredPendingLogin {
   readonly kind: "pending_login";
   readonly generation: string;
-  readonly id: string;
+  readonly state: string;
   readonly grantKey: string;
   readonly expiresAt: number;
   readonly authorizationUrl: string;
-  readonly state: string;
   readonly verifier: string;
-  /** Requested plus required scopes and the creating caller's ceiling, without client secrets. */
+  /** The login's exact redirect and client, requested plus required scopes and ceiling, without client secrets. */
   readonly client: Omit<ClientConfig, "clientSecret">;
   readonly metadata: AuthorizationServer;
   readonly context: Pick<DeliveryAuthContext, "backendId" | "purpose" | "url" | "authentication">;
-  readonly source?: ClientSource;
-  /** DCR only: the registration generation the login was created under. */
-  readonly registration?: { readonly key: string; readonly generation: string };
+  readonly source: ClientSource;
 }
-export type StoredRecord = StoredGrant | StoredBinding | StoredPendingLogin | StoredRegistration | StoredRegistrationFailure;
+/** Persisted pending logins of one grant key, oldest first, for the cap. */
+export interface StoredPendingIndex {
+  readonly kind: "pending_index";
+  readonly generation: string;
+  readonly states: readonly string[];
+}
+export type StoredRecord = StoredGrant | StoredBinding | StoredPendingLogin | StoredPendingIndex | StoredRegistration | StoredRegistrationFailure;
 /** Host secret storage for registered client secrets. There is no default or fallback. */
 export interface SecretStore {
   put(reference: string, secret: string, signal: AbortSignal): Promise<void>;
@@ -163,11 +167,16 @@ export interface ManagedOAuthOptions {
   readonly commitTimeoutMs?: number;
   /** Pending login lifetime, fixed at creation. Default and maximum 600000 (10 minutes). */
   readonly loginLifetimeMs?: number;
+  /**
+   * Keep pending logins in `store` so any process sharing it can complete one by
+   * `state` (for example a pasted callback URL). By default they live in this instance.
+   */
+  readonly persistPendingLogins?: boolean;
+  /** Concurrent pending logins per grant key (per instance, or per store when persisted). Default 5. */
+  readonly maxPendingLogins?: number;
   /** Required for client-credentials DCR; resolves initial access token references. */
   readonly secrets?: SecretStore;
-  /** Failed-registration backoff: `initialMs` (default 60000) doubling per attempt, capped
-   * with any `Retry-After` at `maxMs` (default 3600000). */
+  /** Client-credentials registration backoff: `initialMs` (default 60000) doubling per
+   * failure, capped with any `Retry-After` at `maxMs` (default 3600000). */
   readonly registrationBackoff?: { readonly initialMs?: number; readonly maxMs?: number };
-  /** Cap on the proactive client-secret renewal margin, `min(0.1 × lifetime, cap)`. Default 3600000. */
-  readonly renewalMarginMs?: number;
 }

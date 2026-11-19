@@ -11,6 +11,7 @@ function memoryStore() {
     values,
     grants: () => [...values].filter(([key]) => key.startsWith('ahp.oauth.grant:')).map(([, value]) => value),
     pending: () => [...values].filter(([key]) => key.startsWith('ahp.oauth.pending:')).map(([, value]) => value),
+    indexes: () => [...values].filter(([key]) => key.startsWith('ahp.oauth.pending-index:')).map(([, value]) => value),
     async load(key, signal) { signal.throwIfAborted(); return structuredClone(values.get(key)); },
     async compareAndSet(key, expected, value, signal) {
       signal.throwIfAborted();
@@ -59,8 +60,9 @@ function fixture(overrides = {}) {
     },
   };
   const oauth = managedOAuth(options);
+  // A callback arrives at the login's own redirect, named in its authorization URL.
   const callback = (pending, extra = {}) => {
-    const url = new URL(client.redirectUri);
+    const url = new URL(new URL(pending.authorizationUrl).searchParams.get('redirect_uri'));
     url.search = new URLSearchParams({ code: 'code', state: new URL(pending.authorizationUrl).searchParams.get('state'), ...extra }).toString();
     return url.href;
   };
@@ -68,18 +70,42 @@ function fixture(overrides = {}) {
   const expire = () => { for (const [key, value] of store.values) if (value.kind === 'grant') store.values.set(key, { ...value, expiresAt: Date.now() - 1 }); };
   const login = async (instance = oauth) => {
     const pending = await instance.prepare({ ...context, challenged: true }, budget());
-    return instance.complete(pending, callback(pending), budget());
+    return instance.complete(callback(pending), budget());
   };
   return { oauth, options, store, state, client, context, callback, scopeOf, expire, login };
 }
 
-test('[pending-login-cross-process-completion] a serialized handle completes in another process sharing the store', async () => {
+test('[pending-login-owned-by-creating-process] by default the creating instance holds the login and completes it by state', async () => {
   const f = fixture();
   const pending = await f.oauth.prepare(f.context, budget());
-  const transported = JSON.parse(JSON.stringify(pending));
-  const other = managedOAuth(f.options);
-  assert.equal((await other.complete(transported, f.callback(pending), budget())).credential.token, 'access-1');
+  assert.deepEqual(Object.keys(pending).sort(), ['authorizationUrl', 'expiresAt', 'state', 'type']);
+  assert.equal(pending.state, new URL(pending.authorizationUrl).searchParams.get('state'));
+  assert.equal(f.store.pending().length, 0, 'nothing about the login is persisted');
+  // Another process sharing the store cannot complete it; that attempt consumes nothing.
+  await assert.rejects(managedOAuth(f.options).complete(f.callback(pending), budget()), { code: 'interaction_required' });
+  assert.equal((await f.oauth.complete(f.callback(pending), budget())).credential.token, 'access-1');
+  assert.equal(f.state.tokenCalls.length, 1);
+});
+
+test('[pending-login-persisted-cross-process-completion] a persisted login completes from another process by its callback alone', async () => {
+  const f = fixture();
+  const options = { ...f.options, persistPendingLogins: true };
+  assert.throws(() => managedOAuth({ ...options, persistPendingLogins: 'yes' }), { code: 'invalid_configuration' });
+  const pending = await managedOAuth(options).prepare(f.context, budget());
+  const [record] = f.store.pending();
+  assert.equal(record.state, pending.state);
+  // The PKCE verifier is only in the pending record: not in the handle, index or any other record.
+  const verifier = record.verifier;
+  assert.ok(verifier);
+  assert.equal(JSON.stringify(pending).includes(verifier), false);
+  for (const [key, value] of f.store.values) {
+    if (!key.startsWith('ahp.oauth.pending:')) assert.equal(JSON.stringify(value).includes(verifier), false, key);
+  }
+  // A pasted callback URL is enough: the other process finds the login by state.
+  assert.equal((await managedOAuth(options).complete(f.callback(pending), budget())).credential.token, 'access-1');
   assert.equal(f.store.pending().length, 0);
+  assert.equal(f.state.tokenCalls[0].get('code_verifier'), verifier);
+  await assert.rejects(managedOAuth(options).complete(f.callback(pending), budget()), { code: 'interaction_required' });
 });
 
 test('[pending-login-fixed-lifetime] lifetime is fixed at creation and survives the creating budget', async () => {
@@ -91,12 +117,12 @@ test('[pending-login-fixed-lifetime] lifetime is fixed at creation and survives 
   controller.abort();
   await new Promise(resolve => setTimeout(resolve, 80));
   // The creating budget is cancelled and past its deadline; the login is still valid.
-  assert.deepEqual(await short.prepare(f.context, budget(undefined, 10)), pending, 'reuse never extends the lifetime');
-  const ok = await short.complete(pending, f.callback(pending), budget());
+  const ok = await short.complete(f.callback(pending), budget());
   assert.equal(ok.credential.token, 'access-1');
-  const expiring = await managedOAuth({ ...f.options, loginLifetimeMs: 30 }).prepare({ ...f.context, purpose: 'upload' }, budget());
+  const brief = managedOAuth({ ...f.options, loginLifetimeMs: 30 });
+  const expiring = await brief.prepare({ ...f.context, purpose: 'upload' }, budget());
   await new Promise(resolve => setTimeout(resolve, 50));
-  await assert.rejects(short.complete(expiring, f.callback(expiring), budget()), { code: 'interaction_required' });
+  await assert.rejects(brief.complete(f.callback(expiring), budget()), { code: 'interaction_required' });
 });
 
 test('[cached-token-metadata-outage] host prepare serves a usable cached token without metadata calls', async () => {
@@ -107,70 +133,104 @@ test('[cached-token-metadata-outage] host prepare serves a usable cached token w
   assert.equal(f.state.metadataCalls, metadata);
 });
 
-test('[pending-login-reuse] a later prepare with covered scopes reuses the login regardless of its deadline', async () => {
+test('[pending-logins-concurrent-per-state] concurrent prepares create separate logins, each completed only by its own callback', async () => {
   const f = fixture({ allowedScopes: ['deliver', 'audit'] });
-  const pending = await f.oauth.prepare(f.context, budget(undefined, 60_000));
-  const again = await Promise.all(Array.from({ length: 4 }, () => f.oauth.prepare(f.context, budget(undefined, 100))));
-  for (const value of again) assert.deepEqual(value, pending);
-  // Completion consumes the login exactly once.
-  const results = await Promise.allSettled([0, 1].map(() => f.oauth.complete(pending, f.callback(pending), budget())));
+  const first = await f.oauth.prepare(f.context, budget(), { redirectUri: 'http://127.0.0.1:50001/callback' });
+  const second = await f.oauth.prepare(f.context, budget(), { redirectUri: 'http://127.0.0.1:50002/callback' });
+  assert.notEqual(first.state, second.state);
+  assert.equal(new URL(second.authorizationUrl).searchParams.get('redirect_uri'), 'http://127.0.0.1:50002/callback');
+  // One login's state at another login's redirect is invalid and consumes neither.
+  const crossed = new URL(f.callback(first)); crossed.port = '50002';
+  await assert.rejects(f.oauth.complete(crossed.href, budget()), { code: 'access_denied' });
+  // Completion consumes a login exactly once.
+  const results = await Promise.allSettled([0, 1].map(() => f.oauth.complete(f.callback(second), budget())));
   assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
   assert.equal(results.find(result => result.status === 'rejected').reason.code, 'interaction_required');
-  assert.equal(f.state.tokenCalls.length, 1);
+  assert.equal((await f.oauth.complete(f.callback(first), budget())).credential.token, 'access-2', 'the other login is still valid');
+  assert.deepEqual(f.state.tokenCalls.map(body => body.get('redirect_uri')),
+    ['http://127.0.0.1:50002/callback', 'http://127.0.0.1:50001/callback']);
 });
 
-test('[pending-login-supersede] a different redirect supersedes; the old callback fails interaction_required', async () => {
+test('[pending-logins-capped-per-grant-key] beyond the cap the oldest login is cancelled, atomically in a persisted store', async () => {
+  // Per process, default cap 5: the sixth login cancels the first only.
+  const f = fixture();
+  const logins = [];
+  for (let n = 0; n < 6; n++) logins.push(await f.oauth.prepare(f.context, budget()));
+  await assert.rejects(f.oauth.complete(f.callback(logins[0]), budget()), { code: 'interaction_required' });
+  // Another grant key has its own count.
+  const upload = await f.oauth.prepare({ ...f.context, purpose: 'upload' }, budget());
+  assert.equal((await f.oauth.complete(f.callback(logins[1]), budget())).credential.token, 'access-1');
+  assert.equal((await f.oauth.complete(f.callback(upload), budget())).credential.token, 'access-2');
+  assert.throws(() => managedOAuth({ ...f.options, maxPendingLogins: 0 }), { code: 'invalid_configuration' });
+
+  // Per store: concurrent prepares from several processes keep exactly the cap.
+  const g = fixture();
+  const options = { ...g.options, persistPendingLogins: true, maxPendingLogins: 2 };
+  const created = await Promise.all(Array.from({ length: 5 }, () => managedOAuth(options).prepare(g.context, budget())));
+  assert.equal(g.store.pending().length, 2);
+  assert.deepEqual(g.store.indexes()[0].states, created.slice(3).map(pending => pending.state));
+  await assert.rejects(managedOAuth(options).complete(g.callback(created[2]), budget()), { code: 'interaction_required' });
+  assert.equal((await managedOAuth(options).complete(g.callback(created[4]), budget())).credential.token, 'access-1');
+
+  // Expired logins are deleted.
+  const h = fixture();
+  const brief = { ...h.options, persistPendingLogins: true, loginLifetimeMs: 20 };
+  await managedOAuth(brief).prepare(h.context, budget());
+  await new Promise(resolve => setTimeout(resolve, 40));
+  const fresh = await managedOAuth(brief).prepare(h.context, budget());
+  assert.deepEqual(h.store.pending().map(record => record.state), [fresh.state]);
+  await new Promise(resolve => setTimeout(resolve, 40));
+  await assert.rejects(managedOAuth(brief).complete(h.callback(fresh), budget()), { code: 'interaction_required' });
+  assert.equal(h.store.pending().length, 0);
+  // An abandoned expired login's verifier is swept by the next host prepare for its grant key, even one that creates no login.
+  const k = fixture();
+  const sweeping = { ...k.options, persistPendingLogins: true, loginLifetimeMs: 20 };
+  await k.login(managedOAuth(sweeping));
+  const grantKey = [...k.store.values.keys()].find(key => key.startsWith('ahp.oauth.grant:'));
+  const grant = k.store.values.get(grantKey);
+  k.store.values.set(grantKey, { ...grant, token: undefined, refreshToken: undefined });
+  await managedOAuth(sweeping).prepare(k.context, budget());
+  assert.equal(k.store.pending().length, 1);
+  await new Promise(resolve => setTimeout(resolve, 40));
+  k.store.values.set(grantKey, { ...grant, token: 'access-9', expiresAt: Date.now() + 3_600_000 });
+  assert.equal((await managedOAuth(sweeping).prepare(k.context, budget())).type, 'ready');
+  assert.deepEqual([k.store.pending(), k.store.indexes()], [[], []]);
+});
+
+test('[pending-completion-newest-grant-wins] completing one login leaves the others valid; the newest completion replaces the grant', async () => {
   const f = fixture();
   const first = await f.oauth.prepare(f.context, budget());
-  const firstCallback = f.callback(first);
-  f.client.redirectUri = 'https://app.example/other-callback';
   const second = await f.oauth.prepare(f.context, budget());
-  assert.notEqual(second.id, first.id);
-  await assert.rejects(f.oauth.complete(first, firstCallback, budget()), { code: 'interaction_required' });
-  // A different redirect starts from the new caller's scopes and ceiling alone.
-  Object.assign(f.client, { scopes: ['audit'], allowedScopes: ['audit'], redirectUri: 'https://app.example/third-callback' });
   const third = await f.oauth.prepare(f.context, budget());
-  assert.deepEqual(f.scopeOf(third), ['audit']);
-  assert.deepEqual(f.store.pending()[0].client.allowedScopes, ['audit']);
-  f.state.scope = 'audit';
-  assert.equal((await f.oauth.complete(third, f.callback(third), budget())).credential.token, 'access-1');
+  await f.oauth.complete(f.callback(second), budget());
+  assert.equal(f.store.grants()[0].token, 'access-1');
+  await f.oauth.complete(f.callback(first), budget());
+  await f.oauth.complete(f.callback(third), budget());
+  assert.equal(f.store.grants().length, 1);
+  assert.equal(f.store.grants()[0].token, 'access-3');
+  assert.equal(f.store.grants()[0].refreshToken, 'refresh-3');
 });
 
-test('[pending-login-supersede-scope-union] supersede grows requested scopes and the stored ceiling so callers converge', async () => {
-  const f = fixture({ scopes: ['deliver'], allowedScopes: ['deliver', 'audit', 'write'] });
-  const first = await f.oauth.prepare(f.context, budget());
-  assert.deepEqual(f.scopeOf(first), ['deliver']);
-  const second = await f.oauth.prepare(f.context, budget(), { requiredScopes: ['audit'] });
-  assert.notEqual(second.id, first.id);
-  assert.deepEqual(f.scopeOf(second), ['audit', 'deliver']);
-  // The original caller is now covered and reuses the superseding login.
-  assert.deepEqual(await f.oauth.prepare(f.context, budget()), second);
-  // A caller with a different ceiling adds its filtered scopes; old scopes and ceiling are kept.
-  f.client.allowedScopes = ['deliver', 'write'];
-  const third = await f.oauth.prepare(f.context, budget(), { requiredScopes: ['write'] });
-  assert.deepEqual(f.scopeOf(third), ['audit', 'deliver', 'write']);
-  assert.deepEqual([...f.store.pending()[0].client.allowedScopes].sort(), ['audit', 'deliver', 'write']);
-  f.client.allowedScopes = ['deliver', 'audit', 'write'];
-  assert.deepEqual(await f.oauth.prepare(f.context, budget(), { requiredScopes: ['audit'] }), third, 'alternating callers converge');
-  f.state.scope = 'audit deliver write';
-  await f.oauth.complete(third, f.callback(third), budget());
-  assert.deepEqual([...f.store.grants()[0].scopes].sort(), ['audit', 'deliver', 'write']);
-});
-
-test('[pending-login-end-states] completion, supersede, cancel and expiry each end a login; cancel keeps the grant', async () => {
+test('[pending-login-end-states] completion, cancel (including by the cap) and expiry each end a login; cancel keeps the grant', async () => {
   const f = fixture();
   const completed = await f.oauth.prepare(f.context, budget());
-  await f.oauth.complete(completed, f.callback(completed), budget());
-  await assert.rejects(f.oauth.complete(completed, f.callback(completed), budget()), { code: 'interaction_required' });
+  await f.oauth.complete(f.callback(completed), budget());
+  await assert.rejects(f.oauth.complete(f.callback(completed), budget()), { code: 'interaction_required' });
   const upload = { ...f.context, purpose: 'upload' };
   const cancelled = await f.oauth.prepare(upload, budget());
   await f.oauth.cancel(cancelled, budget());
-  await assert.rejects(f.oauth.complete(cancelled, f.callback(cancelled), budget()), { code: 'interaction_required' });
+  await assert.rejects(f.oauth.complete(f.callback(cancelled), budget()), { code: 'interaction_required' });
   assert.equal(f.store.grants().length, 1, 'cancel never deletes a stored grant');
   assert.equal((await f.oauth.prepare(f.context, budget())).type, 'ready');
-  const expired = await managedOAuth({ ...f.options, loginLifetimeMs: 1 }).prepare(upload, budget());
+  const brief = managedOAuth({ ...f.options, loginLifetimeMs: 1 });
+  const expired = await brief.prepare(upload, budget());
   await new Promise(resolve => setTimeout(resolve, 10));
-  await assert.rejects(f.oauth.complete(expired, f.callback(expired), budget()), { code: 'interaction_required' });
+  await assert.rejects(brief.complete(f.callback(expired), budget()), { code: 'interaction_required' });
+  const capped = managedOAuth({ ...f.options, maxPendingLogins: 1 });
+  const evicted = await capped.prepare(upload, budget());
+  await capped.prepare(upload, budget());
+  await assert.rejects(capped.complete(f.callback(evicted), budget()), { code: 'interaction_required' });
+  assert.equal(f.store.grants().length, 1);
 });
 
 test('[step-up-required-scopes-round-trip] interaction_required carries required scopes that prepare accepts', async () => {
@@ -183,7 +243,7 @@ test('[step-up-required-scopes-round-trip] interaction_required carries required
   const pending = await f.oauth.prepare(f.context, budget(), { requiredScopes: error.requiredScopes });
   assert.deepEqual(f.scopeOf(pending), ['audit', 'deliver']);
   f.state.scope = 'deliver audit';
-  assert.equal((await f.oauth.complete(pending, f.callback(pending), budget())).credential.token, 'access-2');
+  assert.equal((await f.oauth.complete(f.callback(pending), budget())).credential.token, 'access-2');
   assert.deepEqual([...f.store.grants()[0].scopes].sort(), ['audit', 'deliver']);
 });
 
@@ -260,7 +320,6 @@ test('[up-front-refresh-failure-no-anonymous-fallback] a known binding whose ref
 
 test('[token-validation-failure-clears-in-flight] invalid responses leave no stuck state and a retry recovers', async () => {
   const f = fixture();
-  const pending = await f.oauth.prepare(f.context, budget());
   const fetch = f.options.policyFetch;
   let invalid = true;
   const options = { ...f.options, async policyFetch(url, init, context) {
@@ -270,7 +329,8 @@ test('[token-validation-failure-clears-in-flight] invalid responses leave no stu
     return Response.json({ ...body, expires_in: 0 });
   } };
   const oauth = managedOAuth(options);
-  await assert.rejects(oauth.complete(pending, f.callback(pending), budget()), { code: 'provider_failed', recovery: 'retry' });
+  const pending = await oauth.prepare(f.context, budget());
+  await assert.rejects(oauth.complete(f.callback(pending), budget()), { code: 'provider_failed', recovery: 'retry' });
   assert.equal(f.store.grants().length, 0, 'an invalid initial exchange persists nothing');
   assert.equal(f.store.pending().length, 0, 'the claimed login is not left in flight');
   invalid = false; await f.login(oauth); invalid = true;
@@ -409,7 +469,7 @@ test('[step-up-keeps-previous-grant] step-up consent requests and records the pr
   const pending = await f.oauth.prepare(f.context, budget(), { requiredScopes: ['write'] });
   assert.deepEqual(f.scopeOf(pending), ['files', 'read', 'write']);
   f.state.scope = 'files read write openid';
-  await f.oauth.complete(pending, f.callback(pending), budget());
+  await f.oauth.complete(f.callback(pending), budget());
   assert.deepEqual([...f.store.grants()[0].scopes].sort(), ['files', 'read', 'write'], 'earlier scopes are not lost');
 });
 

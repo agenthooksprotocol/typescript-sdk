@@ -59,6 +59,11 @@ function client(target: ResolvedTarget): oauth.Client {
 
 function authentication(target: ResolvedTarget): oauth.ClientAuth {
   const supported = target.metadata.token_endpoint_auth_methods_supported ?? ["client_secret_basic"];
+  // A registered client authenticates with the method it was registered for.
+  if (target.authMethod !== undefined && target.client.clientSecret) {
+    return target.authMethod === "client_secret_post" ? oauth.ClientSecretPost(target.client.clientSecret)
+      : oauth.ClientSecretBasic(target.client.clientSecret);
+  }
   if (target.client.clientSecret) {
     if (supported.includes("client_secret_basic")) return oauth.ClientSecretBasic(target.client.clientSecret);
     if (supported.includes("client_secret_post")) return oauth.ClientSecretPost(target.client.clientSecret);
@@ -162,17 +167,18 @@ function literalLoopback(authority: string, hostname: string): boolean {
     octets.every(octet => /^(?:0|[1-9][0-9]{0,2})$/.test(octet) && Number(octet) <= 255);
 }
 
-export function pkce(target: ResolvedTarget): void {
-  if (target.client.flow !== "authorization_code_pkce" ||
-      !target.metadata.code_challenge_methods_supported?.includes("S256") ||
-      (target.metadata.grant_types_supported !== undefined &&
-       !target.metadata.grant_types_supported.includes("authorization_code")) ||
-      (target.metadata.response_types_supported !== undefined &&
-       !target.metadata.response_types_supported.includes("code"))) {
-    throw new AuthError("unsupported_binding");
-  }
-  const redirectUri = target.client.redirectUri;
-  if (!redirectUri || !/^https?:\/\//i.test(redirectUri) ||
+/** An `http` redirect to a literal loopback IP without userinfo, whose port may vary per login. */
+export function loopbackRedirect(uri: string): URL | undefined {
+  let url: URL;
+  try { url = new URL(uri); } catch { return undefined; }
+  const authority = /^[a-z]+:\/\/([^/?#]*)/i.exec(uri)?.[1] ?? "";
+  return url.protocol === "http:" && !url.username && !url.password && !authority.includes("@") &&
+    literalLoopback(authority, url.hostname) ? url : undefined;
+}
+
+/** HTTPS, or HTTP only to a literal loopback IP (RFC 8252): `localhost` is invalid_configuration. */
+export function checkRedirect(redirectUri: string | undefined): void {
+  if (!redirectUri || typeof redirectUri !== "string" || !/^https?:\/\//i.test(redirectUri) ||
       /[\s\x00-\x1f\x7f-\x9f]/u.test(redirectUri) || redirectUri.includes("#")) {
     throw new AuthError("invalid_configuration");
   }
@@ -185,6 +191,18 @@ export function pkce(target: ResolvedTarget): void {
       ["code", "state", "error", "iss"].some(key => redirect.searchParams.has(key))) {
     throw new AuthError("invalid_configuration");
   }
+}
+
+export function pkce(target: ResolvedTarget): void {
+  if (target.client.flow !== "authorization_code_pkce" ||
+      !target.metadata.code_challenge_methods_supported?.includes("S256") ||
+      (target.metadata.grant_types_supported !== undefined &&
+       !target.metadata.grant_types_supported.includes("authorization_code")) ||
+      (target.metadata.response_types_supported !== undefined &&
+       !target.metadata.response_types_supported.includes("code"))) {
+    throw new AuthError("unsupported_binding");
+  }
+  checkRedirect(target.client.redirectUri);
 }
 
 export function startLogin(target: ResolvedTarget, options: ManagedOAuthOptions, operation: Operation): Promise<LoginState> {
