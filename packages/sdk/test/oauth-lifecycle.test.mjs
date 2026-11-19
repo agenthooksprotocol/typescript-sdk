@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { managedOAuth } from '../dist/src/oauth/index.js';
+import { AuthError } from '../dist/src/client/auth.js';
 
 const budget = (signal = new AbortController().signal, ms = 5000) => ({ signal, deadline: Date.now() + ms });
 
@@ -249,9 +250,73 @@ test('[step-up-required-scopes-round-trip] interaction_required carries required
 
 test('[prepare-required-outside-ceiling-denied] explicit required scopes outside the ceiling fail access_denied', async () => {
   const f = fixture({ allowedScopes: ['deliver'] });
-  await assert.rejects(f.oauth.prepare(f.context, budget(), { requiredScopes: ['admin'] }), { code: 'access_denied' });
+  await assert.rejects(f.oauth.prepare(f.context, budget(), { requiredScopes: ['admin'] }), { code: 'access_denied', requiredScopes: ['admin'] });
   assert.equal(f.store.pending().length, 0);
   assert.equal(f.state.tokenCalls.length, 0);
+});
+
+const denial = promise => promise.then(() => assert.fail('expected access_denied'), error => error);
+
+test('[challenge-scope-outside-ceiling-names-scopes] a challenge beyond the ceiling fails access_denied naming the required scopes', async () => {
+  const f = fixture({ allowedScopes: ['deliver', 'audit'] });
+  const first = await f.login();
+  const challenge = scope => ({ ...f.context, credential: first.credential,
+    response: new Response(null, { status: 403, headers: { 'www-authenticate': `Bearer error="insufficient_scope", scope="${scope}"` } }) });
+  // Fresh discovery and a cached binding both refuse, naming the full required set.
+  // (Another instance does not own the credential, so it handles the challenge without one.)
+  for (const [instance, input] of [[f.oauth, challenge('admin')], [managedOAuth(f.options), { ...challenge('admin'), credential: undefined }]]) {
+    const error = await denial(instance.challenge(input, budget()));
+    assert.equal(error.code, 'access_denied');
+    assert.deepEqual(error.requiredScopes, ['admin']);
+  }
+  // A replay carrying the same challenge is refused the same way.
+  const replay = await denial(f.oauth.prepare({ ...f.context, challenge: 'Bearer error="insufficient_scope", scope="audit admin"' }, budget()));
+  assert.equal(replay.code, 'access_denied');
+  assert.deepEqual([...replay.requiredScopes].sort(), ['admin', 'audit']);
+  // Within the ceiling it is still a step-up carrying the challenged scopes.
+  const stepUp = await denial(f.oauth.challenge(challenge('audit'), budget()));
+  assert.equal(stepUp.code, 'interaction_required');
+  assert.deepEqual(stepUp.requiredScopes, ['audit']);
+  // A malformed challenge scope is not a nameable requirement.
+  const malformed = await denial(f.oauth.challenge({ ...challenge('audit'), response: new Response(null, { status: 403,
+    headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="audit  admin"' } }) }, budget()));
+  assert.equal(malformed.code, 'access_denied');
+  assert.equal(malformed.requiredScopes, undefined);
+  assert.equal(f.store.pending().length, 0);
+});
+
+test('[host-required-scope-outside-ceiling-names-scopes] a host-required scope beyond the ceiling fails access_denied naming the required set', async () => {
+  const f = fixture({ allowedScopes: ['deliver', 'audit'] });
+  const first = await f.login();
+  f.client.requiredScopes = ['admin'];
+  for (const run of [() => f.oauth.prepare(f.context, budget()), () => managedOAuth(f.options).prepare(f.context, budget())]) {
+    const error = await denial(run());
+    assert.equal(error.code, 'access_denied');
+    assert.deepEqual(error.requiredScopes, ['admin']);
+  }
+  // With a challenge, the host and challenged requirements are named together.
+  const error = await denial(f.oauth.challenge({ ...f.context, credential: first.credential,
+    response: new Response(null, { status: 403, headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="audit"' } }) }, budget()));
+  assert.equal(error.code, 'access_denied');
+  assert.deepEqual([...error.requiredScopes].sort(), ['admin', 'audit']);
+  assert.equal(f.store.pending().length, 0);
+});
+
+test('[untrusted-issuer-denial-names-no-scopes] other access_denied refusals carry no required scopes', async () => {
+  const f = fixture({ allowedScopes: ['deliver', 'audit'] });
+  const first = await f.login();
+  const untrusted = managedOAuth({ ...f.options, selectClient: () => { throw new AuthError('access_denied'); } });
+  const error = await denial(untrusted.challenge({ ...f.context,
+    response: new Response(null, { status: 403, headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="audit"' } }) }, budget()));
+  assert.equal(error.code, 'access_denied');
+  assert.equal(error.requiredScopes, undefined);
+  const prepared = await denial(untrusted.prepare(f.context, budget(), { requiredScopes: ['audit'] }));
+  assert.equal(prepared.code, 'access_denied');
+  assert.equal(prepared.requiredScopes, undefined);
+  // A plain 403 without insufficient_scope is a bare refusal too.
+  const forbidden = await denial(f.oauth.challenge({ ...f.context, credential: first.credential, response: new Response(null, { status: 403 }) }, budget()));
+  assert.equal(forbidden.code, 'access_denied');
+  assert.equal(forbidden.requiredScopes, undefined);
 });
 
 test('[scope-ceiling-narrowing-keeps-grant] narrowing hides scopes at use only; refresh and widening keep them', async () => {

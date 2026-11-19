@@ -222,14 +222,15 @@ async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptio
   const validScope = (scope: unknown): scope is string => typeof scope === "string" && /^[\x21\x23-\x5B\x5D-\x7E]+$/.test(scope);
   if (!Array.isArray(allowedScopes) || !allowedScopes.every(validScope) ||
       !Array.isArray(scopePolicy.requiredScopes ?? []) || !requiredScopes.every(validScope) ||
-      [...selected.scopes, ...requiredScopes].some(scope => !allowedScopes.includes(scope))) throw new AuthError("invalid_configuration");
+      selected.scopes.some(scope => !allowedScopes.includes(scope))) throw new AuthError("invalid_configuration");
   const hostRequiredScopes = Object.freeze([...new Set(requiredScopes)]);
   const required = challenge.get("scope");
   if (required !== undefined) {
-    if (!/^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/.test(required) ||
-        required.split(" ").some(scope => !allowedScopes.includes(scope))) throw new AuthError("access_denied");
+    if (!/^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/.test(required)) throw new AuthError("access_denied");
+    requiredScopes.push(...required.split(" "));
   }
-  if (required !== undefined) requiredScopes.push(...required.split(" "));
+  // A requirement (host or challenged) outside the ceiling is refused, naming the full required set.
+  if (requiredScopes.some(scope => !allowedScopes.includes(scope))) throw new AuthError("access_denied", [...new Set(requiredScopes)]);
   const client: ClientConfig = Object.freeze({ ...selected,
     scopes: Object.freeze([...new Set(selected.scopes)]),
     allowedScopes: Object.freeze([...new Set(allowedScopes)]),
