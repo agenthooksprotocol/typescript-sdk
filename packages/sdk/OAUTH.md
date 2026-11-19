@@ -141,9 +141,11 @@ For step-up, an `interaction_required` from a 403 `insufficient_scope` carries
 `requiredScopes`; pass them back with `oauth.prepare(context, budget, { requiredScopes })`.
 Required scopes outside the caller's ceiling fail `access_denied` with
 `requiredScopes` naming the full required set (host-required, explicit and
-challenged), whether they come from a challenge, the host's `ClientConfig`, a
-cached binding or `prepare`. Other `access_denied` causes (untrusted issuer,
-resource mismatch, consent refused, malformed challenge) carry no scopes.
+challenged; sorted, deduplicated), on fresh discovery, a cached binding,
+challenge handling and `prepare` alike. A client-credentials or refreshed grant
+that comes back without the required scopes also fails `access_denied` naming
+them. Other `access_denied` causes (untrusted issuer, consent refused, malformed
+challenge, a 403 that is not `insufficient_scope`) carry no scopes.
 
 For unattended use, return a `ClientConfig` with `flow: "client_credentials"`,
 a locally resolved `clientSecret`, and permitted `scopes`. `prepare` returns

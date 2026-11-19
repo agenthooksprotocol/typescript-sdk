@@ -382,15 +382,15 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
   }
   /** Discover over the network outside store locks, then select the client. */
   async function discoverBinding(context: DeliveryAuthContext, cached: StoredBinding | undefined, operation: Operation,
-    staleFallback = true, redirect?: string): Promise<Selected> {
+    staleFallback = true, redirect?: string, explicit: readonly string[] = []): Promise<Selected> {
     let target: ResolvedTarget;
     try {
-      target = await resolveTarget(context, options, operation);
+      target = await resolveTarget(context, options, operation, undefined, explicit);
     } catch (error) {
       operation.signal.throwIfAborted();
       // A metadata outage must not block refresh/acquisition with a known binding.
       if (!staleFallback || !cached || !(error instanceof AuthError) || error.code !== "discovery_failed") throw error;
-      const stale = await resolveTarget(context, options, operation, cached);
+      const stale = await resolveTarget(context, options, operation, cached, explicit);
       return withClient(stale, recordedFor(cached, stale), operation, redirect);
     }
     const selected = await withClient(target, recordedFor(cached, target), operation, redirect);
@@ -405,6 +405,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     redirect?: string, forceRegistration = false): Promise<PrepareResult | typeof LOOKUP_MISS> {
     if (context.authentication !== undefined && context.authentication.type !== "oauth") throw new AuthError("unsupported_binding");
     const binding = identity(context);
+    const explicitScopes = scopes(explicit);
     const cached = await read(bindingKey(namespace, context), "binding", operation);
     if (!cached && mode === "lookup") return LOOKUP_MISS;
     const challenged = context.challenged === true || context.challenge !== undefined;
@@ -415,7 +416,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     if (cached) {
       let resolved: ResolvedTarget | undefined;
       try {
-        resolved = await resolveTarget(context, options, operation, cached);
+        resolved = await resolveTarget(context, options, operation, cached, explicitScopes);
       } catch (error) {
         operation.signal.throwIfAborted();
         // Only a host selectClient rejection is a policy refusal; other errors propagate.
@@ -423,14 +424,14 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         if (!repairable || !(error instanceof AuthError)) throw error;
       }
       target = resolved ? await withClient(resolved, recordedFor(cached, resolved), operation, redirect)
-        : await discoverBinding(context, cached, operation, false, redirect);
+        : await discoverBinding(context, cached, operation, false, redirect, explicitScopes);
     } else {
-      target = await discoverBinding(context, undefined, operation, true, redirect);
+      target = await discoverBinding(context, undefined, operation, true, redirect, explicitScopes);
     }
     const withExplicit = <T extends ResolvedTarget>(resolved: T): T => {
-      const required = [...new Set([...(resolved.client.requiredScopes ?? []), ...scopes(explicit)])];
-      if (!within(required, ceilingOf(resolved.client))) throw new AuthError("access_denied", required);
-      return { ...resolved, client: { ...resolved.client, requiredScopes: required } };
+      const all = scopes([...(resolved.client.requiredScopes ?? []), ...explicitScopes]);
+      if (!within(all, ceilingOf(resolved.client))) throw new AuthError("access_denied", all);
+      return { ...resolved, client: { ...resolved.client, requiredScopes: all } };
     };
     target = withExplicit(target);
     const key = grantKey(namespace, context, target.client, target.identity);
@@ -451,7 +452,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     if (usable(observed, target, target.client.requiredScopes ?? [])) return ready(observed, key, binding, target, []);
     // Full discovery only on a cache miss, host prepare or challenge handling; a
     // known binding otherwise renews from persisted metadata (or fails, never anonymous).
-    if (cached && repairable) target = withExplicit(await discoverBinding(context, cached, operation, true, redirect));
+    if (cached && repairable) target = withExplicit(await discoverBinding(context, cached, operation, true, redirect, explicitScopes));
     target = force && target.registration
       ? withRegistration(target, await registration(target, target.registration.key, mode, operation, true))
       : await usableClient(target, mode, operation);

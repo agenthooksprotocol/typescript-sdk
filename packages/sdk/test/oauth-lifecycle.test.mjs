@@ -272,11 +272,16 @@ test('[challenge-scope-outside-ceiling-names-scopes] a challenge beyond the ceil
   // A replay carrying the same challenge is refused the same way.
   const replay = await denial(f.oauth.prepare({ ...f.context, challenge: 'Bearer error="insufficient_scope", scope="audit admin"' }, budget()));
   assert.equal(replay.code, 'access_denied');
-  assert.deepEqual([...replay.requiredScopes].sort(), ['admin', 'audit']);
+  assert.deepEqual(replay.requiredScopes, ['admin', 'audit']);
   // Within the ceiling it is still a step-up carrying the challenged scopes.
   const stepUp = await denial(f.oauth.challenge(challenge('audit'), budget()));
   assert.equal(stepUp.code, 'interaction_required');
   assert.deepEqual(stepUp.requiredScopes, ['audit']);
+  // Explicit prepare requirements join the challenged ones, sorted and deduplicated.
+  const explicit = await denial(f.oauth.prepare({ ...f.context, challenge: 'Bearer error="insufficient_scope", scope="admin audit"' }, budget(),
+    { requiredScopes: ['deliver', 'audit'] }));
+  assert.equal(explicit.code, 'access_denied');
+  assert.deepEqual(explicit.requiredScopes, ['admin', 'audit', 'deliver']);
   // A malformed challenge scope is not a nameable requirement.
   const malformed = await denial(f.oauth.challenge({ ...challenge('audit'), response: new Response(null, { status: 403,
     headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="audit  admin"' } }) }, budget()));
@@ -287,6 +292,12 @@ test('[challenge-scope-outside-ceiling-names-scopes] a challenge beyond the ceil
 
 test('[host-required-scope-outside-ceiling-names-scopes] a host-required scope beyond the ceiling fails access_denied naming the required set', async () => {
   const f = fixture({ allowedScopes: ['deliver', 'audit'] });
+  // Fresh discovery (no binding yet) names host and explicit requirements, sorted.
+  f.client.requiredScopes = ['write'];
+  const fresh = await denial(f.oauth.prepare(f.context, budget(), { requiredScopes: ['audit'] }));
+  assert.equal(fresh.code, 'access_denied');
+  assert.deepEqual(fresh.requiredScopes, ['audit', 'write']);
+  f.client.requiredScopes = undefined;
   const first = await f.login();
   f.client.requiredScopes = ['admin'];
   for (const run of [() => f.oauth.prepare(f.context, budget()), () => managedOAuth(f.options).prepare(f.context, budget())]) {
@@ -294,11 +305,19 @@ test('[host-required-scope-outside-ceiling-names-scopes] a host-required scope b
     assert.equal(error.code, 'access_denied');
     assert.deepEqual(error.requiredScopes, ['admin']);
   }
+  // Explicit prepare requirements are named with the host ones, sorted, on fresh and cached paths.
+  f.client.requiredScopes = ['write'];
+  for (const instance of [f.oauth, managedOAuth(f.options)]) {
+    const explicit = await denial(instance.prepare(f.context, budget(), { requiredScopes: ['audit'] }));
+    assert.equal(explicit.code, 'access_denied');
+    assert.deepEqual(explicit.requiredScopes, ['audit', 'write']);
+  }
+  f.client.requiredScopes = ['admin'];
   // With a challenge, the host and challenged requirements are named together.
   const error = await denial(f.oauth.challenge({ ...f.context, credential: first.credential,
     response: new Response(null, { status: 403, headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="audit"' } }) }, budget()));
   assert.equal(error.code, 'access_denied');
-  assert.deepEqual([...error.requiredScopes].sort(), ['admin', 'audit']);
+  assert.deepEqual(error.requiredScopes, ['admin', 'audit']);
   assert.equal(f.store.pending().length, 0);
 });
 
