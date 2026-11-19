@@ -421,7 +421,8 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         operation.signal.throwIfAborted();
         // Only a host selectClient rejection is a policy refusal; other errors propagate.
         if (mode === "lookup" && isPolicyRefusal(error)) return LOOKUP_MISS;
-        if (!repairable || !(error instanceof AuthError)) throw error;
+        // A ceiling refusal names its scopes and is local policy: rediscovery cannot repair it.
+        if (!repairable || !(error instanceof AuthError) || error.requiredScopes !== undefined) throw error;
       }
       target = resolved ? await withClient(resolved, recordedFor(cached, resolved), operation, redirect)
         : await discoverBinding(context, cached, operation, false, redirect, explicitScopes);

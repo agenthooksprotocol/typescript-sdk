@@ -321,6 +321,26 @@ test('[host-required-scope-outside-ceiling-names-scopes] a host-required scope b
   assert.equal(f.store.pending().length, 0);
 });
 
+test('[cached-ceiling-refusal-no-rediscovery] a ceiling refusal on a cached binding is local, even with metadata down', async () => {
+  const f = fixture({ allowedScopes: ['deliver', 'audit'] });
+  await f.login();
+  f.state.metadataDown = true;
+  const calls = f.state.metadataCalls;
+  for (const instance of [f.oauth, managedOAuth(f.options)]) {
+    const explicit = await denial(instance.prepare(f.context, budget(), { requiredScopes: ['admin'] }));
+    assert.equal(explicit.code, 'access_denied');
+    assert.deepEqual(explicit.requiredScopes, ['admin']);
+  }
+  f.client.requiredScopes = ['write'];
+  for (const instance of [f.oauth, managedOAuth(f.options)]) {
+    const host = await denial(instance.prepare(f.context, budget(), { requiredScopes: ['audit'] }));
+    assert.equal(host.code, 'access_denied');
+    assert.deepEqual(host.requiredScopes, ['audit', 'write']);
+  }
+  assert.equal(f.state.metadataCalls, calls, 'no metadata fetch');
+  assert.equal(f.store.pending().length, 0);
+});
+
 test('[untrusted-issuer-denial-names-no-scopes] other access_denied refusals carry no required scopes', async () => {
   const f = fixture({ allowedScopes: ['deliver', 'audit'] });
   const first = await f.login();
