@@ -139,7 +139,13 @@ secret rotation does not require new consent. Records never contain client secre
 
 For step-up, an `interaction_required` from a 403 `insufficient_scope` carries
 `requiredScopes`; pass them back with `oauth.prepare(context, budget, { requiredScopes })`.
-Required scopes outside the caller's ceiling fail `access_denied`.
+Required scopes outside the caller's ceiling fail `access_denied` with
+`requiredScopes` naming the full required set (host-required, explicit and
+challenged; sorted, deduplicated), on fresh discovery, a cached binding,
+challenge handling and `prepare` alike. A client-credentials or refreshed grant
+that comes back without the required scopes also fails `access_denied` naming
+them. Other `access_denied` causes (untrusted issuer, consent refused, malformed
+challenge, a 403 that is not `insufficient_scope`) carry no scopes.
 
 For unattended use, return a `ClientConfig` with `flow: "client_credentials"`,
 a locally resolved `clientSecret`, and permitted `scopes`. `prepare` returns
@@ -248,6 +254,6 @@ deadline) is preserved. There is no anonymous/alternate-provider fallback after
 configured authentication fails.
 
 A Bearer `403 insufficient_scope` challenge permits step-up only within the
-locally allowed ceiling, and only for the challenged operation: requirements are
-never persisted. Without a challenge scope, supply explicit host-required scopes
+locally allowed ceiling (beyond it, `access_denied` names the required scopes),
+and only for the challenged operation: requirements are never persisted. Without a challenge scope, supply explicit host-required scopes
 or the challenge is denied. Hooks alone decides replay (see the README).

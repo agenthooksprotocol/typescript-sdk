@@ -154,17 +154,22 @@ function validateClient(client: ClientConfig): void {
   }
 }
 
-/** With `cached`, performs no network I/O: only local client policy runs. */
-export async function resolveTarget(context: DeliveryAuthContext, options: ManagedOAuthOptions, operation: Operation, cached?: CachedBinding): Promise<ResolvedTarget> {
+/**
+ * With `cached`, performs no network I/O: only local client policy runs.
+ * `explicit` (validated host `prepare` requirements) only joins the ceiling check.
+ */
+export async function resolveTarget(context: DeliveryAuthContext, options: ManagedOAuthOptions, operation: Operation, cached?: CachedBinding,
+  explicit: readonly string[] = []): Promise<ResolvedTarget> {
   try {
-    return await discover(context, options, operation, cached);
+    return await discover(context, options, operation, cached, explicit);
   } catch (error) {
     active(operation);
     throw classifyAuthError(error, "discovery_failed");
   }
 }
 
-async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptions, operation: Operation, cached?: CachedBinding): Promise<ResolvedTarget> {
+async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptions, operation: Operation, cached: CachedBinding | undefined,
+  explicit: readonly string[]): Promise<ResolvedTarget> {
   active(operation);
   const binding = context.authentication;
   if (binding !== undefined && binding.type !== "oauth") throw new AuthError("unsupported_binding");
@@ -222,14 +227,16 @@ async function discover(context: DeliveryAuthContext, options: ManagedOAuthOptio
   const validScope = (scope: unknown): scope is string => typeof scope === "string" && /^[\x21\x23-\x5B\x5D-\x7E]+$/.test(scope);
   if (!Array.isArray(allowedScopes) || !allowedScopes.every(validScope) ||
       !Array.isArray(scopePolicy.requiredScopes ?? []) || !requiredScopes.every(validScope) ||
-      [...selected.scopes, ...requiredScopes].some(scope => !allowedScopes.includes(scope))) throw new AuthError("invalid_configuration");
+      selected.scopes.some(scope => !allowedScopes.includes(scope))) throw new AuthError("invalid_configuration");
   const hostRequiredScopes = Object.freeze([...new Set(requiredScopes)]);
   const required = challenge.get("scope");
   if (required !== undefined) {
-    if (!/^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/.test(required) ||
-        required.split(" ").some(scope => !allowedScopes.includes(scope))) throw new AuthError("access_denied");
+    if (!/^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/.test(required)) throw new AuthError("access_denied");
+    requiredScopes.push(...required.split(" "));
   }
-  if (required !== undefined) requiredScopes.push(...required.split(" "));
+  // A requirement (host, explicit or challenged) outside the ceiling is refused, naming the full required set.
+  const operationScopes = [...requiredScopes, ...explicit];
+  if (operationScopes.some(scope => !allowedScopes.includes(scope))) throw new AuthError("access_denied", [...new Set(operationScopes)].sort());
   const client: ClientConfig = Object.freeze({ ...selected,
     scopes: Object.freeze([...new Set(selected.scopes)]),
     allowedScopes: Object.freeze([...new Set(allowedScopes)]),
