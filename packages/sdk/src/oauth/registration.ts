@@ -35,18 +35,27 @@ function declared(redirect: string, entries: readonly string[]): boolean {
   });
 }
 
-/** A selected CIMD URL is the client_id verbatim: https, a path, no userinfo, fragment or dot segments. */
-function cimd(client: ClientConfig): SourceChoice {
+/**
+ * A selected CIMD URL is the client_id verbatim: https, a path, no userinfo, fragment or
+ * dot segments. The login redirect is checked against the document only when a login is created.
+ */
+function cimd(client: ClientConfig, login: boolean): SourceChoice {
   const { url, redirectUris } = client.clientMetadataDocument!;
   let parsed: URL;
   try { parsed = new URL(url); } catch { throw new AuthError("invalid_configuration"); }
   const path = /^https:\/\/[^/?#]*(\/[^?#]*)?/i.exec(url)?.[1] ?? "";
   if (parsed.protocol !== "https:" || parsed.username || parsed.password || url.includes("#") || /^https:\/\/[^/?#]*@/i.test(url) ||
-      path.length <= 1 || path.split("/").some(segment => /^(?:\.|%2e){1,2}$/i.test(segment)) ||
-      !client.redirectUri || !declared(client.redirectUri, redirectUris)) {
+      path.length <= 1 || path.split("/").some(segment => /^(?:\.|%2e){1,2}$/i.test(segment))) {
     throw new AuthError("invalid_configuration");
   }
+  if (login) cimdRedirect(client);
   return { source: "cimd", clientId: url, method: "none" };
+}
+/** Before a CIMD login: its redirect must match one of the document's `redirect_uris`. */
+export function cimdRedirect(client: ClientConfig): void {
+  if (!client.redirectUri || !declared(client.redirectUri, client.clientMetadataDocument?.redirectUris ?? [])) {
+    throw new AuthError("invalid_configuration");
+  }
 }
 
 /** Eligible DCR, checked in contract order without network access. */
@@ -72,13 +81,13 @@ export function dcr(client: ClientConfig, metadata: Record<string, unknown>, sec
  * redirect is checked first: `localhost` or other non-loopback `http` is invalid.
  */
 export function chooseSource(client: ClientConfig, metadata: Record<string, unknown>, secrets: boolean,
-  recorded?: ClientSelection): SourceChoice {
+  recorded?: ClientSelection, login = true): SourceChoice {
   const pkce = client.flow === "authorization_code_pkce";
   if (pkce && client.redirectUri !== undefined) checkRedirect(client.redirectUri);
   if (client.clientId !== undefined) return { source: "preregistered", clientId: client.clientId };
-  if (recorded?.source === "cimd" && pkce && client.clientMetadataDocument?.url === recorded.clientId) return cimd(client);
+  if (recorded?.source === "cimd" && pkce && client.clientMetadataDocument?.url === recorded.clientId) return cimd(client, login);
   if (recorded?.source === "dcr" && client.registration) return dcr(client, metadata, secrets, false);
-  if (pkce && client.clientMetadataDocument && metadata.client_id_metadata_document_supported === true) return cimd(client);
+  if (pkce && client.clientMetadataDocument && metadata.client_id_metadata_document_supported === true) return cimd(client, login);
   return dcr(client, metadata, secrets, true);
 }
 

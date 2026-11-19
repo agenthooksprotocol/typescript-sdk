@@ -273,6 +273,23 @@ test('[cimd-portless-loopback-redirect-matches] a declared loopback redirect mat
   }
 });
 
+test('[cimd-portless-loopback-redirect-matches] a login with a prepare-only redirect leaves CIMD lookups and refreshes working', async () => {
+  // The host configures no redirect: it binds a port per login and passes it to prepare only.
+  const f = fixture(cimd({ redirectUri: undefined, clientMetadataDocument: { url: CIMD, redirectUris: ['http://127.0.0.1/callback'] } }));
+  const pending = await f.oauth.prepare(f.context, budget(), { redirectUri: 'http://127.0.0.1:51010/callback' });
+  await f.oauth.complete(f.callback(pending), budget());
+  // The up-front lookup serves the token, and refreshes it once expired, without any redirect.
+  assert.equal((await f.provider().credential(f.context)).token, 'access-1');
+  f.expire();
+  assert.equal((await f.provider().credential(f.context)).token, 'access-2');
+  assert.equal((await f.provider(managedOAuth(f.options)).credential({ ...f.context, challenged: true })).token, 'access-2');
+  assert.deepEqual(f.state.tokenCalls.map(call => [call.id, call.body.get('grant_type')]),
+    [[CIMD, 'authorization_code'], [CIMD, 'refresh_token']]);
+  // A login still needs a declared redirect.
+  f.store.values.clear();
+  await assert.rejects(f.oauth.prepare(f.context, budget()), errorCode('invalid_configuration'));
+});
+
 test('[cimd-never-fetched-by-sdk] no request targets the CIMD URL or anything derived from it', async () => {
   const f = fixture(cimd());
   await f.login();
@@ -423,6 +440,16 @@ test('[dcr-pkce-invalid-client-drops-grant] invalid_client ends only its login a
   g.store.values.set(key, { ...g.store.values.get(key), expiresAt: Date.now() - 1 });
   await assert.rejects(g.provider(rotating).credential(g.context), errorCode('interaction_required'));
   assert.equal(g.grants()[0].refreshToken, 'refresh-10');
+  // Same refresh token but another client (a newer login's) is kept too.
+  g.state.invalid.add('dcr-11');
+  const reclient = managedOAuth({ ...g.options, async policyFetch(url, init, context) {
+    const response = await fetch(url, init, context);
+    if (url.endsWith('/token')) g.store.values.set(key, { ...g.store.values.get(key), generation: 'reclient', clientId: 'dcr-12' });
+    return response;
+  } });
+  g.store.values.set(key, { ...g.store.values.get(key), clientId: 'dcr-11', expiresAt: Date.now() - 1 });
+  await assert.rejects(g.provider(reclient).credential(g.context), errorCode('interaction_required'));
+  assert.deepEqual([g.grants()[0].clientId, g.grants()[0].refreshToken], ['dcr-12', 'refresh-10']);
 });
 
 test('[loopback-redirect-ephemeral-port-per-login] each login binds its own port; authorization, DCR, token and callback use it exactly', async () => {

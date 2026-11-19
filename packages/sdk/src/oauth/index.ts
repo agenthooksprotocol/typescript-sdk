@@ -6,10 +6,10 @@ import {
   acquireClientCredentials, exchangeCode, isInvalidClient, isTransportFailure, pkce, refreshCredential, startLogin, validateCallback,
 } from "./protocol.js";
 import type { TokenResult } from "./protocol.js";
-import { chooseSource, clientIdentity, dcr, failureKey, frame, register, registrationKey, registrationRequest } from "./registration.js";
+import { chooseSource, cimdRedirect, clientIdentity, dcr, failureKey, frame, register, registrationKey, registrationRequest } from "./registration.js";
 import type { AcceptedRegistration, AuthMethod } from "./registration.js";
 import type {
-  ClientConfig, ClientSelection, ManagedOAuthOptions, Operation, ResolvedTarget, StoredBinding, StoredGrant, StoredPendingLogin,
+  ClientConfig, ClientSelection, ManagedOAuthOptions, Operation, ResolvedTarget, StoredBinding, StoredGrant, StoredPendingIndex, StoredPendingLogin,
   StoredRecord, StoredRegistration, StoredRegistrationFailure, TokenValue,
 } from "./types.js";
 export type {
@@ -323,7 +323,8 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
   async function withClient(target: ResolvedTarget, recorded: ClientSelection | undefined, operation: Operation,
     redirect?: string): Promise<Selected> {
     const client = redirect === undefined ? target.client : { ...target.client, redirectUri: redirect };
-    const choice = chooseSource(client, target.metadata as unknown as Record<string, unknown>, secrets !== undefined, recorded);
+    // The CIMD redirect is checked when a login is created; lookups and refreshes need none.
+    const choice = chooseSource(client, target.metadata as unknown as Record<string, unknown>, secrets !== undefined, recorded, false);
     const selection: ClientSelection = choice.source === "dcr" ? { source: "dcr" } : { source: choice.source, clientId: choice.clientId! };
     const selected = { ...target, client, selection, identity: clientIdentity(selection) };
     if (choice.source === "preregistered") return selected;
@@ -411,6 +412,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     };
     target = withExplicit(target);
     const key = grantKey(namespace, context, target.client, target.identity);
+    if (mode === "host") await sweepPersisted(key, operation);
     // A known binding whose host policy now names another grant is not a store miss;
     // a changed client selection is not such a change.
     const reselected = cached?.client !== undefined &&
@@ -561,12 +563,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     const indexKey = pendingIndexKey(record.grantKey);
     await race(operation.signal, store.coordinate(indexKey, operation.signal, async () => {
       const index = await read(indexKey, "pending_index", operation);
-      const live: { state: string; generation: string }[] = [];
-      for (const state of index?.states ?? []) {
-        const existing = await read(pendingKey(namespace, state), "pending_login", operation);
-        if (existing && existing.expiresAt <= Date.now()) await write(pendingKey(namespace, state), existing.generation, undefined, operation);
-        else if (existing) live.push({ state, generation: existing.generation });
-      }
+      const live = await prune(index, operation);
       while (live.length >= maxPending) {
         const oldest = live.shift()!;
         await write(pendingKey(namespace, oldest.state), oldest.generation, undefined, operation);
@@ -577,6 +574,29 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         await write(pendingKey(namespace, record.state), record.generation, undefined, commit()).catch(() => false);
         throw new AuthError("provider_failed");
       }
+    }));
+  }
+  /** Delete expired logins named by a persisted index; returns the live ones, oldest first. Under the index lock. */
+  async function prune(index: StoredPendingIndex | undefined, operation: Operation): Promise<{ state: string; generation: string }[]> {
+    const live: { state: string; generation: string }[] = [];
+    for (const state of index?.states ?? []) {
+      const existing = await read(pendingKey(namespace, state), "pending_login", operation);
+      if (existing && existing.expiresAt <= Date.now()) await write(pendingKey(namespace, state), existing.generation, undefined, operation);
+      else if (existing) live.push({ state, generation: existing.generation });
+    }
+    return live;
+  }
+  /** Host prepare: delete a grant key's expired persisted logins, so an abandoned verifier does not linger. */
+  async function sweepPersisted(grant: string, operation: Operation): Promise<void> {
+    if (!persist) return;
+    const indexKey = pendingIndexKey(grant);
+    if (!await read(indexKey, "pending_index", operation)) return;
+    await race(operation.signal, store.coordinate(indexKey, operation.signal, async () => {
+      const index = await read(indexKey, "pending_index", operation);
+      if (!index) return;
+      const states = (await prune(index, operation)).map(entry => entry.state);
+      if (states.length === index.states.length) return;
+      await write(indexKey, index.generation, states.length ? { ...index, generation: crypto.randomUUID(), states } : undefined, operation);
     }));
   }
   async function find(state: string, operation: Operation): Promise<StoredPendingLogin | undefined> {
@@ -604,6 +624,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
   /** Create a pending login for its own redirect and, with DCR, its own client. Host prepare only. */
   async function login(context: DeliveryAuthContext, target: Selected, key: string, operation: Operation): Promise<PendingLogin> {
     let client = target.client;
+    if (target.selection.source === "cimd") cimdRedirect(client);
     if (target.selection.source === "dcr") {
       pkce(target);
       client = { ...client, clientId: await registerLogin(target, operation) };

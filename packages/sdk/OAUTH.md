@@ -195,7 +195,11 @@ endpoint answers `invalid_client` (at most once per operation; a repeated one is
 record, shared through the store, holds off further requests (`registrationBackoff`,
 default 1 minute doubling to 1 hour, honouring `Retry-After`); meanwhile
 operations fail with the last failure's code, so a retryable failure stays
-`provider_failed` (`retry`). Host `prepare` bypasses the backoff.
+`provider_failed` (`retry`). A repeated `invalid_client` for a replacement client
+also counts as a failed registration. Host `prepare` bypasses the backoff. Host
+`prepare` does not replace a usable client-credentials registration, so a changed
+registration policy takes effect only when the secret expires or the token
+endpoint answers `invalid_client`.
 
 The built-in `auth()` provider uses pre-registered clients only: it has no
 coordinated store, secret hook or `prepare`, so a missing `clientId` fails

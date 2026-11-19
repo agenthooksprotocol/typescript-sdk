@@ -182,6 +182,19 @@ test('[pending-logins-capped-per-grant-key] beyond the cap the oldest login is c
   await new Promise(resolve => setTimeout(resolve, 40));
   await assert.rejects(managedOAuth(brief).complete(h.callback(fresh), budget()), { code: 'interaction_required' });
   assert.equal(h.store.pending().length, 0);
+  // An abandoned expired login's verifier is swept by the next host prepare for its grant key, even one that creates no login.
+  const k = fixture();
+  const sweeping = { ...k.options, persistPendingLogins: true, loginLifetimeMs: 20 };
+  await k.login(managedOAuth(sweeping));
+  const grantKey = [...k.store.values.keys()].find(key => key.startsWith('ahp.oauth.grant:'));
+  const grant = k.store.values.get(grantKey);
+  k.store.values.set(grantKey, { ...grant, token: undefined, refreshToken: undefined });
+  await managedOAuth(sweeping).prepare(k.context, budget());
+  assert.equal(k.store.pending().length, 1);
+  await new Promise(resolve => setTimeout(resolve, 40));
+  k.store.values.set(grantKey, { ...grant, token: 'access-9', expiresAt: Date.now() + 3_600_000 });
+  assert.equal((await managedOAuth(sweeping).prepare(k.context, budget())).type, 'ready');
+  assert.deepEqual([k.store.pending(), k.store.indexes()], [[], []]);
 });
 
 test('[pending-completion-newest-grant-wins] completing one login leaves the others valid; the newest completion replaces the grant', async () => {
