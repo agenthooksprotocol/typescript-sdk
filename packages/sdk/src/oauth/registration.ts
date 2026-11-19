@@ -40,7 +40,7 @@ function declared(redirect: string, entries: readonly string[]): boolean {
  * dot segments. The login redirect is checked against the document only when a login is created.
  */
 function cimd(client: ClientConfig, login: boolean): SourceChoice {
-  const { url, redirectUris } = client.clientMetadataDocument!;
+  const { url } = client.clientMetadataDocument!;
   let parsed: URL;
   try { parsed = new URL(url); } catch { throw new AuthError("invalid_configuration"); }
   const path = /^https:\/\/[^/?#]*(\/[^?#]*)?/i.exec(url)?.[1] ?? "";
