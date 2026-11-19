@@ -198,8 +198,10 @@ operations fail with the last failure's code, so a retryable failure stays
 `provider_failed` (`retry`). A repeated `invalid_client` for a replacement client
 also counts as a failed registration. Host `prepare` bypasses the backoff. Host
 `prepare` does not replace a usable client-credentials registration, so a changed
-registration policy takes effect only when the secret expires or the token
-endpoint answers `invalid_client`.
+registration policy takes effect only when the secret expires, the token endpoint
+answers `invalid_client`, or the host calls
+`prepare(context, budget, { forceRegistration: true })`, which registers anew,
+replaces the record (deleting its old secret) and acquires a token with the new client.
 
 The built-in `auth()` provider uses pre-registered clients only: it has no
 coordinated store, secret hook or `prepare`, so a missing `clientId` fails

@@ -35,6 +35,11 @@ export interface PrepareOptions {
    * a loopback listener on a fresh ephemeral port, as MCP clients bind per login.
    */
   readonly redirectUri?: string;
+  /**
+   * Client credentials with DCR: register anew and replace the stored registration
+   * even when it is usable, for example after changing the registration policy.
+   */
+  readonly forceRegistration?: boolean;
 }
 
 const MAX_LOGIN_LIFETIME = 600_000;
@@ -255,10 +260,17 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     await write(failureKey(key), prior?.generation, value, commit());
   }
   /** A token request with the registered client succeeded: reset the failure count. */
-  async function clearFailure(key: string): Promise<void> {
+  /**
+   * A token request with the registered client succeeded: reset the failure count, but
+   * only while that registration generation is still the stored one.
+   */
+  async function clearFailure(key: string, generation: string): Promise<void> {
     const settle = commit();
-    const marker = await read(failureKey(key), "registration_failure", settle).catch(() => undefined);
-    if (marker) await write(failureKey(key), marker.generation, undefined, settle).catch(() => false);
+    try {
+      const marker = await read(failureKey(key), "registration_failure", settle);
+      if (!marker || (await read(key, "registration", settle))?.generation !== generation) return;
+      await write(failureKey(key), marker.generation, undefined, settle);
+    } catch { /* Best effort: the count is cleared by a later success. */ }
   }
   /** Store the secret under a fresh reference, then compare-and-set the record, under the commit budget. */
   async function save(key: string, current: StoredRegistration | undefined, accepted: AcceptedRegistration,
@@ -289,11 +301,11 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
    * Client credentials, under the registration-key lock: reuse a usable record or
    * register once. After a failure only host `prepare` registers until the backoff passes.
    */
-  function registration(target: ResolvedTarget, key: string, mode: Mode, operation: Operation): Promise<Registered> {
+  function registration(target: ResolvedTarget, key: string, mode: Mode, operation: Operation, replace = false): Promise<Registered> {
     const { client } = target, metadata = target.metadata as unknown as Record<string, unknown>;
     return race(operation.signal, store.coordinate(key, operation.signal, async () => {
       const current = await read(key, "registration", operation);
-      if (current) {
+      if (current && !replace) {
         const resolved = await resolveRecord(key, current, operation);
         if (resolved.usable) return resolved;
       }
@@ -307,9 +319,13 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         await failed(key, marker, attempt.error, attempt.retryAfterMs);
         throw attempt.error;
       }
-      // The failure count survives until a token request with the client succeeds, so a server
-      // that accepts registrations but rejects the clients keeps backing off.
-      return save(key, current, attempt.accepted, method!);
+      const saved = await save(key, current, attempt.accepted, method!);
+      // A success ends the backoff; the failure count survives until a token request with the
+      // client succeeds, so a server that accepts registrations but rejects the clients keeps backing off.
+      if (marker) {
+        await write(markerKey, marker.generation, { ...marker, generation: crypto.randomUUID(), nextAttemptAt: 0 }, commit()).catch(() => false);
+      }
+      return saved;
     }));
   }
   function withRegistration(target: Selected, registered: Registered): Selected {
@@ -386,7 +402,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
 
   /** The single acquisition path for host prepare, delivery credentials and the up-front lookup. */
   async function acquire(context: DeliveryAuthContext, operation: Operation, mode: Mode, explicit: readonly string[] = [],
-    redirect?: string): Promise<PrepareResult | typeof LOOKUP_MISS> {
+    redirect?: string, forceRegistration = false): Promise<PrepareResult | typeof LOOKUP_MISS> {
     if (context.authentication !== undefined && context.authentication.type !== "oauth") throw new AuthError("unsupported_binding");
     const binding = identity(context);
     const cached = await read(bindingKey(namespace, context), "binding", operation);
@@ -429,23 +445,27 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     }
     if (cached && JSON.stringify(cached.client) !== JSON.stringify(target.selection)) await saveBinding(context, cached, target, operation);
     // Cached tokens are served without metadata I/O, locks or writes.
-    const observed = await read(key, "grant", operation);
+    // Host prepare may force a new client-credentials registration, and a token for it.
+    const force = mode === "host" && forceRegistration && target.registration !== undefined;
+    const observed = force ? undefined : await read(key, "grant", operation);
     if (usable(observed, target, target.client.requiredScopes ?? [])) return ready(observed, key, binding, target, []);
     // Full discovery only on a cache miss, host prepare or challenge handling; a
     // known binding otherwise renews from persisted metadata (or fails, never anonymous).
     if (cached && repairable) target = withExplicit(await discoverBinding(context, cached, operation, true, redirect));
-    target = await usableClient(target, mode, operation);
+    target = force && target.registration
+      ? withRegistration(target, await registration(target, target.registration.key, mode, operation, true))
+      : await usableClient(target, mode, operation);
     const required = target.client.requiredScopes ?? [];
     const renew = (target: Selected) => {
       const key = grantKey(namespace, context, target.client, target.identity);
       return race(operation.signal, store.coordinate(key, operation.signal, async (): Promise<PrepareResult> => {
         const current = await read(key, "grant", operation);
-        if (usable(current, target, required)) return ready(current, key, binding, target, []);
+        if (!force && usable(current, target, required)) return ready(current, key, binding, target, []);
         const prior = current ? effective(current, target) : [];
         if (target.client.flow === "client_credentials") {
           const token = await acquireClientCredentials(acquisition(target, current), options, operation);
           const saved = await saveGrant(key, current?.generation, token, commit());
-          if (target.registration) await clearFailure(target.registration.key);
+          if (target.registration?.record) await clearFailure(target.registration.key, target.registration.record.generation);
           return ready(saved, key, binding, target, required);
         }
         // A DCR grant refreshes with the client issued to the login that produced it.
@@ -686,8 +706,12 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     const context = snapshotContext(input);
     const explicit = [...(prepareOptions.requiredScopes ?? [])];
     const redirect = prepareOptions.redirectUri;
-    if (redirect !== undefined && typeof redirect !== "string") throw new AuthError("invalid_configuration");
-    const result = await run(budget, context.signal, async operation => await acquire(context, operation, "host", explicit, redirect) as PrepareResult);
+    const force = prepareOptions.forceRegistration;
+    if ((redirect !== undefined && typeof redirect !== "string") || (force !== undefined && typeof force !== "boolean")) {
+      throw new AuthError("invalid_configuration");
+    }
+    const result = await run(budget, context.signal,
+      async operation => await acquire(context, operation, "host", explicit, redirect, force === true) as PrepareResult);
     if (result.type === "ready") prepared(context);
     return result;
   }

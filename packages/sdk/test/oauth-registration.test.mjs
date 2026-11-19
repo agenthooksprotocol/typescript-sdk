@@ -711,6 +711,54 @@ test('[dcr-replaced-secret-deleted] a replaced record\'s secret is deleted after
   assert.ok(losing.secrets.values.has(kept.secretRef));
 });
 
+test('host prepare with forceRegistration replaces a usable client-credentials registration and acquires with it', async () => {
+  const f = fixture(cc());
+  await f.oauth.prepare(f.context, budget());
+  const [old] = f.registrations();
+  const forced = await f.oauth.prepare(f.context, budget(), { forceRegistration: true });
+  assert.equal(forced.credential.token, 'access-2', 'a fresh token, not the cached one');
+  const [replacement] = f.registrations();
+  assert.equal(replacement.clientId, 'dcr-2');
+  assert.notEqual(replacement.generation, old.generation);
+  assert.deepEqual(f.secrets.deleted, [old.secretRef]);
+  assert.deepEqual(f.state.tokenCalls.map(call => call.id), ['dcr-1', 'dcr-2']);
+  // Without the option, and on delivery paths, the usable record is kept.
+  await f.oauth.prepare(f.context, budget());
+  f.expire();
+  await f.provider().credential(f.context);
+  assert.equal(f.state.registrations.length, 2);
+  await assert.rejects(f.oauth.prepare(f.context, budget(), { forceRegistration: 'yes' }), errorCode('invalid_configuration'));
+  // It bypasses the backoff like any host prepare.
+  f.store.values.set(failureKey(f.key), { kind: 'registration_failure', generation: 'm', attempts: 2, nextAttemptAt: Date.now() + 60_000, code: 'provider_failed' });
+  assert.equal((await f.oauth.prepare(f.context, budget(), { forceRegistration: true })).credential.token, 'access-4');
+  assert.equal(f.state.registrations.length, 3);
+  assert.deepEqual(f.markers(), [], 'a token request with the new client reset the count');
+});
+
+test('a successful registration ends the backoff; the count clears only after a token success with that registration generation', async () => {
+  const f = fixture(cc());
+  const seen = [];
+  const fetch = f.options.policyFetch;
+  let replaceDuringToken = false;
+  const oauth = managedOAuth({ ...f.options, async policyFetch(url, init, context) {
+    if (url.endsWith('/token')) {
+      seen.push(structuredClone(f.markers()));
+      if (replaceDuringToken) f.patchRecord({ generation: 'concurrent' });
+    }
+    return fetch(url, init, context);
+  } });
+  f.store.values.set(failureKey(f.key), { kind: 'registration_failure', generation: 'm', attempts: 3, nextAttemptAt: Date.now() + 60_000, code: 'provider_failed' });
+  assert.equal((await oauth.prepare(f.context, budget())).credential.token, 'access-1');
+  assert.deepEqual(seen[0].map(marker => [marker.attempts, marker.nextAttemptAt]), [[3, 0]], 'registered: no next-attempt time, count kept');
+  assert.deepEqual(f.markers(), []);
+  // A token success whose registration generation is no longer stored leaves the count.
+  f.store.values.set(failureKey(f.key), { kind: 'registration_failure', generation: 'm2', attempts: 2, nextAttemptAt: 0, code: 'provider_failed' });
+  replaceDuringToken = true;
+  f.expire();
+  assert.equal((await f.provider(oauth).credential(f.context)).token, 'access-2');
+  assert.equal(f.markers()[0].attempts, 2);
+});
+
 test('host prepare keeps a usable client-credentials registration', async () => {
   const f = fixture(cc());
   await f.oauth.prepare(f.context, budget());
