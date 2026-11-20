@@ -136,7 +136,10 @@ completion (a claimed valid callback, including consent denial), `cancel`
 a stray callback cannot burn it: the exact redirect, the `state`, no `iss` other
 than the issuer, no fragment or userinfo, exactly one of `code` or `error`, and no
 duplicated parameter; an invalid callback fails `access_denied` and leaves the
-login pending. After the claim, a token-endpoint `invalid_grant` fails
+login pending. A host callback or policy failure before the claim (for example
+`selectClient` reselecting client authentication) keeps its own code, carries
+no scopes and leaves the login pending (`loginEnded: false`), so the same
+callback can complete it once the host recovers. After the claim, a token-endpoint `invalid_grant` fails
 `interaction_required`; `invalid_client` fails `credential_unavailable` for a
 pre-registered client, `invalid_configuration` for a CIMD client and
 `interaction_required` for a DCR client (the next `prepare` registers again);

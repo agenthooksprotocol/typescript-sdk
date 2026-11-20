@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { inspect } from 'node:util';
 import { managedOAuth } from '../dist/src/oauth/index.js';
 import { auth } from '../dist/src/client/auth.js';
+import { skipFor } from './fixtures/sdk-features.mjs';
 
 // Static, test-only certificate (testdata is not published).
 const tls = { key: await readFile(new URL('../testdata/tls/key.pem', import.meta.url)), cert: await readFile(new URL('../testdata/tls/cert.pem', import.meta.url)) };
@@ -478,7 +479,7 @@ for (const vector of lifecycleVectors.keys) {
   });
 }
 for (const vector of lifecycleVectors.token_responses) {
-  test(`shared token response through native HTTPS: ${vector.id}`, async t => {
+  test(`shared token response through native HTTPS: ${vector.id}`, { skip: skipFor(vector) }, async t => {
     const f = await fixture(t, { tokenResponse: vector.response });
     Object.assign(f.client, { scopes: vector.requested, allowedScopes: vector.allowed, requiredScopes: vector.required });
     let complete;

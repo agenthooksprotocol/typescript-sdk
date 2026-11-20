@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { managedOAuth } from '../dist/src/oauth/index.js';
 import { AuthError } from '../dist/src/client/auth.js';
+import { KNOWN_FEATURES, skipFor } from './fixtures/sdk-features.mjs';
 
 const vectors = JSON.parse(readFileSync(new URL('../testdata/sdk-auth-lifecycle.json', import.meta.url), 'utf8'));
 const budget = () => ({ signal: new AbortController().signal, deadline: Date.now() + 5000 });
@@ -108,12 +109,6 @@ function compare(expect, result) {
   }
 }
 
-// TS-only gaps, each a vector this SDK cannot express (see OAUTH.md):
-// managedOAuth has no token-validation callback, and complete() takes no pending-login handle.
-const unsupported = new Map([
-  ['host-policy-access-denied-scopes-stripped', 'managedOAuth has no token-validation host callback'],
-  ['complete-invalid-callback-state-mismatch', 'complete() takes no pending-login handle to compare state with'],
-]);
 
 async function decide(input) {
   const preset = input.preset_scopes ?? [], requested = sorted(input.requested), ceiling = input.ceiling ?? requested;
@@ -174,7 +169,7 @@ async function decide(input) {
 }
 
 for (const vector of vectors.scope_decisions) {
-  test(`shared scope decision: ${vector.id}`, { skip: unsupported.get(vector.id) ?? false }, async () => {
+  test(`shared scope decision: ${vector.id}`, { skip: skipFor(vector) }, async () => {
     compare(vector.expect, await decide(vector.input));
   });
 }
@@ -209,14 +204,21 @@ async function complete(input, source = input.client_source ?? 'preregistered') 
     token_endpoint_failure: () => new Response('{}', { status: 503 }),
     invalid_response: () => Response.json({ access_token: 'x', token_type: 'mac' }),
   }[input.exchange];
+  // A host callback failure before the claim (client selection reselects host client authentication).
+  w.state.hostError = input.host_error;
   const outcome = await settle(w.oauth.complete(callback, budget()));
   const result = { ...observed(outcome), grant_persisted: grants(w).length > 0 };
   if (outcome.error) result.login_ended = outcome.error.loginEnded;
+  if (input.host_error && result.login_ended === false) {
+    // The login is still pending: once the host recovers, the same callback completes it.
+    w.state.hostError = undefined;
+    assert.equal((await w.oauth.complete(callback, budget())).type, 'ready', 'the login still completes');
+  }
   return result;
 }
 
 for (const vector of vectors.completions) {
-  test(`shared completion: ${vector.id}`, { skip: unsupported.get(vector.id) ?? false }, async () => {
+  test(`shared completion: ${vector.id}`, { skip: skipFor(vector) }, async () => {
     compare(vector.expect, await complete(vector.input));
   });
 }
@@ -231,4 +233,13 @@ test('[complete-error-login-ended] a token-endpoint invalid_client after the cla
     assert.equal(result.grant_persisted, false, source);
     if ('scopes' in result) assert.deepEqual(result.scopes, [], source);
   }
+});
+
+test('every shared vector names only known SDK features in requires', () => {
+  const sections = Object.values(vectors).filter(Array.isArray);
+  for (const vector of sections.flat()) {
+    assert.doesNotThrow(() => skipFor(vector), vector.id);
+    for (const feature of vector.requires ?? []) assert.ok(KNOWN_FEATURES.includes(feature), `${vector.id}: ${feature}`);
+  }
+  assert.throws(() => skipFor({ id: 'x', requires: ['teleport'] }), /unknown SDK features: teleport/);
 });
