@@ -136,7 +136,8 @@ function loginEndedError(error: unknown, ended: boolean): unknown {
     Object.defineProperty(wrapped, "cause", { value: error, enumerable: false });
     target = wrapped;
   }
-  Object.defineProperty(target, "loginEnded", { value: ended, enumerable: true });
+  // Configurable and writable: the caller's own reason may be annotated again later.
+  Object.defineProperty(target, "loginEnded", { value: ended, enumerable: true, configurable: true, writable: true });
   return target;
 }
 
@@ -246,7 +247,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     return owner;
   }
   /**
-   * Step 3: drop the rejected access token (keeping refresh material) unless a newer
+   * Step 0: drop the rejected access token (keeping refresh material) unless a newer
    * generation exists, under the commit budget, so it is never resent.
    */
   async function retire(owner: Attempt, operation: Operation): Promise<void> {

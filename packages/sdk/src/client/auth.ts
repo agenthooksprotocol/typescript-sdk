@@ -639,8 +639,11 @@ const defaults: AuthProvider = {
     if (!known) {
       // No I/O here: the replay (or next call) discovers the client and decides fully.
       // The challenge's own form is decided now, so an unreplayed request still fails.
+      // decide without a known client: only its challenge-form refusal (step 2) for an
+      // unparseable challenge or a 403 other than insufficient_scope applies now.
       const form = legacyChallenge(challenged);
-      if (form.kind === "invalid" || form.kind === "forbidden") throw new AuthError("access_denied");
+      const { outcome } = decide({ op: "challenge", config: { flow: "authorization_code_pkce", requested: [] }, challenge: form });
+      if (outcome.type === "fail" && outcome.step === 2 && (form.kind === "invalid" || form.kind === "forbidden")) throw outcome.error;
       return;
     }
     const { client } = known;

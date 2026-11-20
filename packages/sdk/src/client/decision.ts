@@ -152,8 +152,8 @@ function evaluate({ op, config, grant, sent, challenge }: DecisionInput): Decisi
   }
   // 6. Use.
   if (current && grant.tokenValid && covers(effective, R)) return result({ type: "use" });
-  // 7. Refresh: never broadens a grant.
-  if (grant?.refresh && covers(grant.granted, R)) return result({ type: "refresh" });
+  // 7. Refresh (PKCE only; client credentials always reissue): never broadens a grant.
+  if (config.flow === "authorization_code_pkce" && grant?.refresh && covers(grant.granted, R)) return result({ type: "refresh" });
   const previous = grant?.granted ?? [];
   // 8. Client credentials.
   if (config.flow === "client_credentials") {

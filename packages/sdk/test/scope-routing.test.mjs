@@ -337,3 +337,34 @@ test('complete(): host policy runs before the claim for a consent denial too', a
     error.code === 'invalid_configuration' && error.requiredScopes === undefined && error.loginEnded === false);
   assert.equal([...source.store.values.keys()].filter(key => key.startsWith('ahp.oauth.pending:')).length, 1, 'the login is still pending');
 });
+
+test('decide: client credentials always reissue, even with a stored refresh token; PKCE refreshes', async () => {
+  const { decide, parseChallenge } = await import('../dist/src/client/decision.js');
+  const grant = { generation: 'g', granted: ['read'], tokenValid: false, refresh: true };
+  const base = { op: 'credential', grant, challenge: parseChallenge(undefined, undefined) };
+  assert.equal(decide({ ...base, config: { flow: 'client_credentials', requested: ['read'] } }).outcome.type, 'acquire');
+  assert.equal(decide({ ...base, config: { flow: 'authorization_code_pkce', requested: ['read'] } }).outcome.type, 'refresh');
+  // Through managedOAuth: an expired client-credentials grant holding a refresh token is reissued.
+  const w = managedWorld(cc());
+  await w.oauth.prepare(w.context, budget());
+  for (const [key, value] of w.store.values) if (value.kind === 'grant') w.store.values.set(key, { ...value, expiresAt: Date.now() - 1, refreshToken: 'stray' });
+  await w.provider.credential(w.context);
+  assert.equal(w.state.tokens.at(-1).get('grant_type'), 'client_credentials');
+});
+
+test('complete(): loginEnded on a caller\'s abort reason stays configurable and writable', async () => {
+  const pkce = { issuer, resource, clientId: 'client', flow: 'authorization_code_pkce', scopes: ['read'], allowedScopes: ['read'], requiredScopes: [],
+    redirectUri: 'https://app.example/callback' };
+  const w = managedWorld(pkce);
+  const pending = await w.oauth.prepare(w.context, budget());
+  const reason = new Error('caller gave up'), controller = new AbortController();
+  controller.abort(reason);
+  const callback = `https://app.example/callback?code=c&state=${pending.state}`;
+  for (let i = 0; i < 2; i++) {
+    const error = await w.oauth.complete(callback, { signal: controller.signal, deadline: Date.now() + 1000 }).catch(failure => failure);
+    assert.equal(error, reason);
+    assert.equal(error.loginEnded, false);
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(reason, 'loginEnded');
+  assert.equal(descriptor.configurable, true); assert.equal(descriptor.writable, true);
+});

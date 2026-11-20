@@ -261,10 +261,12 @@ approved cached credential up front or `undefined` for an anonymous first contac
 Omit that route to disable automatic discovery. Uploads and events select routes
 from their own bindings. Challenges return to the provider that issued the exact
 opaque attempt, with its original credential; the router never replays HTTP
-requests itself. Hooks hands every 401 to the provider, a 403 only when its
-`WWW-Authenticate` parses as exactly one Bearer challenge with
-`error="insufficient_scope"`, and returns any other 403 without a retry; a token
-rejected on the replay is handed to the provider too. The replay's context carries
+requests itself. For a request without a configured `Authorization` header, Hooks
+hands a 401 to the provider, and a 403 only when its `WWW-Authenticate` parses as
+exactly one Bearer challenge with `error="insufficient_scope"`; any other 403 is
+returned without a retry. A token rejected on the replay is handed to the provider
+too, and a request with a configured `Authorization` header is never challenged or
+replayed. The replay's context carries
 `challenge`, `challengeStatus` and `rejectedCredential` (the router maps it back to
 the issuing provider's credential). Only read-only configuration requests may
 retry once after an auth challenge. Effectful events, notifications and uploads are not replayed;

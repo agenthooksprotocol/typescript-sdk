@@ -38,8 +38,10 @@ async function protect<T>(operation: Operation, work: () => Promise<T>, grant: "
         invalidClients.add(rejected);
         throw rejected;
       }
-      // unauthorized_client, access_denied, invalid_scope and every other token-endpoint
-      // error are provider_failed, with no scopes (contract v2, section 3 step 6).
+      // Renewal errors (refresh and client credentials): unauthorized_client is
+      // credential_unavailable. In a code exchange (complete step 6) it, access_denied,
+      // invalid_scope and every other token-endpoint error are provider_failed. No scopes.
+      if (error.error === "unauthorized_client" && grant !== "code") throw new AuthError("credential_unavailable");
       if (error.error === "invalid_grant") {
         throw new AuthError(grant === "refresh" ? "refresh_rejected" : grant === "code" ? "interaction_required" : "credential_unavailable");
       }

@@ -626,10 +626,14 @@ test("[transient-refresh-failure] built-in auth() keeps its refresh token until 
   const provider = auth({
     resolveHostname: async () => ["93.184.216.34"],
     resolveCredentialReference: () => "client-secret",
+    // A refresh is a PKCE grant's (client credentials always reissue): sign in inline first.
+    redirectUri: "https://app.example/callback",
+    authorize: (request) => `${request.redirectUri}?code=code&state=${request.state}`,
     async fetch(url) {
       if (url.pathname.startsWith("/.well-known/")) {
         return Response.json({ issuer: "https://identity.example/tenant", token_endpoint: "https://identity.example/token",
-          grant_types_supported: ["client_credentials", "refresh_token"] });
+          authorization_endpoint: "https://identity.example/authorize", code_challenge_methods_supported: ["S256"],
+          grant_types_supported: ["client_credentials", "refresh_token", "authorization_code"] });
       }
       const { status, body } = respond();
       if (status !== 200) return Response.json(body, { status });
@@ -637,7 +641,7 @@ test("[transient-refresh-failure] built-in auth() keeps its refresh token until 
       return Response.json({ access_token: `access-${issued}`, refresh_token: `refresh-${issued}`, token_type: "Bearer", expires_in: 3600, scope: "events" });
     },
   });
-  const context = { backendId: "auth.backend", purpose: "event", url: eventUrl, authentication: bindings[2], cache };
+  const context = { backendId: "auth.backend", purpose: "event", url: eventUrl, authentication: bindings[3], cache };
   assert.equal((await provider.authenticate(context)).token, "access-1");
   const [key] = cache.keys();
   const expire = () => cache.set(key, { ...cache.get(key), expiresAt: 0 });
@@ -697,17 +701,21 @@ test("[token-validation-failure-clears-in-flight] built-in auth() persists a rot
   const provider = auth({
     resolveHostname: async () => ["93.184.216.34"],
     resolveCredentialReference: () => "client-secret",
+    // A refresh is a PKCE grant's (client credentials always reissue): sign in inline first.
+    redirectUri: "https://app.example/callback",
+    authorize: (request) => `${request.redirectUri}?code=code&state=${request.state}`,
     async fetch(url) {
       if (url.pathname.startsWith("/.well-known/")) {
         return Response.json({ issuer: "https://identity.example/tenant", token_endpoint: "https://identity.example/token",
-          grant_types_supported: ["client_credentials", "refresh_token"] });
+          authorization_endpoint: "https://identity.example/authorize", code_challenge_methods_supported: ["S256"],
+          grant_types_supported: ["client_credentials", "refresh_token", "authorization_code"] });
       }
       return invalid
         ? Response.json({ access_token: "n", token_type: "Bearer", expires_in: "3600.5", refresh_token: "rotated" })
         : Response.json({ access_token: "a", token_type: "Bearer", expires_in: 3600, refresh_token: "r1", scope: "events" });
     },
   });
-  const context = { backendId: "auth.backend", purpose: "event", url: eventUrl, authentication: bindings[2], cache };
+  const context = { backendId: "auth.backend", purpose: "event", url: eventUrl, authentication: bindings[3], cache };
   await provider.credential(context);
   const [key] = cache.keys();
   cache.set(key, { ...cache.get(key), expiresAt: 0 });
