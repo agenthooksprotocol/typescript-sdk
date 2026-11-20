@@ -1,9 +1,13 @@
 // Optional SDK features a shared vector may name in `requires` (spec: Executable coverage).
 // A vector applies only when this SDK has every feature it requires; otherwise it is
 // skipped, never remapped onto another mechanism. An unknown feature fails the suite.
-export const KNOWN_FEATURES = Object.freeze(['complete_handle', 'token_validation_callback']);
-/** TypeScript: complete() takes no pending-login handle, and managedOAuth has no token-validation callback. */
-export const SDK_FEATURES = Object.freeze([]);
+export const KNOWN_FEATURES = Object.freeze(['complete_handle', 'legacy_prepare_time_host_required', 'token_validation_callback']);
+/**
+ * TypeScript: complete() takes no pending-login handle and managedOAuth has no
+ * token-validation callback; pending records from earlier releases keep the
+ * prepare-time host-required scopes in `client.requiredScopes`.
+ */
+export const SDK_FEATURES = Object.freeze(['legacy_prepare_time_host_required']);
 
 /** False when the vector applies; otherwise the skip reason. Throws on an unknown feature. */
 export function skipFor(vector) {

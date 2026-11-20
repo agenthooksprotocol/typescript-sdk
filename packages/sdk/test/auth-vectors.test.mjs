@@ -30,6 +30,8 @@ const SCOPE_EXPECT = ['code', 'scopes', 'required', 'action', 'acquisition_scope
 const COMPLETION_INPUT = ['pending', 'handle', 'client_source', 'source_permitted', 'callback', 'host_error', 'claim', 'exchange',
   'stored_required', 'prepare_time_host_required', 'current_host_required', 'granted', 'ceiling'];
 const COMPLETION_EXPECT = ['code', 'scopes', 'login_ended', 'grant_persisted'];
+const TOKEN_ERROR_INPUT = ['grant_type', 'client_source', 'error'];
+const TOKEN_ERROR_EXPECT = ['code', 'reregistrations'];
 function defined(vector, input, expect) {
   for (const key of Object.keys(vector)) assert.ok(VECTOR_FIELDS.includes(key), `${vector.id}: unknown vector field ${key}`);
   for (const key of Object.keys(vector.input)) assert.ok(input.includes(key), `${vector.id}: unknown input field ${key}`);
@@ -97,6 +99,7 @@ function world({ flow, requested, ceiling, required = [], source = 'preregistere
       state.network++;
       if (url.startsWith(issuer)) state.authorizationServer++;
       if (url === `${issuer}/register`) {
+        state.registrations = (state.registrations ?? 0) + 1;
         const body = JSON.parse(String(init.body)), n = ++state.n;
         return Response.json({ client_id: `issued-${n}`, token_endpoint_auth_method: body.token_endpoint_auth_method,
           ...(body.token_endpoint_auth_method === 'none' ? {} : { client_secret: `issued-secret-${n}` }) }, { status: 201 });
@@ -182,12 +185,10 @@ async function decideVector(input) {
   w.state.network = 0; w.state.authorizationServer = 0; lastRequired = undefined;
   let outcome;
   if (input.path === 'prepare') outcome = await settle(w.oauth.prepare(context, budget(), { requiredScopes: input.explicit }));
-  else if (input.path === 'challenge') {
+  else if (input.path === 'challenge' || (input.path === 'fresh' && input.binding === 'unbound')) {
+    // An unbound `fresh` vector is an anonymous request receiving the vector's 401, handled by `challenge`.
     const response = new Response(null, { status: input.challenge.status, headers: { 'www-authenticate': input.challenge.www_authenticate } });
     outcome = await settle(w.provider.challenge({ ...context, response, credential: sent }));
-  } else if (input.path === 'fresh' && input.binding === 'unbound') {
-    // TypeScript sends anonymously to an unbound, unknown target; its first decision is the challenged retry.
-    outcome = await settle(w.provider.credential({ ...context, challenged: true }));
   } else outcome = await settle(w.provider.credential(context));
   const result = { network_calls: w.state.network, authorization_server_requests: w.state.authorizationServer, required: lastRequired };
   if (input.challenge?.status === 401) {
@@ -213,6 +214,20 @@ for (const vector of vectors.scope_decisions) {
     compare(vector, await decideVector(vector.input));
   });
 }
+
+/** A token-endpoint answer for each error kind the vectors name. */
+const tokenErrors = {
+  ok: undefined,
+  invalid_grant: () => Response.json({ error: 'invalid_grant' }, { status: 400 }),
+  invalid_client: () => Response.json({ error: 'invalid_client' }, { status: 401 }),
+  unauthorized_client: () => Response.json({ error: 'unauthorized_client' }, { status: 400 }),
+  access_denied: () => Response.json({ error: 'access_denied' }, { status: 400 }),
+  invalid_scope: () => Response.json({ error: 'invalid_scope' }, { status: 400 }),
+  server_error: () => Response.json({ error: 'server_error' }, { status: 500 }),
+  unreachable: () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }); },
+  not_found: () => new Response('not found', { status: 404 }),
+  invalid_response: () => Response.json({ access_token: 'x', token_type: 'mac' }),
+};
 
 async function completeVector(input) {
   const source = input.client_source;
@@ -272,18 +287,7 @@ async function completeVector(input) {
       w.store.failLoad = key => claimed && key === pendingKey;
     }
   }
-  w.state.tokenError = {
-    ok: undefined,
-    invalid_grant: () => Response.json({ error: 'invalid_grant' }, { status: 400 }),
-    invalid_client: () => Response.json({ error: 'invalid_client' }, { status: 401 }),
-    unauthorized_client: () => Response.json({ error: 'unauthorized_client' }, { status: 400 }),
-    access_denied: () => Response.json({ error: 'access_denied' }, { status: 400 }),
-    invalid_scope: () => Response.json({ error: 'invalid_scope' }, { status: 400 }),
-    server_error: () => Response.json({ error: 'server_error' }, { status: 500 }),
-    unreachable: () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }); },
-    not_found: () => new Response('not found', { status: 404 }),
-    invalid_response: () => Response.json({ access_token: 'x', token_type: 'mac' }),
-  }[typeof input.exchange === 'string' ? input.exchange : 'ok'];
+  w.state.tokenError = tokenErrors[typeof input.exchange === 'string' ? input.exchange : 'ok'];
   const grantsBefore = grantKeys(w).length;
   const outcome = await settle(w.oauth.complete(url, budget()));
   const result = { grant_persisted: grantKeys(w).length > grantsBefore };
@@ -296,6 +300,35 @@ for (const vector of vectors.completions) {
   test(`shared completion: ${vector.id}`, { skip: skipFor(vector) }, async () => {
     defined(vector, COMPLETION_INPUT, COMPLETION_EXPECT);
     compare(vector, await completeVector(vector.input));
+  });
+}
+
+/** A refresh (PKCE) or client-credentials grant whose token request fails with `error`. */
+async function tokenErrorVector(input) {
+  const refresh = input.grant_type === 'refresh';
+  const w = world({ flow: refresh ? 'authorization_code_pkce' : 'client_credentials', requested: ['read'], ceiling: ['read'],
+    source: input.client_source });
+  const context = { backendId: 'backend', purpose: 'event', url: resource };
+  if (refresh) {
+    await w.oauth.complete(callbackFor(await w.oauth.prepare(context, budget())), budget());
+    for (const key of grantKeys(w)) w.store.values.set(key, { ...w.store.values.get(key), expiresAt: Date.now() - 1 });
+  }
+  w.state.tokenError = tokenErrors[input.error];
+  const outcome = await settle(refresh ? w.provider.credential(context) : w.oauth.prepare(context, budget()));
+  assert.ok(outcome.error, 'the renewal fails');
+  const result = errorFields(outcome.error);
+  // A token_errors outcome never carries scopes.
+  assert.equal(outcome.error.requiredScopes, undefined, 'no scopes');
+  delete result.scopes;
+  // The registrations sent after the first invalid_client, before the repeated one.
+  if (!refresh && input.client_source === 'dcr' && input.error === 'invalid_client') result.reregistrations = (w.state.registrations ?? 0) - 1;
+  return result;
+}
+
+for (const vector of vectors.token_errors) {
+  test(`[renewal-token-errors-classified] shared token error: ${vector.id}`, { skip: skipFor(vector) }, async () => {
+    defined(vector, TOKEN_ERROR_INPUT, TOKEN_ERROR_EXPECT);
+    compare(vector, await tokenErrorVector(vector.input));
   });
 }
 
