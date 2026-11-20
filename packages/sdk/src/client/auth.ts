@@ -521,6 +521,18 @@ function cacheKey(context: AuthContext, client: OAuthClient): string {
     [...(client.scopes ?? [])].sort(),
   ]);
 }
+/**
+ * R for this operation: host-required ∪ the scopes of a 403 insufficient_scope challenge
+ * (strict RFC 6749 list, else access_denied with no scopes; a 401's are only requested).
+ * R outside the ceiling is refused, naming R.
+ */
+function operationScopes(client: OAuthClient, context: AuthContext): string[] {
+  const ceiling = client.allowedScopes ?? client.scopes ?? [];
+  const required = [...new Set([...(client.requiredScopes ?? []), ...challengeScopes(bearerParameters(context.challenge)).required])].sort();
+  if (required.some((scope) => !ceiling.includes(scope))) throw new AuthError("access_denied", required);
+  return required;
+}
+
 function base64url(bytes: Uint8Array): string {
   return btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""))
     .replace(/\+/g, "-")
@@ -674,15 +686,10 @@ const defaults: AuthProvider = {
     if (!client.clientId) throw new AuthError("credential_unavailable");
     if (!["authorization_code_pkce", "client_credentials"].includes(client.flow))
       error("invalid client configuration");
-    // Only a 403 insufficient_scope `scope` is a requirement (strict RFC 6749 list, else
-    // access_denied with no scopes); a 401 `scope` only widens the request within the ceiling.
-    const ceiling = client.allowedScopes ?? client.scopes ?? [];
-    const challenged = challengeScopes(bearerParameters(context.challenge));
-    const requiredScopes = [...new Set([...(client.requiredScopes ?? []), ...challenged.required])].sort();
-    // A requirement (host or challenged) outside the ceiling is refused, naming the full set.
-    if (requiredScopes.some((scope) => !ceiling.includes(scope)))
-      throw new AuthError("access_denied", requiredScopes);
-    client = { ...client, requiredScopes };
+    // R (host-required ∪ a 403 insufficient_scope challenge's scopes) outside the ceiling
+    // is refused before any issuer metadata I/O. The returned (and cached) client keeps
+    // only host-required scopes: a step-up requirement is operation-scoped.
+    operationScopes(client, context);
     const path =
       issuer.pathname === "/" ? "" : issuer.pathname.replace(/\/$/, "");
     const discovered = await metadataAt(
@@ -896,9 +903,13 @@ const defaults: AuthProvider = {
     const known = discoveryCache.get(discoveryKey);
     const challenged = context.challenged || context.challenge !== undefined;
     if (!binding && !challenged && !known) return undefined;
+    // With a known client, R is decided locally before challenge rediscovery.
+    if (known) operationScopes(known.client, context);
     const discovered =
       known && !challenged ? known : await this.discover(context, options);
-    const { client, metadata } = discovered;
+    const { metadata } = discovered;
+    // This operation's R, never cached: host-required ∪ validated 403 challenge scopes.
+    const client: OAuthClient = { ...discovered.client, requiredScopes: operationScopes(discovered.client, context) };
     if (known && cacheKey(context, known.client) !== cacheKey(context, client))
       error("OAuth identity changed");
     const key = cacheKey(context, client);
@@ -1087,6 +1098,7 @@ const defaults: AuthProvider = {
         options,
       ).then(commit), context.signal);
     }
+    // The cached client holds host policy only; R above applied to this operation.
     discoveryCache.set(discoveryKey, discovered);
     if (client.requiredScopes?.some((scope: string) => !credential.scopes?.includes(scope)))
       throw new AuthError("access_denied", client.requiredScopes);

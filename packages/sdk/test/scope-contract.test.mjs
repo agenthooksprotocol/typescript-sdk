@@ -379,3 +379,53 @@ test('scope contract rule 12: every complete() error carries loginEnded', async 
   assert.equal(error.recovery, 'none');
   assert.equal(Object.hasOwn(new AuthError('access_denied'), 'loginEnded'), false);
 });
+
+/** The legacy auth() provider (Hooks' default) against an unbound CC target; `fetches` counts network requests. */
+function legacyFixture({ grant } = {}) {
+  const fetches = [], tokens = [];
+  const provider = auth({ validateDestination() {}, resolveHostname: async () => ['93.184.216.34'],
+    selectClient: () => ({ issuer: 'https://identity.example.com', resource: 'https://hooks.example.com/api', clientId: 'client',
+      flow: 'client_credentials', scopes: ['hooks'], allowedScopes: ['audit', 'hooks'], requiredScopes: ['hooks'] }),
+    async fetch(input, init) {
+      const target = String(input);
+      fetches.push(target);
+      if (target.includes('oauth-protected-resource')) return Response.json({ resource: 'https://hooks.example.com/api', authorization_servers: ['https://identity.example.com'] });
+      if (target.includes('well-known')) return Response.json({ issuer: 'https://identity.example.com', token_endpoint: 'https://identity.example.com/token', grant_types_supported: ['client_credentials'] });
+      const body = new URLSearchParams(String(init.body));
+      tokens.push(body);
+      return Response.json({ access_token: `token-${tokens.length}`, token_type: 'Bearer', expires_in: 3600, scope: grant ?? body.get('scope') });
+    } });
+  const url = 'https://hooks.example.com/api/events';
+  return { provider, fetches, tokens, url };
+}
+
+test('scope contract rule 3 (legacy auth): a known client refuses R outside the ceiling before any network I/O', async () => {
+  const f = legacyFixture();
+  assert.equal((await f.provider.authenticate({ url: f.url, challenged: true })).token, 'token-1');
+  const before = f.fetches.length;
+  await assert.rejects(f.provider.authenticate({ url: f.url, challenge: 'Bearer error="insufficient_scope", scope="admin"' }),
+    rejects('access_denied', ['admin', 'hooks']));
+  assert.equal(f.fetches.length, before, 'no protected-resource, issuer or token request');
+  // Unbound and unknown: only the protected-resource fetch that client selection needs.
+  const fresh = legacyFixture();
+  await assert.rejects(fresh.provider.authenticate({ url: fresh.url, challenge: 'Bearer error="insufficient_scope", scope="admin"' }),
+    rejects('access_denied', ['admin', 'hooks']));
+  assert.deepEqual(fresh.fetches, ['https://hooks.example.com/.well-known/oauth-protected-resource/api/events']);
+});
+
+test('scope contract unchanged (legacy auth): a step-up requirement is operation-scoped, a 401 scope only requested', async () => {
+  // The server never grants audit: the step-up fails for that operation only.
+  const f = legacyFixture({ grant: 'hooks' });
+  await f.provider.authenticate({ url: f.url, challenged: true });
+  await assert.rejects(f.provider.authenticate({ url: f.url, challenge: 'Bearer error="insufficient_scope", scope="audit"' }),
+    rejects('access_denied', ['audit', 'hooks']));
+  assert.deepEqual(f.tokens.at(-1).get('scope').split(' ').sort(), ['audit', 'hooks']);
+  // A later operation without the challenge requires host-required scopes only.
+  assert.equal((await f.provider.authenticate({ url: f.url })).token, 'token-2');
+  // A 401 scope joins the next request's scopes (within the ceiling), never R or the cache.
+  const g = legacyFixture({ grant: 'hooks' });
+  assert.equal((await g.provider.authenticate({ url: g.url, challenge: 'Bearer error="invalid_token", scope="audit admin"' })).token, 'token-1');
+  assert.deepEqual(g.tokens.at(-1).get('scope').split(' ').sort(), ['audit', 'hooks']);
+  assert.equal((await g.provider.authenticate({ url: g.url, challenged: true })).token, 'token-2');
+  assert.deepEqual(g.tokens.at(-1).get('scope').split(' '), ['hooks'], 'the 401 hint was not kept');
+});

@@ -249,7 +249,10 @@ coordinated store, secret hook or `prepare`, so a missing `clientId` fails
 `credential_unavailable`. It follows the same scope rules: refusals carry R
 (`OAuthClient.requiredScopes` ∪ a 403 `insufficient_scope` challenge's scopes),
 the challenge `scope` uses the strict RFC 6749 grammar, and a 401 `scope` is only
-requested.
+requested by that acquisition. With a known client, R outside the ceiling is
+refused before any network I/O (an unbound, unknown target first fetches only its
+protected-resource metadata). A challenge's requirement applies to that operation
+only: the discovery cache keeps host policy, never challenge scopes.
 
 ## Rotation, rejection and failure
 
