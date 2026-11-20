@@ -828,7 +828,7 @@ test('completion cancellation during current-client selection does not claim or 
   assert.equal((await managed.complete(callback, budget())).credential.token, 'access-1');
 });
 
-test('valid consent denial is claimed once without resolving unavailable runtime client credentials', async t => {
+test('valid consent denial runs host policy before it is claimed once', async t => {
   const f = await fixture(t); let unavailable = false, selections = 0;
   const managed = managedOAuth({ ...f.options, selectClient(...args) {
     selections++; if (unavailable) throw { code: 'credential_unavailable' };
@@ -837,8 +837,11 @@ test('valid consent denial is claimed once without resolving unavailable runtime
   const pending = await managed.prepare({ ...f.context, challenged: true }, budget());
   const denied = new URL(f.callback(pending)); denied.searchParams.delete('code'); denied.searchParams.set('error', 'access_denied');
   unavailable = true;
-  await assert.rejects(managed.complete(denied.href, budget()), { code: 'access_denied' });
-  assert.equal(selections, 1); assert.equal(f.tokens.length, 0);
+  // Host policy fails before the claim: its code, the login still pending.
+  await assert.rejects(managed.complete(denied.href, budget()), { code: 'credential_unavailable', loginEnded: false });
+  unavailable = false;
+  await assert.rejects(managed.complete(denied.href, budget()), { code: 'access_denied', loginEnded: true });
+  assert.equal(selections, 3); assert.equal(f.tokens.length, 0);
   await assert.rejects(managed.complete(denied.href, budget()), { code: 'interaction_required' });
 });
 

@@ -824,9 +824,10 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         let denied: boolean;
         try { denied = validateCallback(stored, login, callback); }
         catch { throw new AuthError("access_denied"); }
-        // 3. Host policy: reselect current client authentication before the claim.
+        // 3. Host policy (client selection, a client source no longer permitted) runs for
+        // every valid callback, a consent denial included, before the claim.
         const context = snapshotContext(record.context as DeliveryAuthContext);
-        const current = denied ? stored : await completionTarget(record, context, operation);
+        const current = await completionTarget(record, context, operation);
         // 4. Claim once; from here the login has ended.
         progress.phase = "claiming"; progress.claimed = record;
         const won = await claim(record, operation);

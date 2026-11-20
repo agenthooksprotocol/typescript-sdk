@@ -310,3 +310,30 @@ test('complete(): a cancellation reason that cannot carry loginEnded is wrapped,
   assert.equal(error.cause, 'caller gave up');
   assert.equal(error.loginEnded, false);
 });
+
+test('complete(): host policy runs before the claim for a consent denial too', async () => {
+  const pkce = () => ({ issuer, resource, clientId: 'client', flow: 'authorization_code_pkce', scopes: ['read'], allowedScopes: ['read'],
+    requiredScopes: [], redirectUri: 'https://app.example/callback' });
+  const denial = pending => `https://app.example/callback?error=access_denied&state=${pending.state}&iss=${encodeURIComponent(issuer)}`;
+  // A failing client selection keeps its code, carries no scopes and leaves the login pending.
+  let failing = true;
+  const client = pkce();
+  const w = managedWorld(client, { selectClient: () => {
+    if (failing) throw new AuthError('credential_unavailable', ['host-scope']);
+    return structuredClone(client);
+  } });
+  failing = false;
+  const pending = await w.oauth.prepare(w.context, budget());
+  failing = true;
+  await assert.rejects(w.oauth.complete(denial(pending), budget()), error =>
+    error.code === 'credential_unavailable' && error.requiredScopes === undefined && error.loginEnded === false);
+  failing = false;
+  await assert.rejects(w.oauth.complete(denial(pending), budget()), error => error.code === 'access_denied' && error.loginEnded === true);
+  // A client source no longer permitted: invalid_configuration, login pending.
+  const source = managedWorld(pkce());
+  const login = await source.oauth.prepare(source.context, budget());
+  delete source.client.clientId; source.client.registration = { clientName: 'x' };
+  await assert.rejects(source.oauth.complete(denial(login), budget()), error =>
+    error.code === 'invalid_configuration' && error.requiredScopes === undefined && error.loginEnded === false);
+  assert.equal([...source.store.values.keys()].filter(key => key.startsWith('ahp.oauth.pending:')).length, 1, 'the login is still pending');
+});
