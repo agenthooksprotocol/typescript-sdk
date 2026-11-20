@@ -1,6 +1,7 @@
 import type { Authentication } from "../draft/raw.js";
 import { AuthError, composeAuth, type AuthCompositionOptions, type AuthErrorCode } from "./auth-routing.js";
-import { bearerParameters, challengeScopes } from "./challenge.js";
+import { bearerParameters } from "./challenge.js";
+import { classify, coverage, decide, parseChallenge, type DecisionConfig, type DecisionOperation } from "./decision.js";
 import { responseScopes } from "./scope.js";
 export { AuthError, normalizeAuthTarget } from "./auth-routing.js";
 export type { AuthErrorCode, AuthRecovery, AuthTarget, AuthCompositionOptions } from "./auth-routing.js";
@@ -46,8 +47,18 @@ export interface AuthContext {
   url: string;
   signal?: AbortSignal;
   challenge?: string;
+  /**
+   * Status of the challenged response (401 or 403), set by Hooks on the replay. When
+   * absent with a `challenge`, `error="insufficient_scope"` means 403, otherwise 401.
+   */
+  challengeStatus?: number;
   /** Set on a 401 even when WWW-Authenticate is absent. */
   challenged?: boolean;
+  /**
+   * The credential the challenged response rejected, set by Hooks on the replay, so the
+   * provider can tell a newer stored grant from the one the server refused. Never log it.
+   */
+  rejectedCredential?: DeliveryCredential;
   cache?: Map<string, Credential>;
   /** Optional endpoint discovery state; factory also scopes this by cache identity. */
   discoveryCache?: Map<
@@ -521,16 +532,26 @@ function cacheKey(context: AuthContext, client: OAuthClient): string {
     [...(client.scopes ?? [])].sort(),
   ]);
 }
-/**
- * R for this operation: host-required ∪ the scopes of a 403 insufficient_scope challenge
- * (strict RFC 6749 list, else access_denied with no scopes; a 401's are only requested).
- * R outside the ceiling is refused, naming R.
- */
-function operationScopes(client: OAuthClient, context: AuthContext): string[] {
-  const ceiling = client.allowedScopes ?? client.scopes ?? [];
-  const required = [...new Set([...(client.requiredScopes ?? []), ...challengeScopes(bearerParameters(context.challenge)).required])].sort();
-  if (required.some((scope) => !ceiling.includes(scope))) throw new AuthError("access_denied", required);
-  return required;
+/** S, C, H and the preset's scopes of a legacy client, as `decide` reads them. */
+function legacyConfig(client: OAuthClient, context: AuthContext): DecisionConfig {
+  const binding = context.authentication as { type?: unknown; scopes?: unknown } | undefined;
+  const preset = binding?.type === "oauth" && Array.isArray(binding.scopes) ? binding.scopes as string[] : undefined;
+  return { flow: client.flow, requested: client.scopes ?? [], ceiling: client.allowedScopes ?? client.scopes ?? [],
+    hostRequired: client.requiredScopes ?? [], ...(preset ? { presetScopes: preset } : {}) };
+}
+function legacyChallenge(context: AuthContext) {
+  return parseChallenge(context.challengeStatus, context.challenge, context.challenged === true);
+}
+/** Steps 1-4 of `decide` for a selected client, before any authorization-server I/O. */
+function legacyGate(client: OAuthClient, context: AuthContext): void {
+  const { outcome } = decide({ op: "credential", config: legacyConfig(client, context), challenge: legacyChallenge(context) });
+  if (outcome.type === "fail" && outcome.step <= 4) throw outcome.error;
+}
+/** Section 4 at the legacy boundary: SDK auth errors keep scopes only from `decide`. */
+function legacyClassify(error: unknown): unknown {
+  let name: unknown;
+  try { name = (error as { name?: unknown } | null)?.name; } catch { return error; }
+  return error instanceof AuthError || name === "AuthError" ? classify(classifyAuthError(error)) : error;
 }
 
 function base64url(bytes: Uint8Array): string {
@@ -540,7 +561,8 @@ function base64url(bytes: Uint8Array): string {
     .replace(/=+$/, "");
 }
 function challengeParameter(challenge: string | undefined, name: string): string | undefined {
-  return bearerParameters(challenge).get(name);
+  // An unparseable challenge has no usable hint; `decide` refuses it (step 2).
+  try { return bearerParameters(challenge).get(name); } catch { return undefined; }
 }
 async function metadataAt(
   urls: string[],
@@ -592,17 +614,43 @@ const defaults: AuthProvider = {
       throw new Error("Invalid authentication credential expiry");
     return credential === undefined ? undefined : { type: "bearer", token: credential.token };
   },
-  // Drop the rejected access token so neither the replay nor a later delivery
-  // resends it; refresh material survives for the next authenticate.
-  challenge(context) {
-    // Only a 401 makes the token stale; 403 insufficient_scope keeps it for other operations.
+  // Step 0: a 401 drops the rejected access token first, so neither the replay nor a
+  // later delivery resends it; refresh material survives. Then the challenge is decided
+  // like every entry point; acting on it (renewal, login) is the replay's or the next call's.
+  async challenge(context) {
+    const status = context.response.status;
+    if (status !== 401 && status !== 403) return;
     const rejected = context.credential?.token;
-    if (context.response.status !== 401 || rejected === undefined || !context.cache) return;
-    for (const [key, cached] of context.cache) {
-      if (cached.token !== rejected) continue;
-      if (cached.refreshToken) context.cache.set(key, { ...cached, expiresAt: 0 });
-      else context.cache.delete(key);
+    if (status === 401 && rejected !== undefined && context.cache) {
+      for (const [key, cached] of context.cache) {
+        if (cached.token !== rejected) continue;
+        if (cached.refreshToken) context.cache.set(key, { ...cached, expiresAt: 0 });
+        else context.cache.delete(key);
+      }
     }
+    const binding = context.authentication as { type?: unknown } | undefined;
+    if (binding && binding.type !== "oauth") return;
+    const header = context.response.headers.get("www-authenticate") ?? undefined;
+    const challenged: AuthContext = { ...context, challenged: true, challengeStatus: status,
+      ...(header === undefined ? {} : { challenge: header }) };
+    const options = context.authOptions ?? {};
+    const discoveryKey = JSON.stringify([context.url, context.authentication ?? null]);
+    const known = context.discoveryCache?.get(discoveryKey);
+    if (!known) {
+      // No I/O here: the replay (or next call) discovers the client and decides fully.
+      // The challenge's own form is decided now, so an unreplayed request still fails.
+      const form = legacyChallenge(challenged);
+      if (form.kind === "invalid" || form.kind === "forbidden") throw new AuthError("access_denied");
+      return;
+    }
+    const { client } = known;
+    const cached = await withinBudget(Promise.resolve(this.getToken(cacheKey(context, client), context)), context.signal);
+    const now = (options.now ?? Date.now)();
+    const op: DecisionOperation = options.authorize ? "prepare" : "challenge";
+    const { outcome } = decide({ op, config: legacyConfig(client, context), challenge: legacyChallenge(challenged), sent: rejected,
+      grant: cached ? { generation: cached.token, granted: cached.scopes ?? [], refresh: cached.refreshToken !== undefined,
+        tokenValid: cached.expiresAt === undefined || cached.expiresAt > now + (options.expirySkewMs ?? 30_000) } : undefined });
+    if (outcome.type === "fail") throw outcome.error;
   },
   getToken(key, context) {
     return context.cache?.get(key);
@@ -686,10 +734,9 @@ const defaults: AuthProvider = {
     if (!client.clientId) throw new AuthError("credential_unavailable");
     if (!["authorization_code_pkce", "client_credentials"].includes(client.flow))
       error("invalid client configuration");
-    // R (host-required ∪ a 403 insufficient_scope challenge's scopes) outside the ceiling
-    // is refused before any issuer metadata I/O. The returned (and cached) client keeps
-    // only host-required scopes: a step-up requirement is operation-scoped.
-    operationScopes(client, context);
+    // decide steps 1-4 before any issuer metadata I/O. The returned (and cached) client
+    // keeps only host policy: a step-up requirement is operation-scoped.
+    legacyGate(client, context);
     const path =
       issuer.pathname === "/" ? "" : issuer.pathname.replace(/\/$/, "");
     const discovered = await metadataAt(
@@ -903,13 +950,16 @@ const defaults: AuthProvider = {
     const known = discoveryCache.get(discoveryKey);
     const challenged = context.challenged || context.challenge !== undefined;
     if (!binding && !challenged && !known) return undefined;
-    // With a known client, R is decided locally before challenge rediscovery.
-    if (known) operationScopes(known.client, context);
+    const challenge = legacyChallenge(context);
+    // An inline authorize hook makes this a sign-in (decide's prepare); otherwise PKCE
+    // without a usable grant needs a login this call cannot create.
+    const op: DecisionOperation = options.authorize ? "prepare" : "credential";
+    // With a known client, decide steps 1-4 locally before any rediscovery; only a 401
+    // rediscovers (honouring a resource_metadata hint).
+    if (known) legacyGate(known.client, context);
     const discovered =
-      known && !challenged ? known : await this.discover(context, options);
-    const { metadata } = discovered;
-    // This operation's R, never cached: host-required ∪ validated 403 challenge scopes.
-    const client: OAuthClient = { ...discovered.client, requiredScopes: operationScopes(discovered.client, context) };
+      known && challenge.status !== 401 ? known : await this.discover(context, options);
+    const { client, metadata } = discovered;
     if (known && cacheKey(context, known.client) !== cacheKey(context, client))
       error("OAuth identity changed");
     const key = cacheKey(context, client);
@@ -918,33 +968,20 @@ const defaults: AuthProvider = {
       context.signal,
     );
     const now = (options.now ?? Date.now)();
-    if (
-      cached &&
-      !context.challenged &&
-      context.challenge === undefined &&
-      (cached.expiresAt === undefined ||
-        cached.expiresAt > now + (options.expirySkewMs ?? 30_000))
-    ) {
-      if (client.requiredScopes?.some((scope: string) => !cached.scopes?.includes(scope)))
-        throw new AuthError("access_denied", client.requiredScopes);
-      return validateCredential(cached, options);
-    }
-    // Server says insufficient, but the cached grant records the whole requirement:
-    // replaying it or a new acquisition cannot help.
-    if (
-      cached?.scopes && client.requiredScopes?.length &&
-      bearerParameters(context.challenge).get("error") === "insufficient_scope" &&
-      client.requiredScopes.every((scope: string) => cached.scopes!.includes(scope))
-    ) {
-      throw new AuthError("access_denied", client.requiredScopes);
-    }
-    // Step-up requirements, and a 401 challenge's `scope` within the ceiling, are
-    // requested with this acquisition but are not identity.
-    const required = client.requiredScopes ?? [];
+    // The rejected token: the replay names it; a 401 otherwise rejects the cached token.
+    const sent = context.rejectedCredential?.token ?? (challenge.status === 401 ? cached?.token : undefined);
     const ceiling = client.allowedScopes ?? client.scopes ?? [];
-    const hinted = challengeScopes(bearerParameters(context.challenge)).hinted.filter((scope) => ceiling.includes(scope));
+    const decision = decide({ op, config: legacyConfig(client, context), challenge, sent,
+      grant: cached ? { generation: cached.token, granted: cached.scopes ?? [], refresh: cached.refreshToken !== undefined,
+        tokenValid: cached.expiresAt === undefined || cached.expiresAt > now + (options.expirySkewMs ?? 30_000) } : undefined });
+    const { outcome, required } = decision;
+    if (outcome.type === "fail") throw outcome.error;
+    if (outcome.type === "use") return validateCredential(cached!, options);
+    // decide's request set (previous ∪ ((S ∪ R [∪ P′]) ∩ C)); recorded against previous ∪ C.
     const request: TokenRequest = {
-      client: { ...client, scopes: [...new Set([...(client.scopes ?? []), ...hinted, ...required])] },
+      client: { ...client, requiredScopes: [...required],
+        ...(outcome.type === "refresh" ? {} : { scopes: [...outcome.request] }),
+        allowedScopes: [...new Set([...(cached?.scopes ?? []), ...ceiling])] },
       metadata,
       parameters: new URLSearchParams(),
     };
@@ -956,8 +993,7 @@ const defaults: AuthProvider = {
       return credential;
     };
     let credential: Credential;
-    // A refresh can never broaden a grant, so skip it when a requirement is missing.
-    if (cached?.refreshToken && required.every((scope: string) => cached.scopes?.includes(scope) ?? true)) {
+    if (outcome.type === "refresh" && cached?.refreshToken) {
       // Keep the record until the refresh succeeds or definitively fails; a
       // transient failure must not lose refresh material.
       const presented = cached.refreshToken;
@@ -984,7 +1020,7 @@ const defaults: AuthProvider = {
           refreshed = { ...refreshed, scopes: refreshed.scopes.filter((scope: string) => cached.scopes!.includes(scope)) };
         return commit(refreshed);
       })(), context.signal);
-    } else if (client.flow === "client_credentials") {
+    } else if (outcome.type === "acquire") {
       credential = await withinBudget(this.clientCredentials(context, request, options).then(commit), context.signal);
     } else {
       if (!options.authorize) error("interactive authorization unavailable");
@@ -1098,10 +1134,10 @@ const defaults: AuthProvider = {
         options,
       ).then(commit), context.signal);
     }
-    // The cached client holds host policy only; R above applied to this operation.
+    // The cached client holds host policy only; R applied to this operation.
     discoveryCache.set(discoveryKey, discovered);
-    if (client.requiredScopes?.some((scope: string) => !credential.scopes?.includes(scope)))
-      throw new AuthError("access_denied", client.requiredScopes);
+    const denied = coverage(required, credential.scopes ?? [], ceiling);
+    if (denied) throw denied;
     return credential;
   },
 };
@@ -1122,9 +1158,15 @@ export const auth = Object.assign(
     >();
     const authenticate = provider.authenticate;
     const challenge = provider.challenge;
-    provider.challenge = (context) =>
-      challenge.call(provider, { ...context, cache: context.cache ?? cache });
-    provider.authenticate = (context, options) => {
+    provider.challenge = async (context) => {
+      const tokens = context.cache ?? cache;
+      let discoveryCache = context.discoveryCache ?? discoveryCaches.get(tokens);
+      if (!discoveryCache) { discoveryCache = new Map(); discoveryCaches.set(tokens, discoveryCache); }
+      try {
+        return await challenge.call(provider, { ...context, cache: tokens, discoveryCache, provider, authOptions: { ...overrides, ...context.authOptions } });
+      } catch (error) { throw legacyClassify(error); }
+    };
+    provider.authenticate = async (context, options) => {
       const configured = { ...overrides, ...options };
       const tokens = context.cache ?? cache;
       let discoveryCache =
@@ -1133,17 +1175,19 @@ export const auth = Object.assign(
         discoveryCache = new Map();
         discoveryCaches.set(tokens, discoveryCache);
       }
-      return authenticate.call(
-        provider,
-        {
-          ...context,
-          cache: tokens,
-          discoveryCache,
+      try {
+        return await authenticate.call(
           provider,
-          authOptions: configured,
-        },
-        configured,
-      );
+          {
+            ...context,
+            cache: tokens,
+            discoveryCache,
+            provider,
+            authOptions: configured,
+          },
+          configured,
+        );
+      } catch (error) { throw legacyClassify(error); }
     };
     return provider;
   },

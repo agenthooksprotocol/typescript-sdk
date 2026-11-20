@@ -509,6 +509,8 @@ test('[up-front-client-credentials-reacquire] the lookup re-acquires an expired 
   const f = fixture({ flow: 'client_credentials', clientSecret: 'secret' });
   assert.equal((await f.oauth.prepare(f.context, budget())).credential.token, 'access-1');
   f.expire(); f.state.metadataDown = true;
+  // A client-credentials grant normally has no refresh token (decide refreshes one that does).
+  for (const [key, value] of f.store.values) if (value.kind === 'grant') { const { refreshToken: _r, ...rest } = value; f.store.values.set(key, rest); }
   const metadata = f.state.metadataCalls;
   const provider = managedOAuth(f.options).provider({ budget: () => budget() });
   assert.equal((await provider.credential(f.context)).token, 'access-2');
@@ -814,7 +816,7 @@ for (const [kind, configure] of [
   });
 }
 
-test('challenge handling alone rebinds a moved resource, without any token acquisition', async () => {
+test('challenge handling alone rebinds a moved resource, without any token acquisition or login', async () => {
   const f = fixture();
   const moved = movedIssuer(f, { oldUp: true });
   const fetch = moved.options.policyFetch;
@@ -831,7 +833,8 @@ test('challenge handling alone rebinds a moved resource, without any token acqui
   const { credential } = await f.login(oauth);
   const tokens = f.state.tokenCalls.length;
   rebound = true;
-  await provider.challenge({ ...f.context, credential, response: new Response(null, { status: 401 }) });
+  // Without a refresh token PKCE needs a login, which challenge handling never creates.
+  await assert.rejects(provider.challenge({ ...f.context, credential, response: new Response(null, { status: 401 }) }), { code: 'interaction_required' });
   assert.equal(f.state.tokenCalls.length, tokens, 'no acquisition ran');
   assert.equal([...f.store.values.values()].find(value => value.kind === 'binding').issuer, moved.NEW);
 });

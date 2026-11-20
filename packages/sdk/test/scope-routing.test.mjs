@@ -1,0 +1,312 @@
+// Scope contract v2, sections 5 and 7: every entry point produces `decide`'s outcome, the
+// transport routes challenges to the provider, a race uses the newer generation, an older
+// pending record still completes, and host failures carry no scopes.
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { Hooks } from 'agenthooksprotocol/client';
+import { managedOAuth } from '../dist/src/oauth/index.js';
+import { auth, AuthError } from '../dist/src/client/auth.js';
+import { observeDecisions } from '../dist/src/client/decision.js';
+
+const budget = () => ({ signal: new AbortController().signal, deadline: Date.now() + 5000 });
+const issuer = 'https://issuer.example', resource = 'https://api.example/events';
+const input = () => ({ call: { id: 'call' }, path: 'native', tool: { name: 'test', origin: 'native', input: {} } });
+
+function memoryStore() {
+  const values = new Map(), locks = new Map();
+  return {
+    values, failLoad: undefined,
+    grants: () => [...values].filter(([key]) => key.startsWith('ahp.oauth.grant:')).map(([, value]) => value),
+    async load(key, signal) { signal.throwIfAborted(); if (this.failLoad?.(key)) throw new AuthError('access_denied', ['store-scope']); return structuredClone(values.get(key)); },
+    async compareAndSet(key, expected, value) {
+      if (values.get(key)?.generation !== expected) return false;
+      if (value === undefined) values.delete(key); else values.set(key, structuredClone(value));
+      return true;
+    },
+    async coordinate(key, signal, work) {
+      const previous = locks.get(key) ?? Promise.resolve();
+      let release;
+      const next = new Promise(resolve => { release = resolve; });
+      locks.set(key, next);
+      try { await previous; signal.throwIfAborted(); return await work(); }
+      finally { release(); if (locks.get(key) === next) locks.delete(key); }
+    },
+  };
+}
+function managedWorld(client, extra = {}) {
+  const store = memoryStore(), state = { tokens: [], n: 0, network: 0, fail: undefined };
+  const options = { namespace: 'routing', store, persistPendingLogins: true,
+    selectClient: () => structuredClone(client), checkDestination: () => {},
+    async policyFetch(url, init) {
+      state.network++;
+      if (state.fail) return state.fail(url);
+      if (url === `${issuer}/token`) {
+        const body = new URLSearchParams(String(init.body)); state.tokens.push(body);
+        const n = ++state.n;
+        return Response.json({ access_token: `access-${n}`, token_type: 'Bearer', expires_in: 3600, scope: body.get('scope') ?? '',
+          ...(client.flow === 'client_credentials' ? {} : { refresh_token: `refresh-${n}` }) });
+      }
+      if (url.startsWith('https://api.example/.well-known/')) return Response.json({ resource, authorization_servers: [issuer] });
+      return Response.json({ issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`,
+        response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token', 'client_credentials'],
+        code_challenge_methods_supported: ['S256'], token_endpoint_auth_methods_supported: ['none', 'client_secret_basic'] });
+    }, ...extra };
+  const oauth = managedOAuth(options);
+  return { store, state, client, oauth, provider: oauth.provider({ budget }), context: { backendId: 'backend', purpose: 'event', url: resource } };
+}
+const cc = (overrides = {}) => ({ issuer, resource, clientId: 'client', clientSecret: 'secret', flow: 'client_credentials',
+  scopes: ['read'], allowedScopes: ['read', 'write'], requiredScopes: [], ...overrides });
+/** Run an entry point while recording every decision it makes. */
+async function decided(work) {
+  const decisions = [];
+  const stop = observeDecisions((decisionInput, decision) => decisions.push({ input: decisionInput, decision }));
+  try { return { outcome: await work().then(value => ({ value }), error => ({ error })), decisions }; } finally { stop(); }
+}
+function failedLike(result, code, scopes) {
+  assert.ok(result.decisions.length > 0, 'the entry point ran decide');
+  const last = result.decisions.at(-1).decision.outcome;
+  assert.equal(last.type, 'fail');
+  assert.equal(result.outcome.error?.code, code);
+  assert.equal(last.error.code, code);
+  assert.deepEqual([...(result.outcome.error.requiredScopes ?? [])], scopes);
+}
+
+test('[entry-points-route-through-decide] every TS entry point produces decide\'s outcome', async () => {
+  // H outside the ceiling: decide step 4 refuses with R on every path.
+  const managed = managedWorld(cc());
+  await managed.oauth.prepare(managed.context, budget());
+  const sent = await managed.provider.credential(managed.context);
+  managed.client.requiredScopes = ['admin'];
+  const preset = { ...managed.context, authentication: { type: 'oauth', issuer, resource, clientId: 'client', flow: 'client_credentials', scopes: ['read'] } };
+  const forbidden = new Response(null, { status: 403, headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="write"' } });
+  const entries = {
+    'managedOAuth.prepare': () => managed.oauth.prepare(managed.context, budget()),
+    'provider.credential (up-front lookup)': () => managed.provider.credential(managed.context),
+    'provider.credential (preset delivery)': () => managed.provider.credential(preset),
+    'provider.credential (challenged replay)': () => managed.provider.credential({ ...managed.context, challenged: true,
+      challenge: 'Bearer error="insufficient_scope", scope="write"', challengeStatus: 403, rejectedCredential: sent }),
+    'managedOAuth.challenge': () => managed.oauth.challenge({ ...managed.context, credential: sent, response: forbidden.clone() }, budget()),
+    'provider.challenge': () => managed.provider.challenge({ ...managed.context, credential: sent, response: forbidden.clone() }),
+  };
+  for (const [name, entry] of Object.entries(entries)) {
+    const result = await decided(entry);
+    assert.ok(result.outcome.error, name);
+    failedLike(result, 'access_denied', result.decisions.at(-1).decision.required);
+    assert.ok(result.outcome.error.requiredScopes.includes('admin'), name);
+  }
+  // The legacy auth() provider: authenticate, credential and challenge.
+  const legacyClient = { issuer: 'https://identity.example.com', resource: 'https://hooks.example.com/api', clientId: 'client',
+    flow: 'client_credentials', scopes: ['hooks'], allowedScopes: ['hooks'], requiredScopes: ['hooks'] };
+  const legacy = auth({ validateDestination() {}, resolveHostname: async () => ['93.184.216.34'], selectClient: () => ({ ...legacyClient }),
+    async fetch(url, init) {
+      const target = String(url);
+      if (target.includes('oauth-protected-resource')) return Response.json({ resource: legacyClient.resource, authorization_servers: [legacyClient.issuer] });
+      if (target.includes('well-known')) return Response.json({ issuer: legacyClient.issuer, token_endpoint: `${legacyClient.issuer}/token`, grant_types_supported: ['client_credentials'] });
+      return Response.json({ access_token: 'legacy-1', token_type: 'Bearer', expires_in: 3600, scope: new URLSearchParams(String(init.body)).get('scope') });
+    } });
+  const url = 'https://hooks.example.com/api/events', cache = new Map();
+  const legacyContext = { backendId: 'legacy', purpose: 'event', url, cache };
+  const first = await legacy.credential({ ...legacyContext, challenged: true });
+  legacyClient.requiredScopes = ['admin'];
+  const legacyEntries = {
+    'auth().authenticate': () => legacy.authenticate({ url, cache, challenged: true }),
+    'auth().credential': () => legacy.credential({ ...legacyContext, challenged: true }),
+    'auth().challenge': () => legacy.challenge({ ...legacyContext, credential: first,
+      response: new Response(null, { status: 403, headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="hooks"' } }) }),
+  };
+  for (const [name, entry] of Object.entries(legacyEntries)) {
+    const result = await decided(entry);
+    assert.ok(result.outcome.error, name);
+    failedLike(result, 'access_denied', [...result.decisions.at(-1).decision.required]);
+  }
+  // A malformed 403 and a 401 carrying error="insufficient_scope", through every challenge entry point.
+  const managedTwo = managedWorld(cc());
+  await managedTwo.oauth.prepare(managedTwo.context, budget());
+  const credential = await managedTwo.provider.credential(managedTwo.context);
+  const malformed = await decided(() => managedTwo.provider.challenge({ ...managedTwo.context, credential,
+    response: new Response(null, { status: 403, headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="read  write"' } }) }));
+  failedLike(malformed, 'access_denied', []);
+  const unauthorized = await decided(() => managedTwo.provider.challenge({ ...managedTwo.context, credential,
+    response: new Response(null, { status: 401, headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="admin"' } }) }));
+  assert.equal(unauthorized.outcome.error, undefined, 'a 401 never steps up');
+  assert.deepEqual([...unauthorized.decisions.at(-1).decision.required], []);
+});
+
+/** A Hooks client over an injected fetch: the endpoint answers from `respond`. */
+function hooksWith(provider, respond) {
+  const deliveries = [];
+  const hooks = new Hooks({ protocolVersion: 'draft', hooks: [{ id: 'routing.backend', transport: { type: 'http', url: resource },
+    subscriptions: [{ mode: 'intercept', events: ['tool.before'], timeoutMs: 5000, failurePolicy: 'fail-closed', content: { default: 'metadata' } }] }] },
+  { source: 'urn:test:scope-routing', harness: { name: 'test', version: '1' }, capabilities: { toolBefore: { intercept: { deny: true } } },
+    auth: provider, async fetch(_url, init) {
+      const message = JSON.parse(String(init.body));
+      deliveries.push({ authorization: new Headers(init.headers).get('authorization'), message });
+      const answer = respond(deliveries.length, deliveries.at(-1));
+      if (answer) return answer;
+      return Response.json({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: 'draft', effects: [] } });
+    } });
+  return { hooks, deliveries };
+}
+function spyProvider() {
+  const calls = [];
+  return { calls, credential: async () => ({ type: 'bearer', token: 'token' }), async challenge(context) {
+    calls.push({ status: context.response.status, header: context.response.headers.get('www-authenticate') });
+    if (context.response.status === 403 && /scope="[^"]*  /.test(context.response.headers.get('www-authenticate') ?? '')) throw new AuthError('access_denied');
+  } };
+}
+
+test('[transport-challenge-routing] the transport hands every 401, and only a parseable Bearer insufficient_scope 403, to the provider', async () => {
+  const cases = [
+    { status: 401, header: 'Bearer error="invalid_token"', provider: true },
+    { status: 401, header: 'Bearer scope="read", scope="write"', provider: true },
+    { status: 403, header: 'Bearer error="insufficient_scope", scope="write"', provider: true },
+    { status: 403, header: 'Bearer error="insufficient_scope", scope="read  write"', provider: true, failed: true },
+    { status: 403, header: 'Bearer error="invalid_token"', provider: false },
+    { status: 403, header: 'Bearer error="insufficient_scope", Bearer scope="x"', provider: false },
+    { status: 403, header: undefined, provider: false },
+  ];
+  for (const item of cases) {
+    const spy = spyProvider();
+    const { hooks, deliveries } = hooksWith(spy, n => n === 1 ? new Response('{}', { status: item.status, headers: item.header ? { 'www-authenticate': item.header } : {} }) : undefined);
+    try {
+      const result = await hooks.dispatch('tool.before', input());
+      const label = `${item.status} ${item.header}`;
+      assert.equal(spy.calls.length > 0, item.provider, label);
+      const diagnostics = result.diagnostics.filter(diagnostic => diagnostic.phase !== 'observation');
+      if (!item.provider) assert.equal(deliveries.length, 1, `${label}: returned without a retry`);
+      else if (item.failed) assert.equal(diagnostics[0]?.auth?.code, 'access_denied', label);
+      else assert.equal(deliveries.length, 2, `${label}: replayed once`);
+    } finally { await hooks.close(); }
+  }
+});
+
+test('[replay-rejection-retires-token] a token rejected on the replay is handed to the provider, so a 401 retires it', async () => {
+  const w = managedWorld(cc());
+  w.context.backendId = 'routing.backend';
+  await w.oauth.prepare(w.context, budget());
+  const { hooks, deliveries } = hooksWith(w.provider, () => new Response('{}', { status: 401, headers: { 'www-authenticate': 'Bearer error="invalid_token"' } }));
+  try {
+    await hooks.dispatch('tool.before', input());
+    assert.equal(deliveries.length, 2, 'replayed once');
+    assert.equal(deliveries[0].authorization, 'Bearer access-1');
+    assert.equal(deliveries[1].authorization, 'Bearer access-2');
+    // The replay's token was rejected too: the provider renewed it, so access-2 is never resent.
+    assert.notEqual(w.store.grants()[0].token, 'access-2');
+    assert.equal(w.state.tokens.length, 3);
+  } finally { await hooks.close(); }
+});
+
+test('race: a newer stored generation than the one sent is used (decide step 5)', async () => {
+  const w = managedWorld(cc({ scopes: ['read', 'write'] }));
+  await w.oauth.prepare(w.context, budget());
+  const sent = await w.provider.credential(w.context);
+  // Another process stepped up meanwhile: a newer generation already covers R.
+  await w.oauth.prepare(w.context, budget(), { forceRegistration: false });
+  for (const [key, value] of w.store.values) if (value.kind === 'grant') w.store.values.set(key, { ...value, generation: 'newer', token: 'access-newer', scopes: ['read', 'write'] });
+  const header = 'Bearer error="insufficient_scope", scope="write"';
+  const tokens = w.state.tokens.length;
+  await w.provider.challenge({ ...w.context, credential: sent, response: new Response(null, { status: 403, headers: { 'www-authenticate': header } }) });
+  const replay = await w.provider.credential({ ...w.context, challenged: true, challenge: header, challengeStatus: 403, rejectedCredential: sent });
+  assert.equal(replay.token, 'access-newer');
+  assert.equal(w.state.tokens.length, tokens, 'no acquisition, no login');
+  // The same generation covering R is the server disagreeing with our record: access_denied with R.
+  const current = await w.provider.credential(w.context);
+  await assert.rejects(w.provider.challenge({ ...w.context, credential: current, response: new Response(null, { status: 403, headers: { 'www-authenticate': header } }) }),
+    error => error.code === 'access_denied' && error.requiredScopes.join() === 'write');
+});
+
+test('upgrade: a pending record without a stored R completes against its prepare-time H, else the current H', async () => {
+  for (const [prepareTime, current, expected] of [[['write'], ['read'], ['write']], [undefined, ['write'], ['write']]]) {
+    const pkce = { issuer, resource, clientId: 'client', flow: 'authorization_code_pkce', scopes: ['read'], allowedScopes: ['read', 'write'],
+      requiredScopes: [], redirectUri: 'https://app.example/callback' };
+    const w = managedWorld(pkce);
+    const pending = await w.oauth.prepare(w.context, budget());
+    const [key, record] = [...w.store.values].find(([name]) => name.startsWith('ahp.oauth.pending:'));
+    const { requiredScopes: _stored, ...older } = record;
+    const { requiredScopes: _host, ...client } = older.client;
+    w.store.values.set(key, { ...older, client: prepareTime ? { ...client, requiredScopes: prepareTime } : client });
+    w.client.requiredScopes = current;
+    const callback = `https://app.example/callback?code=c&state=${pending.state}&iss=${encodeURIComponent(issuer)}`;
+    await assert.rejects(w.oauth.complete(callback, budget()), error => {
+      assert.equal(error.code, 'access_denied');
+      assert.deepEqual([...error.requiredScopes], expected);
+      assert.equal(error.loginEnded, true);
+      return true;
+    });
+  }
+});
+
+test('host failures (store, network, callback and source) carry no scopes', async () => {
+  // Store.
+  const store = managedWorld(cc());
+  store.store.failLoad = () => true;
+  await assert.rejects(store.oauth.prepare(store.context, budget()), error => error.code === 'access_denied' && error.requiredScopes === undefined);
+  // Network: a host policyFetch rejecting with a scoped error.
+  const network = managedWorld(cc());
+  network.state.fail = () => { throw new AuthError('interaction_required', ['network-scope']); };
+  await assert.rejects(network.oauth.prepare(network.context, budget()), error => error.code === 'interaction_required' && error.requiredScopes === undefined);
+  // Callback: client selection.
+  const selection = managedWorld(cc(), { selectClient: () => { throw new AuthError('access_denied', ['selection-scope']); } });
+  await assert.rejects(selection.oauth.prepare(selection.context, budget()), error => error.code === 'access_denied' && error.requiredScopes === undefined);
+  // Callback: destination policy.
+  const destination = managedWorld(cc(), { checkDestination: () => { throw new AuthError('access_denied', ['destination-scope']); } });
+  await assert.rejects(destination.oauth.prepare(destination.context, budget()), error => error.code === 'access_denied' && error.requiredScopes === undefined);
+  // Source: the client source is no longer permitted at completion.
+  const pkce = { issuer, resource, clientId: 'client', flow: 'authorization_code_pkce', scopes: ['read'], allowedScopes: ['read'], requiredScopes: ['read'],
+    redirectUri: 'https://app.example/callback' };
+  const source = managedWorld(pkce);
+  const pending = await source.oauth.prepare(source.context, budget());
+  delete source.client.clientId; source.client.registration = { clientName: 'x' };
+  await assert.rejects(source.oauth.complete(`https://app.example/callback?code=c&state=${pending.state}&iss=${encodeURIComponent(issuer)}`, budget()),
+    error => error.code === 'invalid_configuration' && error.requiredScopes === undefined && error.loginEnded === false);
+  // The legacy provider: a host selectClient error with scopes.
+  const legacy = auth({ validateDestination() {}, resolveHostname: async () => ['93.184.216.34'],
+    selectClient: () => { throw new AuthError('access_denied', ['legacy-scope']); },
+    async fetch() { return Response.json({ resource: 'https://hooks.example.com/api', authorization_servers: ['https://identity.example.com'] }); } });
+  await assert.rejects(legacy.authenticate({ url: 'https://hooks.example.com/api/events', challenged: true }),
+    error => error.code === 'access_denied' && error.requiredScopes === undefined);
+  // loginEnded appears only on complete() errors.
+  const other = await store.oauth.prepare(store.context, budget()).catch(error => error);
+  assert.equal(Object.hasOwn(other, 'loginEnded'), false);
+});
+
+test('legacy auth(): configuration, challenge form and unreplayed failures come from decide', async () => {
+  const make = overrides => {
+    const client = { issuer: 'https://identity.example.com', resource: 'https://hooks.example.com/api', clientId: 'client',
+      flow: 'client_credentials', scopes: ['hooks'], ...overrides };
+    return auth({ validateDestination() {}, resolveHostname: async () => ['93.184.216.34'], selectClient: () => ({ ...client }),
+      async fetch(url, init) {
+        const target = String(url);
+        if (target.includes('oauth-protected-resource')) return Response.json({ resource: client.resource, authorization_servers: [client.issuer] });
+        if (target.includes('well-known')) return Response.json({ issuer: client.issuer, token_endpoint: `${client.issuer}/token`, grant_types_supported: ['client_credentials'] });
+        return Response.json({ access_token: 'legacy-1', token_type: 'Bearer', expires_in: 3600, scope: new URLSearchParams(String(init.body)).get('scope') });
+      } });
+  };
+  const url = 'https://hooks.example.com/api/events';
+  // Step 1: S ⊄ C.
+  await assert.rejects(make({ allowedScopes: [] }).authenticate({ url, challenged: true }), error => error.code === 'invalid_configuration');
+  // Step 2: a duplicated scope parameter is access_denied, not discovery_failed.
+  await assert.rejects(make({}).authenticate({ url, challenge: 'Bearer error="insufficient_scope", scope="a", scope="b"', challengeStatus: 403 }),
+    error => error.code === 'access_denied' && error.requiredScopes === undefined);
+  // challenge() decides with the known client: no scope and no H, or a malformed scope, fails even unreplayed.
+  const provider = make({}), cache = new Map(), context = { backendId: 'legacy', purpose: 'event', url, cache };
+  const credential = await provider.credential({ ...context, challenged: true });
+  for (const header of ['Bearer error="insufficient_scope"', 'Bearer error="insufficient_scope", scope="hooks  hooks"']) {
+    await assert.rejects(provider.challenge({ ...context, credential, response: new Response(null, { status: 403, headers: { 'www-authenticate': header } }) }),
+      error => error.code === 'access_denied' && error.requiredScopes === undefined, header);
+  }
+});
+
+test('complete(): a cancellation reason that cannot carry loginEnded is wrapped, keeping it as the cause', async () => {
+  const pkce = { issuer, resource, clientId: 'client', flow: 'authorization_code_pkce', scopes: ['read'], allowedScopes: ['read'], requiredScopes: [],
+    redirectUri: 'https://app.example/callback' };
+  const w = managedWorld(pkce);
+  const pending = await w.oauth.prepare(w.context, budget());
+  const controller = new AbortController();
+  controller.abort('caller gave up');
+  const error = await w.oauth.complete(`https://app.example/callback?code=c&state=${pending.state}`, { signal: controller.signal, deadline: Date.now() + 1000 })
+    .catch(failure => failure);
+  assert.equal(error.name, 'AbortError');
+  assert.equal(error.cause, 'caller gave up');
+  assert.equal(error.loginEnded, false);
+});

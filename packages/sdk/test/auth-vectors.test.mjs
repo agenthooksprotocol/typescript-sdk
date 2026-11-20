@@ -1,26 +1,63 @@
-// Executes the shared scope_decisions and completions vectors against managedOAuth at
-// its real host boundaries (policyFetch, store, selectClient, checkDestination).
+// The decision table (scope contract v2, section 7): every shared scope_decisions and
+// completions vector, run against managedOAuth at its real host boundaries (policyFetch,
+// store, selectClient, checkDestination). Every field a vector defines is asserted; a
+// field the spec does not define fails the run.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { managedOAuth } from '../dist/src/oauth/index.js';
 import { AuthError } from '../dist/src/client/auth.js';
+import { observeDecisions } from '../dist/src/client/decision.js';
 import { KNOWN_FEATURES, skipFor } from './fixtures/sdk-features.mjs';
 
 const vectors = JSON.parse(readFileSync(new URL('../testdata/sdk-auth-lifecycle.json', import.meta.url), 'utf8'));
 const budget = () => ({ signal: new AbortController().signal, deadline: Date.now() + 5000 });
 const sorted = (...sets) => [...new Set(sets.flat())].sort();
-const issuer = 'https://issuer.example', resource = 'https://api.example/events', redirect = 'https://app.example/callback';
-const cimdUrl = 'https://app.example/client.json';
+const issuer = 'https://issuer.example', resource = 'https://api.example/events';
+const redirect = 'https://app.example/callback?app=1', cimdUrl = 'https://app.example/client.json';
+const generation = n => `generation-${n}`;
+
+/** The last decision's R during an operation: the probe sees every `decide` call. */
+let lastRequired;
+observeDecisions((_input, decision) => { lastRequired = [...decision.required]; });
+
+// The field vocabulary of spec/draft/sdk-auth-lifecycle.md (Executable coverage).
+const VECTOR_FIELDS = ['id', 'requires', 'input', 'expect'];
+const SCOPE_INPUT = ['flow', 'path', 'binding', 'requested', 'host_required', 'explicit', 'ceiling', 'preset_scopes', 'grant', 'sent',
+  'challenge', 'prior_401_hint', 'host_error'];
+const SCOPE_EXPECT = ['code', 'scopes', 'required', 'action', 'acquisition_scopes', 'retired', 'authorization_server_requests',
+  'network_calls', 'network_calls_max'];
+const COMPLETION_INPUT = ['pending', 'handle', 'client_source', 'source_permitted', 'callback', 'host_error', 'claim', 'exchange',
+  'stored_required', 'prepare_time_host_required', 'current_host_required', 'granted', 'ceiling'];
+const COMPLETION_EXPECT = ['code', 'scopes', 'login_ended', 'grant_persisted'];
+function defined(vector, input, expect) {
+  for (const key of Object.keys(vector)) assert.ok(VECTOR_FIELDS.includes(key), `${vector.id}: unknown vector field ${key}`);
+  for (const key of Object.keys(vector.input)) assert.ok(input.includes(key), `${vector.id}: unknown input field ${key}`);
+  for (const key of Object.keys(vector.expect)) assert.ok(expect.includes(key), `${vector.id}: unknown expect field ${key}`);
+}
+function compare(vector, result) {
+  for (const [key, want] of Object.entries(vector.expect)) {
+    if (key === 'network_calls_max') assert.ok(result.network_calls <= want, `${vector.id}: network_calls ${result.network_calls} > ${want}`);
+    else assert.deepEqual(result[key], want, `${vector.id}: ${key} in ${JSON.stringify(result)}`);
+  }
+}
 
 function memoryStore() {
-  const values = new Map(), locks = new Map();
+  const values = new Map(), locks = new Map(), writes = [];
   return {
-    values,
-    async load(key, signal) { signal.throwIfAborted(); return structuredClone(values.get(key)); },
+    values, writes, failClaim: undefined, failLoad: undefined,
+    async load(key, signal) {
+      signal.throwIfAborted();
+      if (this.failLoad?.(key)) throw new Error('store unavailable');
+      return structuredClone(values.get(key));
+    },
     async compareAndSet(key, expected, value) {
+      writes.push({ key, expected, value: value && structuredClone(value) });
+      const failure = this.failClaim?.(key, value);
+      if (failure === 'before') throw new Error('store unavailable');
       if (values.get(key)?.generation !== expected) return false;
       if (value === undefined) values.delete(key); else values.set(key, structuredClone(value));
+      if (failure === 'after') throw new Error('store unavailable');
       return true;
     },
     async coordinate(key, signal, work) {
@@ -34,30 +71,27 @@ function memoryStore() {
   };
 }
 
-/**
- * One host and authorization server. `state.network` counts every policyFetch and
- * `state.authorizationServer` those to the issuer (metadata, registration, token).
- */
-function world({ flow, requested, ceiling, required, source = 'preregistered', extra = {} }) {
+/** One host and authorization server; `state.network` counts every request, `state.authorizationServer` the issuer's. */
+function world({ flow, requested, ceiling, required = [], source = 'preregistered', extra = {} }) {
   const store = memoryStore(), secrets = new Map();
-  const state = { network: 0, authorizationServer: 0, tokens: [], scope: undefined, tokenError: undefined, n: 0,
-    hostError: undefined, noRefresh: false };
+  const state = { network: 0, authorizationServer: 0, tokens: [], scope: undefined, tokenError: undefined, n: 0, hostError: undefined };
   const client = { issuer, resource, flow, scopes: requested, allowedScopes: ceiling, requiredScopes: required, redirectUri: redirect,
     ...(source === 'preregistered' ? { clientId: 'client' } : {}),
     ...(source === 'preregistered' && flow === 'client_credentials' ? { clientSecret: 'secret' } : {}),
     ...(source === 'cimd' ? { clientMetadataDocument: { url: cimdUrl, redirectUris: [redirect] } } : {}),
     ...(source === 'dcr' ? { registration: { clientName: 'vectors' } } : {}) };
+  const hostError = callback => {
+    const failure = state.hostError;
+    if (failure?.callback === callback) throw new AuthError(failure.code, failure.scopes);
+  };
   const options = {
     namespace: 'vectors', store,
     secrets: { async put(ref, value) { secrets.set(ref, value); }, async get(ref) { return secrets.get(ref); }, async delete(ref) { secrets.delete(ref); } },
-    selectClient: () => {
-      if (state.hostError?.callback === 'client_selection') throw new AuthError(state.hostError.code, state.hostError.scopes);
-      return structuredClone(client);
-    },
-    checkDestination: (_url, purpose) => {
-      if (state.hostError?.callback === 'destination' && state.hostError.target === 'registration_endpoint' && purpose === 'registration') {
-        throw new AuthError(state.hostError.code, state.hostError.scopes);
-      }
+    selectClient: () => { hostError('client_selection'); return structuredClone(client); },
+    checkDestination: (url, purpose) => {
+      const failure = state.hostError;
+      if (failure?.callback === 'destination' && ((failure.target === 'registration_endpoint' && purpose === 'registration') ||
+          (failure.target === 'issuer_metadata' && purpose === 'metadata' && url.origin === issuer))) hostError('destination');
     },
     async policyFetch(url, init) {
       state.network++;
@@ -72,9 +106,9 @@ function world({ flow, requested, ceiling, required, source = 'preregistered', e
         state.tokens.push(body);
         if (state.tokenError) return state.tokenError();
         const n = ++state.n;
+        // Client credentials issue no refresh token (RFC 6749 section 4.4.3).
         return Response.json({ access_token: `access-${n}`, token_type: 'Bearer', expires_in: 3600,
-          ...(flow === 'client_credentials' || state.noRefresh ? {} : { refresh_token: `refresh-${n}` }),
-          scope: state.scope ?? body.get('scope') ?? '' });
+          ...(flow === 'client_credentials' ? {} : { refresh_token: `refresh-${n}` }), scope: state.scope ?? body.get('scope') ?? '' });
       }
       if (url.startsWith('https://api.example/.well-known/')) return Response.json({ resource, authorization_servers: [issuer] });
       return Response.json({ issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`,
@@ -87,159 +121,206 @@ function world({ flow, requested, ceiling, required, source = 'preregistered', e
   const oauth = managedOAuth(options);
   return { store, state, client, oauth, provider: oauth.provider({ budget }) };
 }
-const grants = w => [...w.store.values].filter(([key]) => key.startsWith('ahp.oauth.grant:')).map(([, value]) => value);
 const settle = async promise => { try { return { value: await promise }; } catch (error) { return { error }; } };
 const urlScopes = pending => sorted(new URL(pending.authorizationUrl).searchParams.get('scope').split(' '));
+const grantKeys = w => [...w.store.values.keys()].filter(key => key.startsWith('ahp.oauth.grant:'));
 const callbackFor = (pending, params = {}) => {
   const url = new URL(redirect);
-  url.search = new URLSearchParams({ code: 'code', state: pending.state, iss: issuer, ...params }).toString();
+  for (const [name, value] of Object.entries({ code: 'code', state: pending.state, iss: issuer, ...params })) {
+    if (value !== undefined) url.searchParams.set(name, value);
+  }
   return url.href;
 };
-/** Outcome fields comparable with a vector's `expect` (`required` is asserted through `scopes`). */
-function observed(outcome) {
-  if (!outcome.error) return { code: null };
-  assert.ok(outcome.error instanceof AuthError, `not an AuthError: ${outcome.error?.stack ?? outcome.error}`);
-  const { code } = outcome.error;
-  return { code, ...(['access_denied', 'interaction_required'].includes(code) ? { scopes: [...(outcome.error.requiredScopes ?? [])] } : {}) };
-}
-function compare(expect, result) {
-  for (const [key, want] of Object.entries(expect)) {
-    if (key === 'required') continue;
-    assert.deepEqual(result[key], want, `${key}: ${JSON.stringify(result)}`);
-  }
+function errorFields(error) {
+  assert.ok(error instanceof AuthError, `not an AuthError: ${error?.stack ?? error}`);
+  return { code: error.code, ...(['access_denied', 'interaction_required'].includes(error.code) ? { scopes: [...(error.requiredScopes ?? [])] } : {}) };
 }
 
+/** Seed the stored binding and a grant through the real flows, with a valid configuration. */
+async function seed(w, context, input) {
+  const valid = input.requested.filter(scope => (input.ceiling ?? input.requested).includes(scope));
+  Object.assign(w.client, { scopes: valid, requiredScopes: [] });
+  if (input.binding === 'preset' && input.preset_scopes) w.client.scopes = [...input.preset_scopes];
+  if (input.flow === 'client_credentials') await w.oauth.prepare(context, budget());
+  else await w.oauth.complete(callbackFor(await w.oauth.prepare(context, budget())), budget());
+}
+function writeGrant(w, key, grant) {
+  if (!grant) { w.store.values.delete(key); return; }
+  w.store.values.set(key, { kind: 'grant', generation: generation(grant.generation), scopes: [...grant.granted],
+    token: `seeded-${grant.generation}`, expiresAt: grant.token === 'valid' ? Date.now() + 3_600_000 : Date.now() - 1,
+    ...(grant.refresh ? { refreshToken: `seeded-refresh-${grant.generation}` } : {}) });
+}
 
-async function decide(input) {
-  const preset = input.preset_scopes ?? [], requested = sorted(input.requested), ceiling = input.ceiling ?? requested;
-  const w = world({ flow: input.flow, requested, ceiling, required: [],
+async function decideVector(input) {
+  const ceiling = input.ceiling ?? input.requested;
+  const w = world({ flow: input.flow, requested: [...input.requested], ceiling: [...ceiling],
     source: input.host_error?.target === 'registration_endpoint' ? 'dcr' : 'preregistered' });
-  const context = { backendId: 'backend', purpose: 'event', url: resource,
-    ...(input.binding === 'preset' ? { authentication: { type: 'oauth', issuer, resource, clientId: 'client', flow: input.flow, scopes: preset } } : {}) };
-  // Seed the stored binding (and the grant) through the real flows, with a valid configuration.
-  const seeded = input.binding === 'stored' || (!['fresh', 'prepare'].includes(input.path) && input.granted !== null);
-  if (seeded) {
-    w.client.scopes = requested.filter(scope => ceiling.includes(scope));
-    if (input.binding === 'preset') w.client.scopes = preset;
-    w.state.scope = (input.granted ?? w.client.scopes).join(' ');
-    if (input.flow === 'client_credentials') await w.oauth.prepare(context, budget());
-    else await w.oauth.complete(callbackFor(await w.oauth.prepare(context, budget())), budget());
-    if (input.granted === null) {
-      for (const key of [...w.store.values.keys()]) if (/^ahp\.oauth\.(grant|registration)/.test(key)) w.store.values.delete(key);
+  const authentication = { type: 'oauth', issuer, resource, clientId: 'client', flow: input.flow,
+    ...(input.preset_scopes ? { scopes: [...input.preset_scopes] } : {}) };
+  const context = { backendId: 'backend', purpose: 'event', url: resource, ...(input.binding === 'preset' ? { authentication } : {}) };
+  let sent, key;
+  if (input.binding !== 'unbound' && (input.binding === 'stored' || input.grant)) {
+    await seed(w, context, input);
+    [key] = grantKeys(w);
+    // An earlier operation's 401 hint: it must not reach this operation.
+    if (input.prior_401_hint) {
+      const credential = await w.provider.credential(context);
+      await settle(w.provider.challenge({ ...context, credential,
+        response: new Response(null, { status: 401, headers: { 'www-authenticate': `Bearer scope="${input.prior_401_hint.join(' ')}"` } }) }));
     }
-    w.client.scopes = requested;
-    w.state.scope = undefined;
+    if (input.sent !== undefined && input.sent !== null) {
+      // The credential the challenged request sent: generation `sent`.
+      writeGrant(w, key, { generation: input.sent, granted: input.grant?.granted ?? [], token: 'valid', refresh: false });
+      sent = await w.provider.credential(context);
+    }
+    writeGrant(w, key, input.grant);
+    if (input.grant === null) for (const stale of [...w.store.values.keys()]) if (stale.startsWith('ahp.oauth.registration')) w.store.values.delete(stale);
   }
-  // A retired PKCE token is modelled without a refresh token.
-  w.state.noRefresh = input.flow === 'authorization_code_pkce';
-  for (const [key, grant] of w.store.values) if (key.startsWith('ahp.oauth.grant:') && w.state.noRefresh) w.store.values.set(key, { ...grant, refreshToken: undefined });
-  w.client.requiredScopes = input.host_required;
-  let sent;
-  if (input.path === 'challenge' && input.granted !== null) {
-    w.client.requiredScopes = [];
-    sent = await w.provider.credential(context);
-    w.client.requiredScopes = input.host_required;
-  }
+  Object.assign(w.client, { scopes: [...input.requested], allowedScopes: [...ceiling], requiredScopes: [...input.host_required] });
   w.state.hostError = input.host_error;
-  const tokensBefore = w.state.tokens.length;
-  w.state.network = 0; w.state.authorizationServer = 0;
+  const tokensBefore = w.state.tokens.length, writesBefore = w.store.writes.length;
+  w.state.network = 0; w.state.authorizationServer = 0; lastRequired = undefined;
   let outcome;
-  if (input.path === 'prepare' || input.path === 'fresh') outcome = await settle(w.oauth.prepare(context, budget(), { requiredScopes: input.explicit }));
+  if (input.path === 'prepare') outcome = await settle(w.oauth.prepare(context, budget(), { requiredScopes: input.explicit }));
   else if (input.path === 'challenge') {
     const response = new Response(null, { status: input.challenge.status, headers: { 'www-authenticate': input.challenge.www_authenticate } });
     outcome = await settle(w.provider.challenge({ ...context, response, credential: sent }));
-    // The transport's replay carries the challenge.
-    if (!outcome.error) outcome = await settle(w.provider.credential({ ...context, challenged: true, challenge: input.challenge.www_authenticate }));
+  } else if (input.path === 'fresh' && input.binding === 'unbound') {
+    // TypeScript sends anonymously to an unbound, unknown target; its first decision is the challenged retry.
+    outcome = await settle(w.provider.credential({ ...context, challenged: true }));
   } else outcome = await settle(w.provider.credential(context));
-  const result = { ...observed(outcome), network_calls: w.state.network, authorization_server_requests: w.state.authorizationServer };
-  if (sent) result.retired = grants(w)[0]?.token !== sent.token;
-  if (!outcome.error) {
-    const pending = outcome.value?.type === 'pending_login';
-    result.action = pending ? 'login' : w.state.tokens.length > tokensBefore ? 'acquire' : 'use';
-    if (pending) result.acquisition_scopes = urlScopes(outcome.value);
-    else if (result.action === 'acquire') result.acquisition_scopes = sorted(w.state.tokens.at(-1).get('scope').split(' '));
-  } else if (result.code === 'interaction_required') {
-    // The next sign-in: host prepare with the error's scope set (and the challenge, for a 401 hint).
-    w.state.hostError = undefined;
-    const pending = await w.oauth.prepare({ ...context, ...(input.challenge ? { challenge: input.challenge.www_authenticate } : {}) },
-      budget(), { requiredScopes: result.scopes });
-    result.acquisition_scopes = urlScopes(pending);
+  const result = { network_calls: w.state.network, authorization_server_requests: w.state.authorizationServer, required: lastRequired };
+  if (input.challenge?.status === 401) {
+    const sentGeneration = input.sent === null || input.sent === undefined ? undefined : generation(input.sent);
+    result.retired = w.store.writes.slice(writesBefore).some(write => write.key === key && sentGeneration !== undefined &&
+      write.expected === sentGeneration && write.value && write.value.token === undefined);
   }
+  if (outcome.error) return { ...result, ...errorFields(outcome.error) };
+  const tokens = w.state.tokens.slice(tokensBefore);
+  result.code = null;
+  if (outcome.value?.type === 'pending_login') { result.action = 'login'; result.acquisition_scopes = urlScopes(outcome.value); }
+  else if (tokens.some(body => body.get('grant_type') === 'client_credentials')) {
+    result.action = 'acquire';
+    result.acquisition_scopes = sorted(tokens.at(-1).get('scope').split(' '));
+  } else if (tokens.some(body => body.get('grant_type') === 'refresh_token')) result.action = 'refresh';
+  else result.action = 'use';
   return result;
 }
 
 for (const vector of vectors.scope_decisions) {
   test(`shared scope decision: ${vector.id}`, { skip: skipFor(vector) }, async () => {
-    compare(vector.expect, await decide(vector.input));
+    defined(vector, SCOPE_INPUT, SCOPE_EXPECT);
+    compare(vector, await decideVector(vector.input));
   });
 }
 
-async function complete(input, source = input.client_source ?? 'preregistered') {
-  const w = world({ flow: 'authorization_code_pkce', requested: ['read'], ceiling: sorted(input.stored_required, input.ceiling),
-    required: input.stored_required, source, extra: input.pending === 'expired' ? { loginLifetimeMs: 1 } : {} });
+async function completeVector(input) {
+  const source = input.client_source;
+  const ceiling = sorted(input.stored_required ?? [], input.prepare_time_host_required ?? [], input.current_host_required ?? [], input.ceiling);
+  const w = world({ flow: 'authorization_code_pkce', requested: ['read'], ceiling, source,
+    required: input.stored_required ?? input.prepare_time_host_required ?? [],
+    extra: { persistPendingLogins: true, ...(input.pending === 'expired' ? { loginLifetimeMs: 1 } : {}) } });
   const context = { backendId: 'backend', purpose: 'event', url: resource };
   const pending = await w.oauth.prepare(context, budget());
+  const pendingKey = [...w.store.values.keys()].find(key => key.startsWith('ahp.oauth.pending:'));
+  if (input.stored_required === null) {
+    // A record written by an older release: no stored R; perhaps its prepare-time H.
+    const { requiredScopes: _r, ...record } = w.store.values.get(pendingKey);
+    const { requiredScopes: _h, ...client } = record.client;
+    w.store.values.set(pendingKey, { ...record, client: input.prepare_time_host_required ? { ...client, requiredScopes: input.prepare_time_host_required } : client });
+  }
   if (input.pending === 'expired') await new Promise(resolve => setTimeout(resolve, 5));
   if (input.pending === 'ended') await w.oauth.cancel(pending, budget());
-  // The host's current ceiling at completion; the login keeps the R it was prepared with.
-  w.client.allowedScopes = input.ceiling;
-  w.state.scope = input.granted.join(' ');
-  const params = { code: 'code', state: input.pending === 'unknown' ? 'unknown-state' : pending.state, iss: issuer };
-  const url = new URL(redirect);
-  switch (input.callback) {
-    case 'denied': delete params.code; params.error = 'access_denied'; break;
-    case 'redirect_mismatch': url.pathname = '/other'; break;
-    case 'iss_mismatch': params.iss = 'https://evil.example'; break;
-    case 'missing_code': delete params.code; break;
-    case 'missing_state': delete params.state; break;
+  // Current host policy at completion.
+  Object.assign(w.client, { allowedScopes: [...input.ceiling], scopes: ['read'], requiredScopes: input.current_host_required ?? input.stored_required ?? [] });
+  if (!input.source_permitted) {
+    // Host policy now selects another client source for this grant.
+    if (source === 'preregistered') { delete w.client.clientId; w.client.registration = { clientName: 'vectors' }; }
+    else { delete w.client.registration; delete w.client.clientMetadataDocument; w.client.clientId = 'client'; }
   }
-  url.search = new URLSearchParams(params).toString();
-  let callback = url.href;
-  if (input.callback === 'fragment') callback += '#fragment';
-  if (input.callback === 'userinfo') callback = callback.replace('https://', 'https://user@');
-  if (input.callback === 'duplicate_param') callback += '&code=again';
+  w.state.scope = input.granted.join(' ');
+  w.state.hostError = input.host_error;
+  const params = { state: pending.state };
+  let url;
+  switch (input.callback) {
+    case 'valid': url = callbackFor(pending); break;
+    case 'valid_with_server_params': url = callbackFor(pending, { session_state: 'opaque' }); break;
+    case 'denied': url = callbackFor(pending, { code: undefined, error: 'access_denied' }); break;
+    case 'denied_invalid_client': url = callbackFor(pending, { code: undefined, error: 'invalid_client' }); break;
+    case 'redirect_mismatch': url = callbackFor(pending).replace('/callback', '/other'); break;
+    case 'redirect_query_mismatch': url = callbackFor(pending).replace('app=1', 'app=2'); break;
+    case 'state_duplicated': url = `${callbackFor(pending)}&state=${params.state}`; break;
+    case 'iss_mismatch': url = callbackFor(pending, { iss: 'https://evil.example' }); break;
+    case 'fragment': url = `${callbackFor(pending)}#fragment`; break;
+    case 'userinfo': url = callbackFor(pending).replace('https://', 'https://user@'); break;
+    case 'missing_code': url = callbackFor(pending, { code: undefined }); break;
+    case 'code_and_error': url = callbackFor(pending, { error: 'access_denied' }); break;
+    case 'duplicate_param': url = `${callbackFor(pending)}&code=again`; break;
+    case 'unparseable': url = 'not a url'; break;
+    default: assert.fail(`unknown callback ${input.callback}`);
+  }
+  if (input.pending === 'unknown') url = url.replace(pending.state, 'unknown-state');
+  if (input.pending === 'absent') { const parsed = new URL(url); parsed.searchParams.delete('state'); url = parsed.href; }
+  if (input.claim !== 'ok') {
+    // The claim's store write fails; afterwards the login is gone, still pending, or unknowable.
+    const { reread } = input.claim;
+    w.store.failClaim = (key, value) => key === pendingKey && value === undefined ? (reread === 'gone' ? 'after' : 'before') : undefined;
+    if (reread === 'undetermined') {
+      let claimed = false;
+      const fail = w.store.failClaim;
+      w.store.failClaim = (key, value) => { const result = fail(key, value); if (result) claimed = true; return result; };
+      w.store.failLoad = key => claimed && key === pendingKey;
+    }
+  }
   w.state.tokenError = {
+    ok: undefined,
     invalid_grant: () => Response.json({ error: 'invalid_grant' }, { status: 400 }),
     invalid_client: () => Response.json({ error: 'invalid_client' }, { status: 401 }),
-    token_endpoint_failure: () => new Response('{}', { status: 503 }),
+    unauthorized_client: () => Response.json({ error: 'unauthorized_client' }, { status: 400 }),
+    access_denied: () => Response.json({ error: 'access_denied' }, { status: 400 }),
+    invalid_scope: () => Response.json({ error: 'invalid_scope' }, { status: 400 }),
+    server_error: () => Response.json({ error: 'server_error' }, { status: 500 }),
+    unreachable: () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }); },
+    not_found: () => new Response('not found', { status: 404 }),
     invalid_response: () => Response.json({ access_token: 'x', token_type: 'mac' }),
-  }[input.exchange];
-  // A host callback failure before the claim (client selection reselects host client authentication).
-  w.state.hostError = input.host_error;
-  const outcome = await settle(w.oauth.complete(callback, budget()));
-  const result = { ...observed(outcome), grant_persisted: grants(w).length > 0 };
-  if (outcome.error) result.login_ended = outcome.error.loginEnded;
-  if (input.host_error && result.login_ended === false) {
-    // The login is still pending: once the host recovers, the same callback completes it.
-    w.state.hostError = undefined;
-    assert.equal((await w.oauth.complete(callback, budget())).type, 'ready', 'the login still completes');
-  }
-  return result;
+  }[typeof input.exchange === 'string' ? input.exchange : 'ok'];
+  const grantsBefore = grantKeys(w).length;
+  const outcome = await settle(w.oauth.complete(url, budget()));
+  const result = { grant_persisted: grantKeys(w).length > grantsBefore };
+  if (!outcome.error) return { ...result, code: null };
+  result.login_ended = outcome.error.loginEnded;
+  return { ...result, ...errorFields(outcome.error) };
 }
 
 for (const vector of vectors.completions) {
   test(`shared completion: ${vector.id}`, { skip: skipFor(vector) }, async () => {
-    compare(vector.expect, await complete(vector.input));
+    defined(vector, COMPLETION_INPUT, COMPLETION_EXPECT);
+    compare(vector, await completeVector(vector.input));
   });
 }
 
-test('[complete-error-login-ended] a token-endpoint invalid_client after the claim fails by client source, login ended, no scopes', async () => {
-  const input = { pending: 'pending', callback: 'valid', exchange: 'invalid_client', stored_required: ['read', 'write'], granted: ['read', 'write'], ceiling: ['read', 'write'] };
-  const expected = { preregistered: 'credential_unavailable', cimd: 'invalid_configuration', dcr: 'interaction_required' };
-  for (const [source, code] of Object.entries(expected)) {
-    const result = await complete(input, source);
-    assert.equal(result.code, code, source);
-    assert.equal(result.login_ended, true, source);
-    assert.equal(result.grant_persisted, false, source);
-    if ('scopes' in result) assert.deepEqual(result.scopes, [], source);
-  }
-});
-
 test('every shared vector names only known SDK features in requires', () => {
-  const sections = Object.values(vectors).filter(Array.isArray);
-  for (const vector of sections.flat()) {
+  for (const vector of Object.values(vectors).filter(Array.isArray).flat()) {
     assert.doesNotThrow(() => skipFor(vector), vector.id);
     for (const feature of vector.requires ?? []) assert.ok(KNOWN_FEATURES.includes(feature), `${vector.id}: ${feature}`);
   }
   assert.throws(() => skipFor({ id: 'x', requires: ['teleport'] }), /unknown SDK features: teleport/);
+});
+
+test('[complete-token-endpoint-errors-classified] token-endpoint errors after the claim are classified by client source, with no scopes', async () => {
+  const base = { pending: 'pending', handle: 'none', source_permitted: true, callback: 'valid', claim: 'ok',
+    stored_required: ['read', 'write'], granted: ['read', 'write'], ceiling: ['read', 'write'] };
+  const expected = [
+    ['preregistered', 'invalid_grant', 'interaction_required'], ['preregistered', 'invalid_client', 'credential_unavailable'],
+    ['cimd', 'invalid_client', 'invalid_configuration'], ['dcr', 'invalid_client', 'interaction_required'],
+    ...['unauthorized_client', 'access_denied', 'invalid_scope', 'server_error', 'unreachable', 'not_found', 'invalid_response']
+      .map(exchange => ['preregistered', exchange, 'provider_failed']),
+  ];
+  for (const [client_source, exchange, code] of expected) {
+    const result = await completeVector({ ...base, client_source, exchange });
+    assert.equal(result.code, code, `${client_source} ${exchange}`);
+    assert.equal(result.login_ended, true, `${client_source} ${exchange}`);
+    assert.equal(result.grant_persisted, false, `${client_source} ${exchange}`);
+    if ('scopes' in result) assert.deepEqual(result.scopes, [], `${client_source} ${exchange}`);
+  }
 });

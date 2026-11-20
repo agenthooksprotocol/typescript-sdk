@@ -193,9 +193,12 @@ export function composeAuth(options: AuthCompositionOptions, defaultBearer: Deli
         return undefined;
       }
       const authentication = authenticationSnapshot(context.authentication);
-      const { authentication: _authentication, ...rest } = context;
+      const { authentication: _authentication, rejectedCredential, ...rest } = context;
+      // A replay names the credential its challenge rejected: hand the provider its own credential.
+      const rejected = rejectedCredential && typeof rejectedCredential.attempt === "object" && rejectedCredential.attempt !== null
+        ? attempts.get(rejectedCredential.attempt) : undefined;
       const originalContext = { ...rest, backendId: target.backendId, purpose: target.purpose, url: target.url,
-        ...(authentication ? { authentication } : {}) };
+        ...(authentication ? { authentication } : {}), ...(rejected?.provider === provider ? { rejectedCredential: rejected.credential } : {}) };
       return invoke(context, async () => {
         const credential = await provider.credential(originalContext);
         if (credential === undefined && target.type === "discover" && !context.challenged && context.challenge === undefined) return undefined;

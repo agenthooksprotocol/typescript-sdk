@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { resolveTarget } from '../dist/src/oauth/discovery.js';
+import { decide, parseChallenge } from '../dist/src/client/decision.js';
 import { acquireClientCredentials } from '../dist/src/oauth/protocol.js';
 
 
@@ -158,7 +159,8 @@ for (const flow of ['client_credentials', 'authorization_code_pkce']) {
     assert.deepEqual(requests, ['https://issuer.example/.well-known/oauth-authorization-server/tenant']);
     assert.deepEqual(resolved.client.scopes, ['deliver']);
     assert.deepEqual(resolved.client.allowedScopes, ['deliver', 'extra']);
-    assert.deepEqual(resolved.client.requiredScopes, ['deliver', 'extra']);
+    // Host policy only: the challenge's requirement is decide's, for one operation.
+    assert.deepEqual(resolved.client.requiredScopes, ['deliver']);
     assert.ok(Object.isFrozen(resolved.client.requiredScopes));
   });
 }
@@ -178,10 +180,15 @@ test('preset local principal mismatch fails before metadata I/O', async () => {
   }, operation()), { code: 'invalid_configuration' });
 });
 
-test('challenge requirement outside local ceiling fails before issuer I/O', async () => {
-  await assert.rejects(resolveTarget({ url: resource, authentication: preset,
-    challenge: 'Bearer error="insufficient_scope", scope="forbidden"' },
-  options(() => assert.fail('forbidden scopes must not reach metadata')), operation()), { code: 'access_denied' });
+test('the scope gate decides a challenge requirement outside the ceiling before issuer I/O', async () => {
+  const challenge = parseChallenge(403, 'Bearer error="insufficient_scope", scope="forbidden"');
+  const gate = async client => {
+    const { outcome } = decide({ op: 'credential', challenge, config: { flow: client.flow, requested: client.scopes,
+      ceiling: client.allowedScopes, hostRequired: client.requiredScopes } });
+    if (outcome.type === 'fail') throw outcome.error;
+  };
+  await assert.rejects(resolveTarget({ url: resource, authentication: preset }, options(() => assert.fail('forbidden scopes must not reach metadata')),
+    operation(), undefined, gate), error => error.code === 'access_denied' && error.requiredScopes.join() === 'forbidden');
 });
 
 test('discovery preserves native cancellation from an in-flight host selection', async () => {

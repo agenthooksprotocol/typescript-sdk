@@ -365,7 +365,9 @@ test('[dcr-pkce-registers-per-login] only host prepare registers, inside each lo
   const f = fixture();
   // Delivery, challenge handling and the lookup never register a PKCE client.
   await assert.rejects(f.provider().credential({ ...f.context, challenged: true }), errorCode('interaction_required'));
-  await f.oauth.challenge({ ...f.context, response: new Response(null, { status: 401, headers: { 'www-authenticate': 'Bearer' } }), credential: undefined }, budget());
+  // Challenge handling decides like every entry point: PKCE without a grant needs a login it never creates.
+  await assert.rejects(f.oauth.challenge({ ...f.context, response: new Response(null, { status: 401, headers: { 'www-authenticate': 'Bearer' } }), credential: undefined }, budget()),
+    errorCode('interaction_required'));
   await assert.rejects(f.provider().credential(f.context), errorCode('interaction_required'));
   assert.equal(f.state.registrations.length, 0);
   // Each login registers anew, with its own redirect, and is authorized with its own client.

@@ -41,18 +41,3 @@ export function bearerParameters(header: string | undefined): Map<string, string
   return result;
 }
 
-/** RFC 6749 section 3.3 scope list: tokens separated by exactly one SP. */
-const SCOPE_LIST = /^[\x21\x23-\x5B\x5D-\x7E]+(?: [\x21\x23-\x5B\x5D-\x7E]+)*$/;
-
-/**
- * The scopes a Bearer challenge names. A malformed `scope` fails closed
- * (`access_denied`, no scopes). Only a 403 `insufficient_scope` creates a step-up
- * requirement; a 401's `scope` is a hint for the next acquisition or sign-in.
- */
-export function challengeScopes(parameters: ReadonlyMap<string, string>, unauthorized = false): { required: string[]; hinted: string[] } {
-  const value = parameters.get("scope");
-  const stepUp = !unauthorized && parameters.get("error") === "insufficient_scope";
-  if (value === undefined) return { required: [], hinted: [] };
-  if (!SCOPE_LIST.test(value)) throw new AuthError("access_denied");
-  return stepUp ? { required: value.split(" "), hinted: [] } : { required: [], hinted: value.split(" ") };
-}

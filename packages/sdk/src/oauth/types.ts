@@ -53,8 +53,6 @@ export interface ClientSelection {
 export interface ResolvedTarget {
   readonly client: ClientConfig;
   readonly metadata: AuthorizationServer;
-  /** Current host policy only; never inferred from a challenge. */
-  readonly hostRequiredScopes?: readonly string[];
   /** A registered client-credentials client's registered token endpoint auth method. */
   readonly authMethod?: "client_secret_basic" | "client_secret_post";
 }
@@ -123,8 +121,10 @@ export interface StoredPendingLogin {
   readonly expiresAt: number;
   readonly authorizationUrl: string;
   readonly verifier: string;
-  /** The login's exact redirect and client, requested plus required scopes and ceiling, without client secrets. */
+  /** The login's exact redirect and client (its requested scopes, ceiling and prepare-time host-required scopes), without client secrets. */
   readonly client: Omit<ClientConfig, "clientSecret">;
+  /** R the login was prepared with (H ∪ E ∪ Ch). Absent on records written by older releases. */
+  readonly requiredScopes?: readonly string[];
   readonly metadata: AuthorizationServer;
   readonly context: Pick<DeliveryAuthContext, "backendId" | "purpose" | "url" | "authentication">;
   readonly source: ClientSource;

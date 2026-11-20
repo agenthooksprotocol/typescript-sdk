@@ -683,8 +683,10 @@ test("[insufficient-scope-step-up] built-in auth() keeps a valid token after 403
   const cache = new Map();
   const context = { backendId: "auth.backend", purpose: "event", url: eventUrl, authentication: bindings[2], cache };
   const first = await provider.credential(context);
-  await provider.challenge({ ...context, credential: first, response: new Response(null, { status: 403,
-    headers: { "www-authenticate": 'Bearer error="insufficient_scope", scope="admin"' } }) });
+  // Challenge handling decides like every entry point: admin is outside the ceiling.
+  await assert.rejects(provider.challenge({ ...context, credential: first, response: new Response(null, { status: 403,
+    headers: { "www-authenticate": 'Bearer error="insufficient_scope", scope="admin"' } }) }),
+    (error) => error.code === "access_denied" && error.requiredScopes.join() === "admin");
   assert.equal((await provider.credential(context)).token, "access-1");
   assert.equal(issued.length, 1);
 });

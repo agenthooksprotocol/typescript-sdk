@@ -261,8 +261,13 @@ approved cached credential up front or `undefined` for an anonymous first contac
 Omit that route to disable automatic discovery. Uploads and events select routes
 from their own bindings. Challenges return to the provider that issued the exact
 opaque attempt, with its original credential; the router never replays HTTP
-requests itself. Only read-only configuration requests may retry once after an
-auth challenge. Effectful events, notifications and uploads are not replayed;
+requests itself. Hooks hands every 401 to the provider, a 403 only when its
+`WWW-Authenticate` parses as exactly one Bearer challenge with
+`error="insufficient_scope"`, and returns any other 403 without a retry; a token
+rejected on the replay is handed to the provider too. The replay's context carries
+`challenge`, `challengeStatus` and `rejectedCredential` (the router maps it back to
+the issuing provider's credential). Only read-only configuration requests may
+retry once after an auth challenge. Effectful events, notifications and uploads are not replayed;
 prepare an unknown endpoint explicitly before an unsafe first call.
 
 `normalizeAuthTarget(context)` returns a frozen, readonly discriminated target
@@ -271,10 +276,10 @@ validates local structure, not destination trust. Providers still own destinatio
 issuer, resource, scope and client policy. `AuthError` exposes safe `code` and
 `recovery` fields (`configure`, `login`, `retry`, or `none`). `access_denied` and
 `interaction_required` may also carry `requiredScopes`: the operation's full
-required set, sorted. Errors from `managedOAuth().complete()` carry `loginEnded`
+required set, sorted, attached only by the SDK's scope decision (`managedOAuth`
+and `auth()` drop scopes on errors from host callbacks, stores and the network). Errors from `managedOAuth().complete()` carry `loginEnded`
 (see [OAUTH.md](OAUTH.md)). For example, a host provider can throw
-`new AuthError("interaction_required")` to request login; scopes a host policy
-callback attaches are dropped by `managedOAuth`.
+`new AuthError("interaction_required")` to request login.
 Recovery is guidance, never permission to replay an effectful delivery.
 
 Routed provider exceptions become redacted `AuthError`s without cause chains.

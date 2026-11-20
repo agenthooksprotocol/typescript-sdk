@@ -132,67 +132,79 @@ per store when persisted; a new one beyond the cap cancels the oldest. Each
 completion replaces the grant, so the newest completed login wins. A login ends by
 completion (a claimed valid callback, including consent denial), `cancel`
 (including by the cap) or expiry; a callback for an ended login fails
-`interaction_required`. The callback is validated before the login is claimed, so
-a stray callback cannot burn it: the exact redirect, the `state`, no `iss` other
-than the issuer, no fragment or userinfo, exactly one of `code` or `error`, and no
-duplicated parameter; an invalid callback fails `access_denied` and leaves the
-login pending. A host callback or policy failure before the claim (for example
+`interaction_required`. The login is looked up by the callback's `state` before
+any host callback runs. The callback is then validated before the login is
+claimed, so a stray callback cannot burn it: the exact redirect (including its own
+query; parameters the authorization server adds, such as `session_state`, are
+allowed), exactly one `state`, no `iss` other than the issuer, no fragment or
+userinfo, exactly one of `code` or `error`, and no duplicated parameter; an invalid
+or unparseable callback fails `access_denied` and leaves the login pending. A host callback or policy failure before the claim (for example
 `selectClient` reselecting client authentication) keeps its own code, carries
 no scopes and leaves the login pending (`loginEnded: false`), so the same
 callback can complete it once the host recovers. After the claim, a token-endpoint `invalid_grant` fails
 `interaction_required`; `invalid_client` fails `credential_unavailable` for a
 pre-registered client, `invalid_configuration` for a CIMD client and
 `interaction_required` for a DCR client (the next `prepare` registers again);
-any other token-endpoint failure or invalid token response fails
-`provider_failed`. These errors carry no scopes, and the login is consumed.
+every other token-endpoint error (including `unauthorized_client`, `access_denied`
+and `invalid_scope`), an unreachable or 404 endpoint, or an invalid token response
+fails `provider_failed`. These errors carry no scopes, and the login is consumed.
 `complete()` takes no pending-login handle: the callback's `state` names the login. Completion reselects current host
 client authentication outside store coordination before it claims the callback;
 secret rotation does not require new consent. Records never contain client secrets.
 
-An operation's required set is R = host-required (`ClientConfig.requiredScopes`)
-∪ explicit (`prepare(..., { requiredScopes })`) ∪ the scopes of a Bearer 403
-`insufficient_scope` challenge. Requested scopes (`ClientConfig.scopes`, and a
-preset binding's `scopes`) are requested, never required: a grant without them
-still satisfies an operation whose R it covers. Every scoped `AuthError` carries
-the operation's full R as `requiredScopes`, deduplicated and sorted in ascending
-byte order; only `access_denied` and `interaction_required` carry scopes.
+One decision procedure (`decide`, scope contract v2) serves every entry point:
+`prepare`, `credential` (the up-front lookup and delivery, including preset
+bindings), `challenge`, and the built-in `auth()` provider. Its inputs are the
+requested scopes S (`ClientConfig.scopes`), the ceiling C (`allowedScopes`,
+default S), the host-required scopes H (`requiredScopes`), the explicit scopes E
+(`prepare(..., { requiredScopes })`), the stored grant, the generation whose
+token the challenged request sent, and the challenge. Only R = H ∪ E ∪ Ch (the
+scopes of a Bearer 403 `insufficient_scope`) is mandatory: H is mandatory for
+every operation; S, a preset's `scopes` and a 401's `scope` are never part of R.
+The first matching step wins:
 
-- For step-up, an `interaction_required` from a 403 `insufficient_scope` carries
-  R; pass it back with `oauth.prepare(context, budget, { requiredScopes })`.
-- R outside the caller's ceiling (including a host-required scope) fails
-  `access_denied` carrying R. The decision is local and precedes all network I/O
-  whenever the client is known: a cached binding, a preset binding, `prepare`,
-  `credential` and challenge handling. Only an unknown, unbound endpoint first
-  fetches its protected-resource metadata, which names the issuers `selectClient`
-  chooses from.
-- Requested scopes outside the ceiling are `invalid_configuration`, also decided
-  locally: a stored binding is not rediscovered to repair it.
-- A 401 rejects the token. Its `scope` (within the ceiling) only joins the scopes
-  requested by the next acquisition or sign-in (pass the challenge on the
-  `prepare` context); it is never a requirement and never `access_denied`.
-- A 403 `insufficient_scope` without `scope` uses host-required ∪ explicit; if that
-  is empty it fails `access_denied` with no scopes.
-- A malformed challenge `scope` (empty, repeated, leading or trailing spaces, an
-  invalid character, or a duplicated parameter) fails closed: `access_denied`, no
-  scopes. Hooks does not replay a 403 whose challenge cannot be parsed.
-- A 403 `insufficient_scope` whose R the grant behind the rejected token already
-  records as granted (within the current ceiling) fails `access_denied` carrying R:
-  no replay of the same token, no new login and no `interaction_required` loop.
-- A pending login stores the R it was prepared with. `complete()` succeeds only if
-  the granted scopes ∩ the current ceiling cover it; otherwise it fails
-  `access_denied` carrying that R, with the grant (and any rotated refresh token)
-  persisted and the login consumed. A refreshed or client-credentials grant
-  narrower than R likewise fails `access_denied` carrying R, grant persisted.
-- Errors from host policy (`selectClient`, `checkDestination`, the store,
-  `budget`) never carry scopes; other `access_denied` causes (untrusted issuer,
-  consent refused, a 403 that is not `insufficient_scope`) carry none either.
+0. A 401 retires the rejected token first, whatever the outcome.
+1. S ⊄ C, a preset `scopes` that differs from S (an omitted one is no
+   constraint), or an invalid scope token: `invalid_configuration`.
+2. An unparseable or ambiguous challenge (a bad auth-param, two Bearer
+   challenges, a duplicated parameter, a malformed `scope`), a 403 that is not
+   `insufficient_scope`, or a 403 `insufficient_scope` without `scope` when H ∪ E
+   is empty: `access_denied`, no scopes.
+3. A 401's `scope` within C is requested only by a client-credentials
+   acquisition in that same operation; it is never stored or required.
+4. R ⊄ C: `access_denied` carrying R, decided locally with no network I/O when
+   the binding or preset is known (an unbound target first fetches only its
+   protected-resource metadata, which client selection needs).
+5. A 403 `insufficient_scope` whose R the grant behind the rejected token (or
+   any grant, when no token was sent) records as granted: `access_denied`
+   carrying R, no replay and no login. A newer stored generation covering R is
+   used instead.
+6. A valid token covering R is used; 7. a refresh token whose grant covers R
+   refreshes; 8. client credentials acquire previous ∪ ((S ∪ R ∪ hint) ∩ C);
+   9. PKCE: `prepare` creates a login requesting previous ∪ ((S ∪ R) ∩ C) and
+   storing R; any other entry point fails `interaction_required` carrying R
+   (pass it back with `oauth.prepare(context, budget, { requiredScopes })`).
 
-Every error thrown by `complete()` carries `loginEnded`: `true` when the pending
-login named by the callback's `state` no longer exists after the call (it was
-consumed, had expired or was unknown), `false` when it is still pending, for
-example after a stray or invalid callback rejected before the claim, or an
-invalid budget. Codes and recovery are unchanged. Native cancellation and
-deadline errors keep their identity and carry the flag when they are extensible.
+A refreshed, acquired or completed grant that does not cover R fails
+`access_denied` carrying R, with the grant (and any rotated refresh token)
+persisted. Scope sets on errors are deduplicated and sorted in ascending byte
+order. Scopes are attached only by `decide` and by `complete`'s coverage check:
+errors from host callbacks, stores, the host network and the token endpoint never
+carry them. Hooks replays a challenged request with the challenge, its status
+(`challengeStatus`) and the rejected credential (`rejectedCredential`) on the
+context, so the replay is decided as the same operation.
+
+Every error thrown by `complete()` carries `loginEnded`, and only those errors do:
+`true` once the login named by the callback's `state` no longer exists (it was
+consumed, had expired, had ended or was unknown), `false` while it is still
+pending (an invalid callback, a host policy failure before the claim, an invalid
+budget). When the claim's outcome is uncertain (a store error or the deadline),
+the store is re-read on a fresh short budget: `true` if the login is gone, `false`
+if it is pending or cannot be determined. Native cancellation and deadline errors
+keep their identity; a reason that cannot carry the flag (a primitive or frozen
+object) is wrapped in an `AbortError` DOMException whose `cause` is that reason.
+A pending login written by an older release has no stored R: its prepare-time H
+applies when the record holds it, else the current H.
 
 For unattended use, return a `ClientConfig` with `flow: "client_credentials"`,
 a locally resolved `clientSecret`, and permitted `scopes`. `prepare` returns
@@ -204,9 +216,9 @@ step-up for an existing grant) requests previously granted ∪ ((requested ∪
 required) ∩ ceiling) and records `granted = response ∩ (previously granted ∪
 acquisition ceiling)`, where the acquisition ceiling is the one stored on the
 login or the client-credentials caller's. A refresh records `response ∩ previous
-grant`. Extra scopes are ignored. At use,
-effective scopes are the grant ∩ the current ceiling, and only explicit or
-challenge requirements are mandatory. The ceiling governs what the SDK requests
+grant`. Extra scopes are ignored. At use, effective scopes are the grant ∩ the
+current ceiling, and only R (host-required, explicit and 403 challenge scopes) is
+mandatory; 401 `scope` hints are not. The ceiling governs what the SDK requests
 and records; it does not constrain what an issued token can do.
 
 ## Client registration
@@ -258,13 +270,13 @@ replaces the record (deleting its old secret) and acquires a token with the new 
 
 The built-in `auth()` provider uses pre-registered clients only: it has no
 coordinated store, secret hook or `prepare`, so a missing `clientId` fails
-`credential_unavailable`. It follows the same scope rules: refusals carry R
-(`OAuthClient.requiredScopes` ∪ a 403 `insufficient_scope` challenge's scopes),
-the challenge `scope` uses the strict RFC 6749 grammar, and a 401 `scope` is only
-requested by that acquisition. With a known client, R outside the ceiling is
-refused before any network I/O (an unbound, unknown target first fetches only its
-protected-resource metadata). A challenge's requirement applies to that operation
-only: the discovery cache keeps host policy, never challenge scopes.
+`credential_unavailable`. It calls the same `decide` (H is
+`OAuthClient.requiredScopes`): with a known client, steps 1-4 run before any
+network I/O, only a 401 rediscovers, a challenge's requirement applies to that
+operation only (the discovery cache keeps host policy), and its `challenge`
+decides the challenge too, so an unreplayed request still fails. With an
+`authorize` hook, PKCE signs in inline (decide's `prepare`); without one it fails
+`interaction_required`. Host errors it surfaces carry no scopes.
 
 ## Rotation, rejection and failure
 

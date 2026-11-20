@@ -610,7 +610,7 @@ test('[scope-challenge-without-required-scope] scope challenge without required 
 });
 
 test('[client-credentials-transient-reissue] client credentials transient reissue retries without login or discarding current credentials', async t => {
-  const f = await fixture(t); Object.assign(f.client, { flow: 'client_credentials', clientSecret: 'client-secret' });
+  const f = await fixture(t, { omitRefreshToken: true }); Object.assign(f.client, { flow: 'client_credentials', clientSecret: 'client-secret' });
   const first = await f.prepare(); assert.equal(first.type, 'ready');
   f.store.expire(); f.state.tokenStatus = 503; f.state.tokenError = { error: 'temporarily_unavailable' };
   const previous = [...f.store.values.values()][0];
@@ -678,7 +678,8 @@ test('[delivery-never-creates-pending-login] anonymous 401 learns the binding; d
   assert.equal(await provider.credential(f.context), undefined);
   assert.equal(f.requests.length, 0);
   const response = new Response(null, { status: 401, headers: { 'www-authenticate': 'Bearer' } });
-  await provider.challenge({ ...f.context, response, credential: undefined });
+  // Challenge handling learns the binding, then decides: PKCE without a grant needs a login.
+  await assert.rejects(provider.challenge({ ...f.context, response, credential: undefined }), { code: 'interaction_required' });
   assert.equal(f.store.bindings.size, 1);
   await assert.rejects(provider.credential({ ...f.context, challenged: true, challenge: 'Bearer' }), { code: 'interaction_required' });
   await assert.rejects(provider.credential(f.context), { code: 'interaction_required' }, 'a known binding needing login never sends anonymously');
@@ -709,7 +710,8 @@ test('[step-up-requirement-operation-scoped] client-credentials step-up applies 
   f.state.scope = 'deliver audit';
   await provider.challenge({ ...f.context, credential: first.credential, response: new Response(null, { status: 403, headers: { 'www-authenticate': header } }) });
   // Challenge handling acquires with the operation's requirement; the replay finds that grant.
-  const replay = await provider.credential({ ...f.context, challenged: true, challenge: header });
+  // As Hooks replays: the challenge, its status and the rejected credential.
+  const replay = await provider.credential({ ...f.context, challenged: true, challenge: header, challengeStatus: 403, rejectedCredential: first.credential });
   assert.equal(f.tokens.length, 2);
   assert(f.tokens[1].body.get('scope').split(' ').includes('audit'));
   assert.equal(replay.token, 'access-2');

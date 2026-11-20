@@ -50,8 +50,9 @@ function fixture(clientOverrides = {}, optionOverrides = {}) {
         const body = new URLSearchParams(String(init.body));
         state.tokenCalls.push(body);
         const n = ++state.next;
+        // Client credentials issue no refresh token (RFC 6749 section 4.4.3).
         return Response.json({ access_token: `access-${n}`, token_type: 'Bearer', expires_in: 3600,
-          refresh_token: `refresh-${n}`, scope: state.scope ?? body.get('scope') ?? client.scopes.join(' ') });
+          ...(client.flow === 'client_credentials' ? {} : { refresh_token: `refresh-${n}` }), scope: state.scope ?? body.get('scope') ?? client.scopes.join(' ') });
       }
       if (url.startsWith('https://api.example/.well-known/')) return Response.json({ resource, authorization_servers: [issuer] });
       return Response.json({ issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`,
@@ -175,7 +176,6 @@ test('[ceiling-refusal-before-network-every-path] scope contract rule 3: a requi
   await assert.rejects(retired.challenge(401, `Bearer resource_metadata="https://api.example/.well-known/oauth-protected-resource"`, sent),
     rejects('access_denied', ['admin']));
   assert.equal(retired.store.grants()[0].token, undefined, 'the rejected token was retired');
-  assert.equal(retired.store.grants()[0].refreshToken, 'refresh-1', 'refresh material is kept');
   assert.equal(retired.state.network.length, 0);
 });
 
@@ -209,11 +209,11 @@ test('[challenge-401-scope-requested-not-required] scope contract rule 5: a 401 
   const replayed = await f.replay('Bearer error="invalid_token", scope="admin"');
   assert.equal(replayed.token, 'access-2');
   await f.challenge(401, 'Bearer error="insufficient_scope", scope="admin"', replayed);
-  // PKCE: the 401 scope only widens the next sign-in, and R stays H.
+  // PKCE: R stays H, and the hint (client-credentials only, this operation only) never widens a sign-in.
   const p = fixture({ allowedScopes: ['audit', 'deliver'] });
   await assert.rejects(p.replay('Bearer scope="admin audit"'), rejects('interaction_required', ['deliver']));
   const pending = await p.oauth.prepare({ ...p.context, challenge: 'Bearer scope="admin audit"' }, budget());
-  assert.deepEqual(p.scopeOf(pending), ['audit', 'deliver']);
+  assert.deepEqual(p.scopeOf(pending), ['deliver']);
   p.state.scope = 'deliver';
   assert.equal((await p.oauth.complete(p.callback(pending), budget())).type, 'ready', 'a hint is not a requirement');
 });
@@ -221,7 +221,10 @@ test('[challenge-401-scope-requested-not-required] scope contract rule 5: a 401 
 test('scope contract rule 6: 403 insufficient_scope without scope uses H ∪ E, else access_denied with no scopes', async () => {
   const none = fixture({ requiredScopes: [] });
   await assert.rejects(none.challenge(403, 'Bearer error="insufficient_scope"', undefined), rejects('access_denied', undefined));
-  await assert.rejects(none.replay('Bearer error="insufficient_scope"'), rejects('interaction_required', undefined));
+  await assert.rejects(none.replay('Bearer error="insufficient_scope"'), rejects('access_denied', undefined));
+  // prepare decides the same: no login is created.
+  await assert.rejects(none.oauth.prepare({ ...none.context, challenge: 'Bearer error="insufficient_scope"' }, budget()), rejects('access_denied', undefined));
+  assert.equal(none.state.network.filter(url => !url.startsWith('https://api.example/.well-known/')).length, 0, 'no authorization-server request');
   const host = fixture({ requiredScopes: ['deliver'] });
   await assert.rejects(host.challenge(403, 'Bearer error="insufficient_scope"', undefined), rejects('interaction_required', ['deliver']));
   // With explicit E on prepare, the login's R is H ∪ E.
@@ -238,7 +241,8 @@ test('[malformed-challenge-scope-denied] scope contract rule 7: a malformed chal
     const f = fixture();
     const header = `Bearer error="insufficient_scope", ${parameter}`;
     await assert.rejects(f.challenge(403, header, undefined), rejects('access_denied', undefined), header);
-    assert.equal(f.state.network.length, 0, header);
+    // Unbound: only the protected-resource fetch client selection needs, no authorization-server request.
+    assert.deepEqual(f.state.network, ['https://api.example/.well-known/oauth-protected-resource/events'], header);
     await assert.rejects(f.oauth.prepare({ ...f.context, challenge: header }, budget()), rejects('access_denied', undefined), header);
   }
   // A 401: the token is retired first, then the malformed scope fails closed, with no I/O.
@@ -362,7 +366,8 @@ test('[complete-error-login-ended] scope contract rule 12: every complete() erro
   // Unknown state, no state, unparseable callback: no such login.
   await assert.rejects(f.oauth.complete(f.callback({ state: 'unknown' }), budget()), ended('interaction_required', true));
   await assert.rejects(f.oauth.complete('https://app.example/callback?code=x', budget()), ended('interaction_required', true));
-  await assert.rejects(f.oauth.complete('not a url', budget()), ended('access_denied', true));
+  // An unparseable callback is an invalid callback: nothing is ended.
+  await assert.rejects(f.oauth.complete('not a url', budget()), ended('access_denied', false));
   // Consent denied: consumed.
   const denied = await f.oauth.prepare(f.context, budget());
   const denial = new URL(f.callback(denied, { error: 'access_denied' })); denial.searchParams.delete('code');
