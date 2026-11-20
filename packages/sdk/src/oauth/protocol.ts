@@ -253,6 +253,14 @@ export function callbackParameters(target: ResolvedTarget, login: LoginState, ca
   }
   if (!login.state || !login.verifier || actual.searchParams.getAll("state").length !== 1 ||
       actual.searchParams.get("state") !== login.state || actual.searchParams.getAll("iss").length > 1) throw new AuthError("access_denied");
+  // No duplicated parameter (beyond the redirect's own query) and exactly one of code or error.
+  const own = new Set(expected.searchParams.keys()), seen = new Set<string>();
+  for (const key of actual.searchParams.keys()) {
+    if (own.has(key)) continue;
+    if (seen.has(key)) throw new AuthError("access_denied");
+    seen.add(key);
+  }
+  if (seen.has("code") === seen.has("error")) throw new AuthError("access_denied");
   let parameters: URLSearchParams;
   try {
     parameters = oauth.validateAuthResponse(target.metadata, client(target), actual, login.state);
@@ -260,9 +268,8 @@ export function callbackParameters(target: ResolvedTarget, login: LoginState, ca
     if (error instanceof oauth.AuthorizationResponseError) throw error;
     throw new AuthError("access_denied");
   }
-  // A success response carries exactly one non-empty code, checked before the login is claimed.
-  const codes = actual.searchParams.getAll("code");
-  if (codes.length !== 1 || !codes[0]) throw new AuthError("access_denied");
+  // A success response carries a non-empty code, checked before the login is claimed.
+  if (!actual.searchParams.get("code")) throw new AuthError("access_denied");
   return parameters;
 }
 

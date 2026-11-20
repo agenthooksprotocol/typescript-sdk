@@ -509,7 +509,12 @@ for (const vector of lifecycleVectors.token_responses) {
       complete = f.managed.complete(f.callback(pending), budget());
     }
     if (vector.usable) assert.equal((await complete).credential.token, vector.response.access_token);
-    else await assert.rejects(complete, { code: vector.error ?? 'interaction_required' });
+    else await assert.rejects(complete, error => {
+      assert.equal(error.code, vector.error ?? 'interaction_required');
+      // An access_denied carries R, sorted in ascending byte order.
+      if (vector.error_scopes) assert.deepEqual([...(error.requiredScopes ?? [])], vector.error_scopes);
+      return true;
+    });
     const stored = [...f.store.values.values()][0];
     if (!vector.accepted && vector.exchange !== 'refresh') assert.equal(stored, undefined, 'an invalid initial exchange persists nothing');
     if (vector.refresh_preserved) assert.equal(stored.refreshToken, vector.response.refresh_token);

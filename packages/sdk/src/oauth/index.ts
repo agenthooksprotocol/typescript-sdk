@@ -785,8 +785,10 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
           result = await exchangeCode(exchange, login, callback, options, operation);
         } catch (error) {
           if (isInvalidClient(error) && record.source === "cimd") throw new AuthError("invalid_configuration");
-          // A rejected DCR client ends only this login: the stored grant may hold an older valid client.
-          if (isInvalidClient(error) && record.source === "dcr") throw scoped("interaction_required", record.client.requiredScopes);
+          // A rejected DCR client ends only this login (the stored grant may hold an older
+          // valid client); the next prepare registers again. Like every post-claim
+          // exchange failure, it carries no scopes.
+          if (isInvalidClient(error) && record.source === "dcr") throw new AuthError("interaction_required");
           throw error;
         }
         // An invalid initial exchange persists nothing.

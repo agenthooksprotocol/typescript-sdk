@@ -91,7 +91,7 @@ function rejects(code, scopes) {
   };
 }
 
-test('scope contract rule 1: preset scopes are requested, never required', async () => {
+test('[preset-scopes-requested-not-required] scope contract rule 1: preset scopes are requested, never required', async () => {
   const preset = { type: 'oauth', issuer, resource, clientId: 'client', flow: 'authorization_code_pkce', scopes: ['deliver', 'extra'] };
   const f = fixture({ scopes: ['deliver', 'extra'], allowedScopes: ['audit', 'deliver', 'extra'], requiredScopes: [] });
   const context = { ...f.context, authentication: preset };
@@ -138,7 +138,7 @@ test('scope contract rule 2: every scoped error carries the full R, including ch
     rejects('access_denied', ['audit', 'hooks']));
 });
 
-test('scope contract rule 3: a requirement outside the ceiling is refused locally, before any network I/O', async () => {
+test('[ceiling-refusal-before-network-every-path] scope contract rule 3: a requirement outside the ceiling is refused locally, before any network I/O', async () => {
   const f = fixture();
   const ready = await f.login();
   f.state.network.length = 0;
@@ -179,7 +179,7 @@ test('scope contract rule 3: a requirement outside the ceiling is refused locall
   assert.equal(retired.state.network.length, 0);
 });
 
-test('scope contract rule 4: requested scopes outside the ceiling are invalid_configuration', async () => {
+test('[requested-outside-ceiling-invalid-configuration] scope contract rule 4: requested scopes outside the ceiling are invalid_configuration', async () => {
   const f = fixture({ scopes: ['deliver', 'extra'], allowedScopes: ['deliver'] });
   await assert.rejects(f.oauth.prepare(f.context, budget()), rejects('invalid_configuration', undefined));
   await assert.rejects(f.replay('Bearer error="insufficient_scope", scope="deliver"'), rejects('invalid_configuration', undefined));
@@ -198,7 +198,7 @@ test('scope contract rule 4: requested scopes outside the ceiling are invalid_co
   assert.equal(preset.state.network.length, 0);
 });
 
-test('scope contract rule 5: a 401 scope is requested within the ceiling, never required', async () => {
+test('[challenge-401-scope-requested-not-required] scope contract rule 5: a 401 scope is requested within the ceiling, never required', async () => {
   const f = fixture({ flow: 'client_credentials', clientSecret: 'secret', requiredScopes: [] });
   const first = await f.provider.credential({ ...f.context, challenged: true });
   assert.equal(first.token, 'access-1');
@@ -231,7 +231,7 @@ test('scope contract rule 6: 403 insufficient_scope without scope uses H ∪ E, 
   await assert.rejects(host.oauth.complete(host.callback(pending), budget()), rejects('access_denied', ['audit', 'deliver']));
 });
 
-test('scope contract rule 7: a malformed challenge scope fails closed with access_denied and no scopes', async () => {
+test('[malformed-challenge-scope-denied] scope contract rule 7: a malformed challenge scope fails closed with access_denied and no scopes', async () => {
   const malformed = ['scope=""', 'scope="audit  deliver"', 'scope=" audit"', 'scope="audit "', 'scope="aud\\\\it"', 'scope="audit\tdeliver"',
     'scope="audit", scope="deliver"'];
   for (const parameter of malformed) {
@@ -259,7 +259,7 @@ test('scope contract rule 7: a malformed challenge scope fails closed with acces
     rejects('access_denied', undefined));
 });
 
-test('scope contract rule 8: insufficient_scope for scopes already granted is access_denied with R, no replay or login', async () => {
+test('[insufficient-scope-already-granted-denied] scope contract rule 8: insufficient_scope for scopes already granted is access_denied with R, no replay or login', async () => {
   const f = fixture();
   f.state.scope = 'audit deliver';
   const ready = await f.login({ requiredScopes: ['audit'] });
@@ -276,7 +276,7 @@ test('scope contract rule 8: insufficient_scope for scopes already granted is ac
   assert.equal(cc.state.tokenCalls.length, 1);
 });
 
-test('scope contract rule 9: complete() enforces the R stored on the pending login', async () => {
+test('[complete-enforces-stored-required-set] scope contract rule 9: complete() enforces the R stored on the pending login', async () => {
   const f = fixture();
   const pending = await f.oauth.prepare({ ...f.context, challenge: 'Bearer error="insufficient_scope", scope="audit"' }, budget());
   f.state.scope = 'deliver';
@@ -309,7 +309,7 @@ test('scope contract rule 9: complete() enforces the R stored on the pending log
   assert.deepEqual(hosted.store.grants()[0].scopes, ['audit', 'deliver']);
 });
 
-test('scope contract rule 10: refresh and client-credentials grants narrower than R are access_denied, grant persisted', async () => {
+test('[grant-narrower-than-required-denied] scope contract rule 10: refresh and client-credentials grants narrower than R are access_denied, grant persisted', async () => {
   const f = fixture();
   f.state.scope = 'audit deliver';
   await f.login({ requiredScopes: ['audit'] });
@@ -325,7 +325,7 @@ test('scope contract rule 10: refresh and client-credentials grants narrower tha
   assert.deepEqual(cc.store.grants()[0].scopes, ['deliver']);
 });
 
-test('scope contract rule 11: host-policy errors never carry scopes', async () => {
+test('[host-policy-errors-carry-no-scopes] scope contract rule 11: host-policy errors never carry scopes', async () => {
   const scopedHostError = code => new AuthError(code, ['host-secret-scope']);
   const selection = fixture({}, { selectClient: () => { throw scopedHostError('access_denied'); } });
   await assert.rejects(selection.oauth.prepare(selection.context, budget()), rejects('access_denied', undefined));
@@ -343,7 +343,7 @@ test('scope contract rule 11: host-policy errors never carry scopes', async () =
     rejects('access_denied', undefined));
 });
 
-test('scope contract rule 12: every complete() error carries loginEnded', async () => {
+test('[complete-error-login-ended] scope contract rule 12: every complete() error carries loginEnded', async () => {
   const ended = (code, value) => error => { assert.equal(error.code, code); assert.equal(error.loginEnded, value); return true; };
   const f = fixture({}, { loginLifetimeMs: 600_000 });
   const pending = await f.oauth.prepare(f.context, budget());
@@ -365,7 +365,11 @@ test('scope contract rule 12: every complete() error carries loginEnded', async 
   await assert.rejects(f.oauth.complete('not a url', budget()), ended('access_denied', true));
   // Consent denied: consumed.
   const denied = await f.oauth.prepare(f.context, budget());
-  await assert.rejects(f.oauth.complete(f.callback(denied, { error: 'access_denied', code: '' }), budget()), ended('access_denied', true));
+  const denial = new URL(f.callback(denied, { error: 'access_denied' })); denial.searchParams.delete('code');
+  await assert.rejects(f.oauth.complete(denial.href, budget()), ended('access_denied', true));
+  // Both code and error, or a duplicated parameter: invalid, rejected before the claim.
+  await assert.rejects(f.oauth.complete(f.callback(pending, { error: 'access_denied' }), budget()), ended('access_denied', false));
+  await assert.rejects(f.oauth.complete(`${f.callback(pending)}&iss=${encodeURIComponent('https://issuer.example')}`, budget()), ended('access_denied', false));
   // The first login is still completable after the rejected callbacks; a second callback finds it ended.
   assert.equal((await f.oauth.complete(f.callback(pending), budget())).type, 'ready');
   await assert.rejects(f.oauth.complete(f.callback(pending), budget()), ended('interaction_required', true));

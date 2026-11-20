@@ -132,8 +132,17 @@ per store when persisted; a new one beyond the cap cancels the oldest. Each
 completion replaces the grant, so the newest completed login wins. A login ends by
 completion (a claimed valid callback, including consent denial), `cancel`
 (including by the cap) or expiry; a callback for an ended login fails
-`interaction_required`. Redirect, state, issuer and a single authorization code
-are validated before the login is claimed, so a stray callback cannot burn it. Completion reselects current host
+`interaction_required`. The callback is validated before the login is claimed, so
+a stray callback cannot burn it: the exact redirect, the `state`, no `iss` other
+than the issuer, no fragment or userinfo, exactly one of `code` or `error`, and no
+duplicated parameter; an invalid callback fails `access_denied` and leaves the
+login pending. After the claim, a token-endpoint `invalid_grant` fails
+`interaction_required`; `invalid_client` fails `credential_unavailable` for a
+pre-registered client, `invalid_configuration` for a CIMD client and
+`interaction_required` for a DCR client (the next `prepare` registers again);
+any other token-endpoint failure or invalid token response fails
+`provider_failed`. These errors carry no scopes, and the login is consumed.
+`complete()` takes no pending-login handle: the callback's `state` names the login. Completion reselects current host
 client authentication outside store coordination before it claims the callback;
 secret rotation does not require new consent. Records never contain client secrets.
 
