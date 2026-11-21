@@ -518,11 +518,18 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       if (known.binding?.grantKey !== undefined && known.binding.grantKey !== key) return;
       known.decided = true;
       const stored = await read(key, "grant", operation);
+      // A forced re-registration never serves the replaced client's token.
       const full = decide({ op, config, challenge, sent: sent?.key === key ? sent.generation : undefined,
-        grant: grantOf(stored, { selection } as Selected) });
+        grant: grantOf(stored, { selection } as Selected, mode === "host" && forceRegistration) });
       const { outcome } = full;
-      // `use` only for a stored binding: a new target is discovered and its binding persisted.
-      if (outcome.type === "use" && known.binding) {
+      if (outcome.type === "use") {
+        // A new target (an unbound one, or a preset, sharing a host-assigned grant) learns its
+        // binding without the issuer's metadata.
+        if (!known.binding) {
+          await write(bindingKey(namespace, context), undefined, { kind: "binding", generation: crypto.randomUUID(), issuer: client.issuer,
+            resource: client.resource, discoveredAt: Date.now(), grantKey: key, client: selection }, operation);
+        }
+        if (mode === "host") await sweepPersisted(key, operation);
         known.early = ready(stored!, key, binding);
         const signal = new AuthError("provider_failed");
         gated.add(signal);

@@ -506,3 +506,78 @@ test('the stale-metadata refetch keeps a host destination refusal\'s code', asyn
   await assert.rejects(managed.provider({ budget }).credential(w.context),
     error => error.code === 'untrusted_destination' && error.requiredScopes === undefined);
 });
+
+test('a usable grant on a new target or a metadata-less binding is used with no authorization-server request', async () => {
+  // Each case runs against a fresh world whose policyFetch records URLs.
+  const world = client => {
+    const store = managedWorld(client).store, urls = [];
+    const oauth = managedOAuth({ namespace: 'routing', store, persistPendingLogins: true, selectClient: () => structuredClone(client), checkDestination: () => {},
+      async policyFetch(url, init) {
+        urls.push(url);
+        if (url === `${issuer}/register`) {
+          const body = JSON.parse(String(init.body));
+          return Response.json({ client_id: `issued-${urls.length}`, client_secret: 'issued-secret', token_endpoint_auth_method: body.token_endpoint_auth_method }, { status: 201 });
+        }
+        if (url === `${issuer}/token`) return Response.json({ access_token: `access-${urls.length}`, token_type: 'Bearer', expires_in: 3600,
+          scope: new URLSearchParams(String(init.body)).get('scope') ?? '' });
+        if (url.startsWith('https://api.example/.well-known/')) return Response.json({ resource: url.includes('/uploads') ? `${resource.replace('/events', '/uploads')}` : resource, authorization_servers: [issuer] });
+        return Response.json({ issuer, token_endpoint: `${issuer}/token`, registration_endpoint: `${issuer}/register`,
+          grant_types_supported: ['client_credentials'], token_endpoint_auth_methods_supported: ['client_secret_basic'] });
+      } });
+    const issuerRequests = () => urls.filter(url => url.startsWith(issuer)).length;
+    return { store, urls, oauth, issuerRequests, provider: oauth.provider({ budget }) };
+  };
+  const events = { backendId: 'backend', purpose: 'event', url: resource };
+  const bindings = store => [...store.values.values()].filter(value => value.kind === 'binding');
+  // 0. A host-assigned shared grant partition: a new, unbound upload binding uses the event grant.
+  {
+    const w = world(cc({ grantPartition: 'shared' }));
+    await w.oauth.prepare(events, budget());
+    const before = w.issuerRequests(), uploads = { ...events, purpose: 'upload' };
+    assert.equal((await w.provider.credential({ ...uploads, challenged: true })).token, 'access-3');
+    assert.equal(w.issuerRequests(), before, 'no authorization-server request');
+    assert.equal(bindings(w.store).length, 2, 'the upload binding is stored');
+    assert.ok(bindings(w.store).some(value => value.metadata === undefined), 'without the issuer metadata');
+  }
+  // 1. A lost binding record: the challenged replay uses the still-usable grant.
+  {
+    const w = world(cc());
+    await w.oauth.prepare(events, budget());
+    for (const [key, value] of w.store.values) if (value.kind === 'binding') w.store.values.delete(key);
+    const before = w.issuerRequests();
+    assert.equal((await w.provider.credential({ ...events, challenged: true })).token, 'access-3');
+    assert.equal(w.issuerRequests(), before, 'no authorization-server request');
+    assert.equal(bindings(w.store).length, 1, 'the binding is learned again');
+    assert.equal(bindings(w.store)[0].metadata, undefined, 'without the issuer metadata');
+  }
+  // 2. prepare on a stored binding without metadata: use, no request at all.
+  {
+    const w = world(cc());
+    await w.oauth.prepare(events, budget());
+    for (const [key, value] of w.store.values) if (value.kind === 'binding') { const { metadata: _m, ...rest } = value; w.store.values.set(key, rest); }
+    const before = w.urls.length;
+    assert.equal((await w.oauth.prepare(events, budget())).credential.token, 'access-3');
+    assert.equal(w.urls.length, before);
+  }
+  // 3. A forced client-credentials re-registration acquires, never serving the replaced client's token.
+  {
+    const dcr = { issuer, resource, flow: 'client_credentials', scopes: ['read'], allowedScopes: ['read'], requiredScopes: [], registration: { clientName: 'x' } };
+    const secrets = new Map();
+    const store = managedWorld(dcr).store, urls = [];
+    const oauth = managedOAuth({ namespace: 'routing', store, selectClient: () => structuredClone(dcr), checkDestination: () => {},
+      secrets: { async put(r, v) { secrets.set(r, v); }, async get(r) { return secrets.get(r); }, async delete(r) { secrets.delete(r); } },
+      async policyFetch(url, init) {
+        urls.push(url);
+        if (url === `${issuer}/register`) return Response.json({ client_id: `issued-${urls.length}`, client_secret: 's', token_endpoint_auth_method: 'client_secret_basic' }, { status: 201 });
+        if (url === `${issuer}/token`) return Response.json({ access_token: `access-${urls.length}`, token_type: 'Bearer', expires_in: 3600, scope: 'read' });
+        if (url.startsWith('https://api.example/.well-known/')) return Response.json({ resource, authorization_servers: [issuer] });
+        return Response.json({ issuer, token_endpoint: `${issuer}/token`, registration_endpoint: `${issuer}/register`,
+          grant_types_supported: ['client_credentials'], token_endpoint_auth_methods_supported: ['client_secret_basic'] });
+      } });
+    const first = await oauth.prepare(events, budget());
+    for (const [key, value] of store.values) if (value.kind === 'binding') { const { metadata: _m, ...rest } = value; store.values.set(key, rest); }
+    const forced = await oauth.prepare(events, budget(), { forceRegistration: true });
+    assert.notEqual(forced.credential.token, first.credential.token);
+    assert.ok(urls.filter(url => url === `${issuer}/register`).length >= 2, 'registered anew');
+  }
+});
