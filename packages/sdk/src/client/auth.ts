@@ -838,12 +838,17 @@ const defaults: AuthProvider = {
       options,
     );
     if (!response.ok) {
-      if (parameters.get("grant_type") === "refresh_token") {
-        const failure = await response.json().catch(() => undefined) as { error?: unknown } | undefined;
-        // Definitive rejection of the presented refresh token; anything else is transient.
-        if (failure?.error === "invalid_grant") throw new AuthError("refresh_rejected");
+      // Renewal errors (refresh, client credentials) and code-exchange errors, as in
+      // managedOAuth. This provider uses pre-registered clients only, so invalid_client is
+      // credential_unavailable. Nothing here carries scopes.
+      const failure = await response.json().catch(() => undefined) as { error?: unknown } | undefined;
+      const grant = parameters.get("grant_type");
+      const code = failure?.error;
+      if (code === "invalid_grant") {
+        throw new AuthError(grant === "refresh_token" ? "refresh_rejected" : grant === "authorization_code" ? "interaction_required" : "credential_unavailable");
       }
-      error("token request rejected");
+      if (code === "invalid_client" || (code === "unauthorized_client" && grant !== "authorization_code")) throw new AuthError("credential_unavailable");
+      throw new AuthError("provider_failed");
     }
     const body = record(await response.json());
     try {

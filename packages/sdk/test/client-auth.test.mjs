@@ -162,9 +162,10 @@ test("default transport permits explicitly trusted loopback and never follows to
       "local",
     );
     redirects = true;
+    // A redirected token response is a token-endpoint failure: provider_failed (renewal errors).
     await assert.rejects(
       provider.authenticate({ url: `${origin}/api/uploads`, authentication }),
-      /token request rejected/,
+      (error) => error.code === "provider_failed" && error.requiredScopes === undefined,
     );
     assert.equal(tokens, 2);
     assert.equal(leaked, false);
@@ -516,7 +517,7 @@ test("credential acquisition failures redact remote error bodies and reject priv
     ),
     (error) =>
       !error.message.includes("secret token detail") &&
-      /token request rejected/.test(error.message),
+      error.code === "provider_failed",
   );
   await assert.rejects(
     provider.authenticate({

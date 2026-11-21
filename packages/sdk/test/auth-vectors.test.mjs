@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { managedOAuth } from '../dist/src/oauth/index.js';
-import { AuthError } from '../dist/src/client/auth.js';
+import { AuthError, auth, classifyAuthError } from '../dist/src/client/auth.js';
 import { observeDecisions } from '../dist/src/client/decision.js';
 import { KNOWN_FEATURES, skipFor } from './fixtures/sdk-features.mjs';
 
@@ -329,6 +329,50 @@ for (const vector of vectors.token_errors) {
   test(`[renewal-token-errors-classified] shared token error: ${vector.id}`, { skip: skipFor(vector) }, async () => {
     defined(vector, TOKEN_ERROR_INPUT, TOKEN_ERROR_EXPECT);
     compare(vector, await tokenErrorVector(vector.input));
+  });
+}
+
+/**
+ * The same renewal against the legacy auth() provider (Hooks' default). It has
+ * pre-registered clients only, so it runs the pre-registered vectors.
+ */
+async function legacyTokenErrorVector(input) {
+  const refresh = input.grant_type === 'refresh';
+  const legacyIssuer = 'https://identity.example.com', legacyResource = 'https://hooks.example.com/api';
+  let failing = false, issued = 0;
+  const provider = auth({ validateDestination() {}, resolveHostname: async () => ['93.184.216.34'],
+    redirectUri: 'https://app.example/callback', authorize: request => `${request.redirectUri}?code=code&state=${request.state}`,
+    selectClient: () => ({ issuer: legacyIssuer, resource: legacyResource, clientId: 'client', flow: refresh ? 'authorization_code_pkce' : 'client_credentials',
+      scopes: ['read'] }),
+    async fetch(url) {
+      const target = String(url);
+      if (target.includes('oauth-protected-resource')) return Response.json({ resource: legacyResource, authorization_servers: [legacyIssuer] });
+      if (target.includes('well-known')) return Response.json({ issuer: legacyIssuer, token_endpoint: `${legacyIssuer}/token`,
+        authorization_endpoint: `${legacyIssuer}/authorize`, code_challenge_methods_supported: ['S256'],
+        grant_types_supported: ['client_credentials', 'authorization_code', 'refresh_token'] });
+      if (failing) return tokenErrors[input.error]();
+      issued++;
+      return Response.json({ access_token: `legacy-${issued}`, token_type: 'Bearer', expires_in: 3600, scope: 'read',
+        ...(refresh ? { refresh_token: `legacy-refresh-${issued}` } : {}) });
+    } });
+  const cache = new Map(), context = { url: `${legacyResource}/events`, cache };
+  if (refresh) {
+    await provider.authenticate({ ...context, challenged: true });
+    for (const [key, value] of cache) cache.set(key, { ...value, expiresAt: 0 });
+  }
+  failing = true;
+  const outcome = await settle(provider.authenticate({ ...context, ...(refresh ? {} : { challenged: true }) }));
+  assert.ok(outcome.error, 'the renewal fails');
+  // Hooks classifies whatever the provider throws; no scopes survive.
+  const error = classifyAuthError(outcome.error);
+  assert.equal(error.requiredScopes, undefined, 'no scopes');
+  return { code: error.code };
+}
+
+for (const vector of vectors.token_errors.filter(vector => vector.input.client_source === 'preregistered')) {
+  test(`[renewal-token-errors-classified] shared token error through legacy auth(): ${vector.id}`, { skip: skipFor(vector) }, async () => {
+    defined(vector, TOKEN_ERROR_INPUT, TOKEN_ERROR_EXPECT);
+    compare(vector, await legacyTokenErrorVector(vector.input));
   });
 }
 

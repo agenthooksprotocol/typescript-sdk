@@ -368,3 +368,73 @@ test('complete(): loginEnded on a caller\'s abort reason stays configurable and 
   const descriptor = Object.getOwnPropertyDescriptor(reason, 'loginEnded');
   assert.equal(descriptor.configurable, true); assert.equal(descriptor.writable, true);
 });
+
+test('step 0: a 401 retires the rejected token before target, argument and budget checks', async () => {
+  const setup = async () => {
+    const w = managedWorld(cc());
+    await w.oauth.prepare(w.context, budget());
+    const sent = await w.provider.credential(w.context);
+    return { w, sent };
+  };
+  const unauthorized = () => new Response(null, { status: 401, headers: { 'www-authenticate': 'Bearer error="invalid_token"' } });
+  const retired = w => assert.equal(w.store.grants()[0].token, undefined, 'the rejected token was retired');
+  // An unsupported binding on the challenge context.
+  {
+    const { w, sent } = await setup();
+    await assert.rejects(w.oauth.challenge({ ...w.context, authentication: { type: 'magic' }, credential: sent, response: unauthorized() }, budget()));
+    retired(w);
+  }
+  // An invalid prepare argument on a replayed 401 context.
+  {
+    const { w, sent } = await setup();
+    await assert.rejects(w.oauth.prepare({ ...w.context, challenged: true, challengeStatus: 401, rejectedCredential: sent }, budget(), { requiredScopes: 'read' }),
+      { code: 'invalid_configuration' });
+    retired(w);
+  }
+  // A failing host budget on the provider's challenge and replay.
+  for (const call of ['challenge', 'credential']) {
+    const { w, sent } = await setup();
+    const provider = w.oauth.provider({ budget() { throw new Error('no budget'); } });
+    await assert.rejects(call === 'challenge'
+      ? provider.challenge({ ...w.context, credential: sent, response: unauthorized() })
+      : provider.credential({ ...w.context, challenged: true, challengeStatus: 401, rejectedCredential: sent }));
+    retired(w);
+  }
+  // A malformed budget is not exhausted: the retirement still comes first.
+  {
+    const { w, sent } = await setup();
+    await assert.rejects(w.oauth.challenge({ ...w.context, credential: sent, response: unauthorized() }, { signal: undefined, deadline: Number.NaN }),
+      { code: 'invalid_configuration' });
+    retired(w);
+  }
+  // Only an already aborted budget fails first.
+  {
+    const { w, sent } = await setup();
+    const controller = new AbortController(); controller.abort();
+    await assert.rejects(w.oauth.challenge({ ...w.context, credential: sent, response: unauthorized() }, { signal: controller.signal, deadline: Date.now() + 1000 }));
+    assert.equal(w.store.grants()[0].token, 'access-1', 'an aborted caller retires nothing');
+  }
+});
+
+test('complete(): the token-endpoint destination check runs before the claim, a consent denial included', async () => {
+  const pkce = { issuer, resource, clientId: 'client', flow: 'authorization_code_pkce', scopes: ['read'], allowedScopes: ['read'], requiredScopes: [],
+    redirectUri: 'https://app.example/callback' };
+  for (const denial of [false, true]) {
+    let refuse = false;
+    const w = managedWorld(pkce, { checkDestination: (url, purpose) => {
+      if (refuse && purpose === 'token') throw new AuthError('untrusted_destination', ['destination-scope']);
+    } });
+    const pending = await w.oauth.prepare(w.context, budget());
+    const callback = denial
+      ? `https://app.example/callback?error=access_denied&state=${pending.state}&iss=${encodeURIComponent(issuer)}`
+      : `https://app.example/callback?code=c&state=${pending.state}&iss=${encodeURIComponent(issuer)}`;
+    refuse = true;
+    await assert.rejects(w.oauth.complete(callback, budget()), error =>
+      error.code === 'untrusted_destination' && error.requiredScopes === undefined && error.loginEnded === false);
+    assert.equal(w.state.tokens.length, 0, 'no token request');
+    // The login is still pending: once policy allows it, the same callback completes it.
+    refuse = false;
+    if (denial) await assert.rejects(w.oauth.complete(callback, budget()), error => error.code === 'access_denied' && error.loginEnded === true);
+    else assert.equal((await w.oauth.complete(callback, budget())).type, 'ready');
+  }
+});

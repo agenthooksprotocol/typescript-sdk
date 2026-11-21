@@ -1,6 +1,6 @@
 import { AuthError, normalizeAuthTarget, classifyAuthError } from "../client/auth.js";
 import type { AuthChallengeContext, AuthErrorCode, DeliveryAuthContext, DeliveryAuthProvider, DeliveryCredential, PreparedEndpoint } from "../client/auth.js";
-import { isPolicyRefusal, resolveTarget, type ScopeGate } from "./discovery.js";
+import { active, https, isPolicyRefusal, resolveTarget, type ScopeGate } from "./discovery.js";
 import { classify, coverage, decide, parseChallenge, type Challenge, type DecisionConfig, type DecisionGrant, type DecisionOperation } from "../client/decision.js";
 import {
   acquireClientCredentials, exchangeCode, isInvalidClient, isTransportFailure, pkce, refreshCredential, startLogin, validateCallback,
@@ -237,6 +237,11 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     const refresh = !forced && grant.refreshToken !== undefined && (target.selection.source !== "dcr" || grant.clientId !== undefined);
     return { generation: grant.generation, granted: grant.scopes, tokenValid, refresh };
   }
+  /** The challenged status a context carries (401 for `challenged` without a header). */
+  function statusOf(context: DeliveryAuthContext | undefined): number | undefined {
+    if (!context) return undefined;
+    try { return parseChallenge(context.challengeStatus, context.challenge, context.challenged === true).status; } catch { return undefined; }
+  }
   function challengeOf(context: DeliveryAuthContext): Challenge {
     return parseChallenge(context.challengeStatus, context.challenge, context.challenged === true);
   }
@@ -245,6 +250,34 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     const owner = credential ? attempts.get(credential.attempt as object) : undefined;
     if (credential && (!owner || owner.identity !== identity(context))) throw new AuthError("invalid_configuration");
     return owner;
+  }
+  /**
+   * Step 0 before any target or configuration check: a 401 retires the token of the
+   * attempt `credential` names, whenever its grant can be identified (an attempt this
+   * provider issued for the same binding, or one whose target no longer normalizes).
+   */
+  async function retireFirst(status: number | undefined, credential: DeliveryCredential | undefined, context: unknown): Promise<void> {
+    if (status !== 401 || !credential || typeof credential !== "object") return;
+    let owner: Attempt | undefined;
+    try { owner = attempts.get(credential.attempt as object); } catch { return; }
+    if (!owner) return;
+    let same = true;
+    try { same = owner.identity === identity(context as DeliveryAuthContext); } catch { /* An invalid target: the attempt still names its grant. */ }
+    if (same) await retire(owner, commit());
+  }
+  /** True when the caller's budget is already exhausted or aborted: only that may fail before step 0. */
+  function exhausted(budget: Operation | undefined, signal?: AbortSignal): boolean {
+    let aborted = false, expired = false;
+    try { aborted = budget?.signal?.aborted === true || signal?.aborted === true; expired = Number.isFinite(budget?.deadline) && budget!.deadline <= Date.now(); }
+    catch { /* A malformed budget is not exhausted. */ }
+    return aborted || expired;
+  }
+  /** Step 0 at a public boundary, before any argument or target check. */
+  async function retireAtBoundary(status: number | undefined, credential: DeliveryCredential | undefined, context: unknown,
+    budget: Operation | undefined, signal?: AbortSignal): Promise<void> {
+    if (status !== 401 || exhausted(budget, signal)) return;
+    try { await retireFirst(status, credential, context); }
+    catch (error) { throw classify(classifyAuthError(error, "provider_failed", signal)); }
   }
   /**
    * Step 0: drop the rejected access token (keeping refresh material) unless a newer
@@ -451,20 +484,19 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
   async function acquire(context: DeliveryAuthContext, operation: Operation, mode: Mode, explicit: readonly string[] = [],
     redirect?: string, forceRegistration = false, sent?: Attempt, op: DecisionOperation = mode === "host" ? "prepare" : "credential",
   ): Promise<PrepareResult | typeof LOOKUP_MISS> {
+    const challenge = challengeOf(context);
+    // Step 0: a 401 retires the rejected token before every target, configuration and
+    // decide check, whatever the outcome.
+    if (challenge.status === 401) {
+      if (sent) await retire(sent, operation);
+      else await retireFirst(401, context.rejectedCredential, context);
+    }
     if (context.authentication !== undefined && context.authentication.type !== "oauth") throw new AuthError("unsupported_binding");
     if (!Array.isArray(explicit)) throw new AuthError("invalid_configuration");
     const binding = identity(context);
     const explicitScopes = Object.freeze([...explicit]);
-    const challenge = challengeOf(context), preset = presetOf(context);
+    const preset = presetOf(context);
     sent ??= attemptOf(context.rejectedCredential, context);
-    let retired = false;
-    const retireSent = async () => {
-      if (retired || !sent) return;
-      retired = true;
-      await retire(sent, operation);
-    };
-    // Step 0: a 401 retires the rejected token before anything else, whatever the outcome.
-    if (challenge.status === 401) await retireSent();
     // Steps 1-4 decide locally once the client is selected, before any authorization-server I/O.
     const gate: ScopeGate = async (client, presetScopes) => {
       const decision = decide({ op, config: configOf(client, explicitScopes, presetScopes), challenge, sent: sent?.generation });
@@ -774,6 +806,20 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     return { ...reselected, client: { ...client, redirectUri: record.client.redirectUri! } };
   }
 
+  /** Host destination policy for the token endpoint (section 3, step 3), before the claim. */
+  async function tokenDestination(target: ResolvedTarget, operation: Operation): Promise<void> {
+    const endpoint = https(String(target.metadata.token_endpoint));
+    const approved = endpoint.href;
+    try {
+      await options.checkDestination(endpoint, "token", operation);
+    } catch (error) {
+      active(operation);
+      throw classifyAuthError(error, "untrusted_destination");
+    }
+    active(operation);
+    if (endpoint.href !== approved) throw new AuthError("untrusted_destination");
+  }
+
   // Successful host prepares (and completed logins) let Hooks re-attempt a backend
   // whose configuration discovery was skipped as unavailable.
   const preparedListeners = new Set<(endpoint: PreparedEndpoint) => void>();
@@ -785,7 +831,12 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
   }
 
   async function prepare(input: DeliveryAuthContext, budget: Operation, prepareOptions: PrepareOptions = {}): Promise<PrepareResult> {
-    const context = snapshotContext(input);
+    // Snapshot synchronously, then step 0, then any argument or target failure.
+    let context: DeliveryAuthContext, failure: unknown;
+    try { context = snapshotContext(input); } catch (error) { failure = error; }
+    if (statusOf(input) === 401 && input?.rejectedCredential) await retireAtBoundary(401, input.rejectedCredential, input, budget, input.signal);
+    if (failure !== undefined) throw failure;
+    context = context!;
     if (prepareOptions.requiredScopes !== undefined && !Array.isArray(prepareOptions.requiredScopes)) throw new AuthError("invalid_configuration");
     const explicit = [...(prepareOptions.requiredScopes ?? [])];
     const redirect = prepareOptions.redirectUri;
@@ -829,6 +880,9 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         // every valid callback, a consent denial included, before the claim.
         const context = snapshotContext(record.context as DeliveryAuthContext);
         const current = await completionTarget(record, context, operation);
+        // ... and the token endpoint's destination policy, for every valid callback (a
+        // denial included): a refusal keeps the host's code and the login pending.
+        await tokenDestination(current, operation);
         // 4. Claim once; from here the login has ended.
         progress.phase = "claiming"; progress.claimed = record;
         const won = await claim(record, operation);
@@ -897,8 +951,13 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     if (response.status !== 401 && response.status !== 403) return;
     const header = response.headers.get("www-authenticate") ?? undefined;
     const { rejectedCredential: _rejected, ...rest } = input;
-    const context = snapshotContext({ ...rest, ...(header === undefined ? {} : { challenge: header }),
-      challengeStatus: response.status, challenged: true });
+    let context: DeliveryAuthContext, failure: unknown;
+    try {
+      context = snapshotContext({ ...rest, ...(header === undefined ? {} : { challenge: header }), challengeStatus: response.status, challenged: true });
+    } catch (error) { failure = error; }
+    if (response.status === 401 && credential) await retireAtBoundary(401, credential, input, budget, input.signal);
+    if (failure !== undefined) throw failure;
+    context = context!;
     return run(budget, context.signal, async (operation) => {
       // Prepare the next attempt (the replay, or the next notification/upload that is
       // never replayed): discovery, refresh and client-credentials acquisition, never a login.
@@ -914,7 +973,13 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         return () => { preparedListeners.delete(subscription); };
       },
       async credential(input) {
-        const context = snapshotContext(input);
+        input?.signal?.throwIfAborted();
+        // Snapshot synchronously; step 0 then precedes the host budget and every target check.
+        let context: DeliveryAuthContext, failure: unknown;
+        try { context = snapshotContext(input); } catch (error) { failure = error; }
+        if (statusOf(input) === 401 && input?.rejectedCredential) await retireAtBoundary(401, input.rejectedCredential, input, undefined, input.signal);
+        if (failure !== undefined) throw failure;
+        context = context!;
         const lookup = context.authentication === undefined && !context.challenged && context.challenge === undefined;
         context.signal?.throwIfAborted();
         let budget: Operation;
@@ -935,6 +1000,8 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       },
       async challenge(input) {
         input.signal?.throwIfAborted();
+        // Step 0 precedes the host budget and every target check.
+        if (input.response?.status === 401 && input.credential) await retireAtBoundary(401, input.credential, input, undefined, input.signal);
         let budget: Operation;
         try { budget = host.budget(input); } catch (error) {
           input.signal?.throwIfAborted();
