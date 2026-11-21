@@ -32,10 +32,39 @@ const COMPLETION_INPUT = ['pending', 'handle', 'client_source', 'source_permitte
 const COMPLETION_EXPECT = ['code', 'scopes', 'login_ended', 'grant_persisted'];
 const TOKEN_ERROR_INPUT = ['grant_type', 'client_source', 'error'];
 const TOKEN_ERROR_EXPECT = ['code', 'reregistrations'];
+/** Members of the nested objects a vector may carry, at every level. */
+const NESTED = {
+  grant: ['generation', 'granted', 'token', 'refresh'],
+  challenge: ['status', 'www_authenticate'],
+  host_error: ['callback', 'target', 'code', 'scopes'],
+  target_error: ['check', 'code'],
+  claim: ['outcome', 'error_code', 'reread'],
+};
+function known(path, value, members) {
+  assert.ok(value !== null && typeof value === 'object' && !Array.isArray(value), `${path}: not an object`);
+  for (const key of Object.keys(value)) assert.ok(members.includes(key), `${path}: unknown field ${key}`);
+}
+/** Every member at every nesting level is one the spec defines; any other fails the run. */
 function defined(vector, input, expect) {
-  for (const key of Object.keys(vector)) assert.ok(VECTOR_FIELDS.includes(key), `${vector.id}: unknown vector field ${key}`);
-  for (const key of Object.keys(vector.input)) assert.ok(input.includes(key), `${vector.id}: unknown input field ${key}`);
-  for (const key of Object.keys(vector.expect)) assert.ok(expect.includes(key), `${vector.id}: unknown expect field ${key}`);
+  known(vector.id, vector, VECTOR_FIELDS);
+  known(`${vector.id}.input`, vector.input, input);
+  known(`${vector.id}.expect`, vector.expect, expect);
+  if (vector.requires !== undefined) assert.ok(Array.isArray(vector.requires) && vector.requires.every(item => typeof item === 'string'), `${vector.id}.requires`);
+  const leaf = (path, value) => {
+    if (Array.isArray(value)) value.forEach((item, index) => assert.ok(item === null || typeof item !== 'object', `${path}[${index}]: unexpected object`));
+    else assert.ok(value === null || typeof value !== 'object', `${path}: unexpected object`);
+  };
+  for (const [section, members] of [['input', vector.input], ['expect', vector.expect]]) {
+    for (const [key, value] of Object.entries(members)) {
+      const path = `${vector.id}.${section}.${key}`;
+      const nested = section === 'input' ? NESTED[key] : undefined;
+      // `claim` is the string `ok` or an object; `grant` may be null.
+      if (nested && value !== null && typeof value === 'object') {
+        known(path, value, nested);
+        for (const [inner, innerValue] of Object.entries(value)) leaf(`${path}.${inner}`, innerValue);
+      } else leaf(path, value);
+    }
+  }
 }
 function compare(vector, result) {
   for (const [key, want] of Object.entries(vector.expect)) {
@@ -94,6 +123,7 @@ function world({ flow, requested, ceiling, required = [], source = 'preregistere
       const failure = state.hostError;
       if (failure?.callback === 'destination' && ((failure.target === 'registration_endpoint' && purpose === 'registration') ||
           (failure.target === 'issuer_metadata' && purpose === 'metadata' && url.origin === issuer) ||
+          (failure.target === 'protected_resource_metadata' && purpose === 'metadata' && url.origin !== issuer) ||
           (failure.target === 'token_endpoint' && purpose === 'token'))) hostError('destination');
     },
     async policyFetch(url, init) {
@@ -406,4 +436,19 @@ test('[complete-token-endpoint-errors-classified] token-endpoint errors after th
     assert.equal(result.grant_persisted, false, `${client_source} ${exchange}`);
     if ('scopes' in result) assert.deepEqual(result.scopes, [], `${client_source} ${exchange}`);
   }
+});
+
+test('the vector runner rejects unknown fields at every nesting level', () => {
+  const base = vectors.scope_decisions.find(vector => vector.input.grant && vector.input.challenge && vector.input.host_error === undefined);
+  const mutate = change => { const copy = structuredClone(base); change(copy); return copy; };
+  for (const copy of [
+    mutate(vector => { vector.extra = 1; }),
+    mutate(vector => { vector.input.extra = 1; }),
+    mutate(vector => { vector.expect.extra = 1; }),
+    mutate(vector => { vector.input.grant.extra = 1; }),
+    mutate(vector => { vector.input.challenge.extra = 1; }),
+    mutate(vector => { vector.input.host_error = { callback: 'destination', extra: 1 }; }),
+    mutate(vector => { vector.input.requested = [{ nested: true }]; }),
+  ]) assert.throws(() => defined(copy, SCOPE_INPUT, SCOPE_EXPECT), /unknown field|unexpected object/);
+  assert.doesNotThrow(() => defined(base, SCOPE_INPUT, SCOPE_EXPECT));
 });
