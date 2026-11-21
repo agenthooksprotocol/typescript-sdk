@@ -184,9 +184,6 @@ The first matching step wins:
    9. PKCE: `prepare` creates a login requesting previous ∪ ((S ∪ R) ∩ C) and
    storing R; any other entry point fails `interaction_required` carrying R
    (pass it back with `oauth.prepare(context, budget, { requiredScopes })`).
-   Challenge handling first repairs the binding through full discovery, so a
-   host destination refusal there (for example of the issuer's metadata) keeps
-   the host's code.
 
 A refreshed, acquired or completed grant that does not cover R fails
 `access_denied` carrying R, with the grant (and any rotated refresh token)

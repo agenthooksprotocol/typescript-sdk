@@ -553,9 +553,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       // Cached tokens are served without metadata I/O, locks or writes.
       const observed = await read(key, "grant", operation);
       const first = decideFor(target, observed);
-      // Challenge handling repairs the binding (full discovery, host destination policy)
-      // before it reports that a login is needed; earlier failures stay local.
-      if (first.outcome.type === "fail" && !(op === "challenge" && first.outcome.step === 9 && cached && repairable)) throw first.outcome.error;
+      if (first.outcome.type === "fail") throw first.outcome.error;
       if (first.outcome.type === "use") return ready(observed!, key, binding);
       // Full discovery only on a cache miss, host prepare or challenge handling; a
       // known binding otherwise renews from persisted metadata (or fails, never anonymous).

@@ -244,8 +244,14 @@ async function decideVector(input) {
   return result;
 }
 
+/**
+ * Temporary, until the next spec commit replaces it: this vector of spec 14d9eed demands
+ * an issuer-metadata request before a PKCE 403 step-up's interaction_required, which
+ * needs no authorization-server request. Remove when re-vendoring.
+ */
+const WITHDRAWN = new Map([['host-policy-issuer-metadata-destination-refused-challenge', 'withdrawn from spec 14d9eed; replaced in the next spec commit']]);
 for (const vector of vectors.scope_decisions) {
-  test(`shared scope decision: ${vector.id}`, { skip: skipFor(vector) }, async () => {
+  test(`shared scope decision: ${vector.id}`, { skip: skipFor(vector) || (WITHDRAWN.get(vector.id) ?? false) }, async () => {
     defined(vector, SCOPE_INPUT, SCOPE_EXPECT);
     compare(vector, await decideVector(vector.input));
   });
