@@ -816,7 +816,7 @@ for (const [kind, configure] of [
   });
 }
 
-test('challenge handling alone rebinds a moved resource, without any token acquisition or login', async () => {
+test('challenge handling that needs a login makes no authorization-server request: the binding is repaired by renewal or prepare', async () => {
   const f = fixture();
   const moved = movedIssuer(f, { oldUp: true });
   const fetch = moved.options.policyFetch;
@@ -833,9 +833,14 @@ test('challenge handling alone rebinds a moved resource, without any token acqui
   const { credential } = await f.login(oauth);
   const tokens = f.state.tokenCalls.length;
   rebound = true;
-  // Without a refresh token PKCE needs a login, which challenge handling never creates.
+  // Without a refresh token PKCE needs a login, which challenge handling never creates;
+  // that outcome needs no authorization-server request, so none is made.
+  const metadata = f.state.metadataCalls;
   await assert.rejects(provider.challenge({ ...f.context, credential, response: new Response(null, { status: 401 }) }), { code: 'interaction_required' });
   assert.equal(f.state.tokenCalls.length, tokens, 'no acquisition ran');
+  assert.equal(f.state.metadataCalls, metadata, 'no discovery');
+  // The host's prepare repairs the binding.
+  await oauth.prepare({ ...f.context, challenged: true }, budget());
   assert.equal([...f.store.values.values()].find(value => value.kind === 'binding').issuer, moved.NEW);
 });
 

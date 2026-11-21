@@ -499,24 +499,44 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     sent ??= attemptOf(context.rejectedCredential, context);
     // Steps 1-4 decide locally once the client is selected, before any authorization-server I/O.
     const gate: ScopeGate = async (client, presetScopes) => {
-      const decision = decide({ op, config: configOf(client, explicitScopes, presetScopes), challenge, sent: sent?.generation });
+      const config = configOf(client, explicitScopes, presetScopes);
+      const decision = decide({ op, config, challenge, sent: sent?.generation });
       if (decision.outcome.type === "fail" && decision.outcome.step <= 4) {
         gated.add(decision.outcome.error);
         throw decision.outcome.error;
       }
+      // An outcome that needs no authorization-server request is returned without one:
+      // a pre-registered PKCE client's grant key is known before the issuer's metadata,
+      // so a login that only a host prepare can create is reported now.
+      if (!known.metadata && client.flow === "authorization_code_pkce" && op !== "prepare" && client.clientId !== undefined) {
+        const selection: ClientSelection = { source: "preregistered", clientId: client.clientId };
+        const key = grantKey(namespace, context, client, clientIdentity(selection));
+        const stored = await read(key, "grant", operation);
+        const full = decide({ op, config, challenge, sent: sent?.key === key ? sent.generation : undefined,
+          grant: grantOf(stored, { selection } as Selected) });
+        if (full.outcome.type === "fail" && full.outcome.step === 9) {
+          // An unbound target still learns its binding, without the issuer's metadata.
+          if (!known.binding && context.authentication === undefined) {
+            await write(bindingKey(namespace, context), undefined, { kind: "binding", generation: crypto.randomUUID(), issuer: client.issuer,
+              resource: client.resource, discoveredAt: Date.now(), grantKey: key, client: selection }, operation);
+          }
+          gated.add(full.outcome.error);
+          throw full.outcome.error;
+        }
+      }
     };
+    /** What resolution starts from: the stored binding, and whether it holds the issuer's metadata. */
+    const known: { binding?: StoredBinding | undefined; metadata: boolean } = { metadata: false };
     return resolveAndAct();
 
     async function resolveAndAct(): Promise<PrepareResult | typeof LOOKUP_MISS> {
       const cached = await read(bindingKey(namespace, context), "binding", operation);
       if (!cached && mode === "lookup") return LOOKUP_MISS;
+      known.binding = cached; known.metadata = cached?.metadata !== undefined;
       const challenged = context.challenged === true || context.challenge !== undefined;
       // Paths that may exchange can repair a binding whose cached resolution fails
       // (stored issuer gone or no longer trusted) through full discovery.
       const repairable = mode === "host" || (mode === "delivery" && challenged);
-      // Handling a 401 rediscovers (honouring a resource_metadata hint) before deciding,
-      // after the local decision on the known binding.
-      const rebind = op === "challenge" && challenge.status === 401;
       let target: Selected;
       if (cached) {
         let resolved: ResolvedTarget | undefined;
@@ -529,8 +549,8 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
           // A local decision cannot be repaired by rediscovery, so it fails without network I/O.
           if (!repairable || !(error instanceof AuthError) || gated.has(error)) throw error;
         }
-        target = resolved && !rebind ? await withClient(resolved, recordedFor(cached, resolved), operation, redirect)
-          : await discoverBinding(context, cached, operation, rebind, redirect, gate);
+        target = resolved ? await withClient(resolved, recordedFor(cached, resolved), operation, redirect)
+          : await discoverBinding(context, cached, operation, false, redirect, gate);
       } else {
         target = await discoverBinding(context, undefined, operation, true, redirect, gate);
       }
@@ -557,7 +577,8 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       if (first.outcome.type === "use") return ready(observed!, key, binding);
       // Full discovery only on a cache miss, host prepare or challenge handling; a
       // known binding otherwise renews from persisted metadata (or fails, never anonymous).
-      if (cached && repairable && !rebind) target = await discoverBinding(context, cached, operation, true, redirect, gate);
+      // Only a renewal (refresh or acquisition) rediscovers, honouring a resource_metadata hint.
+      if (cached && repairable) target = await discoverBinding(context, cached, operation, true, redirect, gate);
       target = force && target.registration
         ? withRegistration(target, await registration(target, target.registration.key, mode, operation, true))
         : await usableClient(target, mode, operation);

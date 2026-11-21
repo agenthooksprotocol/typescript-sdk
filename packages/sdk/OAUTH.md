@@ -94,8 +94,12 @@ cannot be renewed, including one needing login (`interaction_required`), fails
 the operation. It is anonymous only when no binding is stored or the host policy
 refuses (`selectClient` throwing); other configuration errors propagate, and a
 selection naming a different grant is `discovery_failed`. Full discovery runs only on a cache miss,
-challenge handling, or a host `prepare` that must exchange or create a login; a
-`prepare` with a usable cached token makes no metadata calls. Uploads use their
+or when challenge handling or a host `prepare` must exchange or create a login; a
+`prepare` with a usable cached token makes no metadata calls. An outcome that needs
+no authorization-server request is returned without one: challenge handling that
+ends in `interaction_required` makes none, and a pre-registered PKCE client on an
+unknown target fetches only its protected-resource metadata (learning the binding,
+without the issuer's metadata) before reporting that a login is needed. Uploads use their
 own bindings and isolated storage keys by default.
 
 ## Host-driven PKCE
@@ -288,7 +292,8 @@ its login (`prepare`) for that diagnostic's `backendId`, passing `requiredScopes
 Refresh runs inside host coordination, reloads the latest generation, and uses
 CAS for replacement; concurrent callers reuse the refreshed grant. Refresh uses
 the persisted authorization-server metadata; `prepare` and challenge handling
-rediscover outside store locks, falling back to it during an outage. If the token
+rediscover outside store locks before a renewal or login, falling back to it during
+an outage. If the token
 endpoint provably did not process a renewal (DNS, TCP connect or TLS handshake
 failure, or HTTP 404/410), the stored issuer's metadata is refetched once,
 persisted if the issuer is unchanged, and the renewal retried once; a changed

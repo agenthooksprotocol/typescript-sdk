@@ -193,9 +193,16 @@ async function decideVector(input) {
     ...(input.preset_scopes ? { scopes: [...input.preset_scopes] } : {}) };
   const context = { backendId: 'backend', purpose: 'event', url: resource, ...(input.binding === 'preset' ? { authentication } : {}) };
   let sent, key;
-  if (input.binding !== 'unbound' && (input.binding === 'stored' || input.grant)) {
+  const stored = input.binding === 'stored' || input.binding === 'stored_without_metadata';
+  if (input.binding !== 'unbound' && (stored || input.grant)) {
     await seed(w, context, input);
     [key] = grantKeys(w);
+    if (input.binding === 'stored_without_metadata') {
+      // A stored binding whose record lacks persisted authorization-server metadata.
+      for (const [name, value] of w.store.values) {
+        if (value.kind === 'binding') { const { metadata: _metadata, ...rest } = value; w.store.values.set(name, rest); }
+      }
+    }
     // An earlier operation's 401 hint: it must not reach this operation.
     if (input.prior_401_hint) {
       const credential = await w.provider.credential(context);
@@ -244,14 +251,8 @@ async function decideVector(input) {
   return result;
 }
 
-/**
- * Temporary, until the next spec commit replaces it: this vector of spec 14d9eed demands
- * an issuer-metadata request before a PKCE 403 step-up's interaction_required, which
- * needs no authorization-server request. Remove when re-vendoring.
- */
-const WITHDRAWN = new Map([['host-policy-issuer-metadata-destination-refused-challenge', 'withdrawn from spec 14d9eed; replaced in the next spec commit']]);
 for (const vector of vectors.scope_decisions) {
-  test(`shared scope decision: ${vector.id}`, { skip: skipFor(vector) || (WITHDRAWN.get(vector.id) ?? false) }, async () => {
+  test(`shared scope decision: ${vector.id}`, { skip: skipFor(vector) }, async () => {
     defined(vector, SCOPE_INPUT, SCOPE_EXPECT);
     compare(vector, await decideVector(vector.input));
   });
