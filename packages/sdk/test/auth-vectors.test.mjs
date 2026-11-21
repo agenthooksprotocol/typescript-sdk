@@ -24,9 +24,9 @@ observeDecisions((_input, decision) => { lastRequired = [...decision.required]; 
 // The field vocabulary of spec/draft/sdk-auth-lifecycle.md (Executable coverage).
 const VECTOR_FIELDS = ['id', 'requires', 'input', 'expect'];
 const SCOPE_INPUT = ['flow', 'path', 'binding', 'requested', 'host_required', 'explicit', 'ceiling', 'preset_scopes', 'grant', 'sent',
-  'challenge', 'prior_401_hint', 'host_error', 'target_error', 'client_source'];
+  'challenge', 'prior_401_hint', 'host_error', 'target_error', 'client_source', 'force_registration'];
 const SCOPE_EXPECT = ['code', 'scopes', 'required', 'action', 'acquisition_scopes', 'retired', 'authorization_server_requests',
-  'network_calls', 'network_calls_max'];
+  'network_calls', 'network_calls_max', 'authorization_server_requests_min'];
 const COMPLETION_INPUT = ['pending', 'handle', 'client_source', 'source_permitted', 'callback', 'host_error', 'claim', 'exchange',
   'stored_required', 'prepare_time_host_required', 'current_host_required', 'granted', 'ceiling'];
 const COMPLETION_EXPECT = ['code', 'scopes', 'login_ended', 'grant_persisted'];
@@ -70,6 +70,9 @@ function defined(vector, input, expect) {
 function compare(vector, result) {
   for (const [key, want] of Object.entries(vector.expect)) {
     if (key === 'network_calls_max') assert.ok(result.network_calls <= want, `${vector.id}: network_calls ${result.network_calls} > ${want}`);
+    else if (key === 'authorization_server_requests_min') {
+      assert.ok(result.authorization_server_requests >= want, `${vector.id}: authorization_server_requests ${result.authorization_server_requests} < ${want}`);
+    }
     else assert.deepEqual(result[key], want, `${vector.id}: ${key} in ${JSON.stringify(result)}`);
   }
 }
@@ -196,7 +199,8 @@ async function decideVector(input) {
   const context = { backendId: 'backend', purpose: 'event', url: resource, ...(input.binding === 'preset' ? { authentication } : {}) };
   let sent, key;
   const stored = input.binding === 'stored' || input.binding === 'stored_without_metadata';
-  if (input.binding !== 'unbound' && (stored || input.grant)) {
+  // An unbound target with a usable grant: its binding record was lost (or the grant is shared).
+  if (stored || input.grant) {
     await seed(w, context, input);
     [key] = grantKeys(w);
     if (input.binding === 'stored_without_metadata') {
@@ -217,6 +221,7 @@ async function decideVector(input) {
       sent = await w.provider.credential(context);
     }
     writeGrant(w, key, input.grant);
+    if (input.binding === 'unbound') for (const [name, value] of [...w.store.values]) if (value.kind === 'binding') w.store.values.delete(name);
     if (input.grant === null) for (const stale of [...w.store.values.keys()]) if (stale.startsWith('ahp.oauth.registration')) w.store.values.delete(stale);
   }
   Object.assign(w.client, { scopes: [...input.requested], allowedScopes: [...ceiling], requiredScopes: [...input.host_required] });
@@ -224,7 +229,8 @@ async function decideVector(input) {
   const tokensBefore = w.state.tokens.length, writesBefore = w.store.writes.length;
   w.state.network = 0; w.state.authorizationServer = 0; lastRequired = undefined;
   let outcome;
-  if (input.path === 'prepare') outcome = await settle(w.oauth.prepare(context, budget(), { requiredScopes: input.explicit }));
+  if (input.path === 'prepare') outcome = await settle(w.oauth.prepare(context, budget(), { requiredScopes: input.explicit,
+    ...(input.force_registration ? { forceRegistration: true } : {}) }));
   else if (input.path === 'challenge' || (input.path === 'fresh' && input.binding === 'unbound')) {
     // An unbound `fresh` vector is an anonymous request receiving the vector's 401, handled by `challenge`.
     const response = new Response(null, { status: input.challenge.status, headers: { 'www-authenticate': input.challenge.www_authenticate } });
