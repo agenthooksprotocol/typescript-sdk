@@ -24,13 +24,13 @@ observeDecisions((_input, decision) => { lastRequired = [...decision.required]; 
 // The field vocabulary of spec/draft/sdk-auth-lifecycle.md (Executable coverage).
 const VECTOR_FIELDS = ['id', 'requires', 'input', 'expect'];
 const SCOPE_INPUT = ['flow', 'path', 'binding', 'requested', 'host_required', 'explicit', 'ceiling', 'preset_scopes', 'grant', 'sent',
-  'challenge', 'prior_401_hint', 'host_error', 'target_error'];
+  'challenge', 'prior_401_hint', 'host_error', 'target_error', 'client_source'];
 const SCOPE_EXPECT = ['code', 'scopes', 'required', 'action', 'acquisition_scopes', 'retired', 'authorization_server_requests',
   'network_calls', 'network_calls_max'];
 const COMPLETION_INPUT = ['pending', 'handle', 'client_source', 'source_permitted', 'callback', 'host_error', 'claim', 'exchange',
   'stored_required', 'prepare_time_host_required', 'current_host_required', 'granted', 'ceiling'];
 const COMPLETION_EXPECT = ['code', 'scopes', 'login_ended', 'grant_persisted'];
-const TOKEN_ERROR_INPUT = ['grant_type', 'client_source', 'error'];
+const TOKEN_ERROR_INPUT = ['grant_type', 'client_source', 'error', 'refetch'];
 const TOKEN_ERROR_EXPECT = ['code', 'reregistrations'];
 /** Members of the nested objects a vector may carry, at every level. */
 const NESTED = {
@@ -39,6 +39,7 @@ const NESTED = {
   host_error: ['callback', 'target', 'code', 'scopes'],
   target_error: ['check', 'code'],
   claim: ['outcome', 'error_code', 'reread'],
+  refetch: ['callback', 'target', 'code', 'scopes'],
 };
 function known(path, value, members) {
   assert.ok(value !== null && typeof value === 'object' && !Array.isArray(value), `${path}: not an object`);
@@ -145,6 +146,7 @@ function world({ flow, requested, ceiling, required = [], source = 'preregistere
           ...(flow === 'client_credentials' ? {} : { refresh_token: `refresh-${n}` }), scope: state.scope ?? body.get('scope') ?? '' });
       }
       if (url.startsWith('https://api.example/.well-known/')) return Response.json({ resource, authorization_servers: [issuer] });
+      if (state.metadataDown) return new Response('{}', { status: 503 });
       return Response.json({ issuer, authorization_endpoint: `${issuer}/authorize`, token_endpoint: `${issuer}/token`,
         registration_endpoint: `${issuer}/register`, client_id_metadata_document_supported: true, response_types_supported: ['code'],
         grant_types_supported: ['authorization_code', 'refresh_token', 'client_credentials'],
@@ -188,7 +190,7 @@ function writeGrant(w, key, grant) {
 async function decideVector(input) {
   const ceiling = input.ceiling ?? input.requested;
   const w = world({ flow: input.flow, requested: [...input.requested], ceiling: [...ceiling],
-    source: input.host_error?.target === 'registration_endpoint' ? 'dcr' : 'preregistered' });
+    source: input.client_source ?? (input.host_error?.target === 'registration_endpoint' ? 'dcr' : 'preregistered') });
   const authentication = { type: 'oauth', issuer, resource, clientId: 'client', flow: input.flow,
     ...(input.preset_scopes ? { scopes: [...input.preset_scopes] } : {}) };
   const context = { backendId: 'backend', purpose: 'event', url: resource, ...(input.binding === 'preset' ? { authentication } : {}) };
@@ -352,19 +354,27 @@ async function tokenErrorVector(input) {
   const w = world({ flow: refresh ? 'authorization_code_pkce' : 'client_credentials', requested: ['read'], ceiling: ['read'],
     source: input.client_source });
   const context = { backendId: 'backend', purpose: 'event', url: resource };
-  if (refresh) {
-    await w.oauth.complete(callbackFor(await w.oauth.prepare(context, budget())), budget());
-    for (const key of grantKeys(w)) w.store.values.set(key, { ...w.store.values.get(key), expiresAt: Date.now() - 1 });
-  }
-  w.state.tokenError = tokenErrors[input.error];
-  const outcome = await settle(refresh ? w.provider.credential(context) : w.oauth.prepare(context, budget()));
+  // A stored binding and grant, then an expired token: the renewal runs against the stored binding.
+  if (refresh) await w.oauth.complete(callbackFor(await w.oauth.prepare(context, budget())), budget());
+  else await w.oauth.prepare(context, budget());
+  for (const key of grantKeys(w)) w.store.values.set(key, { ...w.store.values.get(key), expiresAt: Date.now() - 1 });
+  const registered = w.state.registrations ?? 0;
+  // The renewal fails with `error`; a provably unprocessed one refetches the issuer's
+  // metadata, which `refetch` refuses (a host destination error) or fails.
+  const failure = tokenErrors[input.error];
+  w.state.tokenError = () => {
+    if (input.refetch && typeof input.refetch === 'object') w.state.hostError = input.refetch;
+    if (input.refetch === 'failed') w.state.metadataDown = true;
+    return failure();
+  };
+  const outcome = await settle(w.provider.credential(context));
   assert.ok(outcome.error, 'the renewal fails');
   const result = errorFields(outcome.error);
   // A token_errors outcome never carries scopes.
   assert.equal(outcome.error.requiredScopes, undefined, 'no scopes');
   delete result.scopes;
   // The registrations sent after the first invalid_client, before the repeated one.
-  if (!refresh && input.client_source === 'dcr' && input.error === 'invalid_client') result.reregistrations = (w.state.registrations ?? 0) - 1;
+  if (!refresh && input.client_source === 'dcr' && input.error === 'invalid_client') result.reregistrations = (w.state.registrations ?? 0) - registered;
   return result;
 }
 
@@ -412,7 +422,8 @@ async function legacyTokenErrorVector(input) {
   return { code: error.code };
 }
 
-for (const vector of vectors.token_errors.filter(vector => vector.input.client_source === 'preregistered')) {
+// The legacy provider has pre-registered clients only and no stale-metadata refetch.
+for (const vector of vectors.token_errors.filter(vector => vector.input.client_source === 'preregistered' && vector.input.refetch === undefined)) {
   test(`[renewal-token-errors-classified] shared token error through legacy auth(): ${vector.id}`, { skip: skipFor(vector) }, async () => {
     defined(vector, TOKEN_ERROR_INPUT, TOKEN_ERROR_EXPECT);
     compare(vector, await legacyTokenErrorVector(vector.input));
