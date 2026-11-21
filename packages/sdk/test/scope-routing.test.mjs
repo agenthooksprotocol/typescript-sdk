@@ -581,3 +581,19 @@ test('a usable grant on a new target or a metadata-less binding is used with no 
     assert.ok(urls.filter(url => url === `${issuer}/register`).length >= 2, 'registered anew');
   }
 });
+
+test('a forced registration keeps a usable token for any client but a client-credentials DCR client, without metadata too', async () => {
+  for (const client of [cc(), { issuer, resource, clientId: 'client', flow: 'authorization_code_pkce', scopes: ['read'], allowedScopes: ['read'],
+    requiredScopes: [], redirectUri: 'https://app.example/callback' }]) {
+    const w = managedWorld(client);
+    if (client.flow === 'client_credentials') await w.oauth.prepare(w.context, budget());
+    else {
+      const pending = await w.oauth.prepare(w.context, budget());
+      await w.oauth.complete(`https://app.example/callback?code=c&state=${pending.state}&iss=${encodeURIComponent(issuer)}`, budget());
+    }
+    for (const [key, value] of w.store.values) if (value.kind === 'binding') { const { metadata: _m, ...rest } = value; w.store.values.set(key, rest); }
+    w.state.network = 0;
+    assert.equal((await w.oauth.prepare(w.context, budget(), { forceRegistration: true })).credential.token, 'access-1', client.flow);
+    assert.equal(w.state.network, 0, `${client.flow}: no request`);
+  }
+});

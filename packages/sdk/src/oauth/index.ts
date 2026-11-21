@@ -518,9 +518,11 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       if (known.binding?.grantKey !== undefined && known.binding.grantKey !== key) return;
       known.decided = true;
       const stored = await read(key, "grant", operation);
-      // A forced re-registration never serves the replaced client's token.
+      // A forced re-registration (a client-credentials DCR client only) never serves the
+      // replaced client's token; any other client keeps its usable token.
+      const forced = mode === "host" && forceRegistration && client.flow === "client_credentials" && selection.source === "dcr";
       const full = decide({ op, config, challenge, sent: sent?.key === key ? sent.generation : undefined,
-        grant: grantOf(stored, { selection } as Selected, mode === "host" && forceRegistration) });
+        grant: grantOf(stored, { selection } as Selected, forced) });
       const { outcome } = full;
       if (outcome.type === "use") {
         // A new target (an unbound one, or a preset, sharing a host-assigned grant) learns its
