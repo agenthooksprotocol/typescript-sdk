@@ -787,7 +787,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
    * host policy still selects that source for the same grant key.
    */
   async function completionTarget(record: StoredPendingLogin, context: DeliveryAuthContext, operation: Operation): Promise<ResolvedTarget> {
-    // Host policy only (section 3, step 3); the login's stored R is checked after the claim.
+    // complete() step 3, host policy only: client reselection; the login's stored R is checked after the claim.
     const reselected = await resolveTarget(context, options, operation,
       { issuer: record.client.issuer, resource: record.client.resource, metadata: record.metadata });
     const host = reselected.client;
@@ -806,7 +806,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     return { ...reselected, client: { ...client, redirectUri: record.client.redirectUri! } };
   }
 
-  /** Host destination policy for the token endpoint (section 3, step 3), before the claim. */
+  /** complete() step 3, host policy: the token endpoint's destination check, before the claim. */
   async function tokenDestination(target: ResolvedTarget, operation: Operation): Promise<void> {
     const endpoint = https(String(target.metadata.token_endpoint));
     const approved = endpoint.href;
