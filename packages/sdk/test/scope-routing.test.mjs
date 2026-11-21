@@ -438,3 +438,71 @@ test('complete(): the token-endpoint destination check runs before the claim, a 
     else assert.equal((await w.oauth.complete(callback, budget())).type, 'ready');
   }
 });
+
+/** A managed world whose stored binding has lost its persisted issuer metadata. */
+async function withoutMetadata(client) {
+  const w = managedWorld(client);
+  await w.oauth.prepare(w.context, budget());
+  for (const [key, value] of w.store.values) if (value.kind === 'binding') { const { metadata: _m, ...rest } = value; w.store.values.set(key, rest); }
+  const binding = () => [...w.store.values.values()].find(value => value.kind === 'binding');
+  return { w, binding };
+}
+
+test('a stored binding without issuer metadata decides use and local refusals with no request, and fetches it once for a renewal', async () => {
+  // use: no network at all.
+  {
+    const { w } = await withoutMetadata(cc());
+    w.state.network = 0;
+    assert.equal((await w.provider.credential(w.context)).token, 'access-1');
+    assert.equal(w.state.network, 0);
+  }
+  // Step 4 and step 5 refusals: no network.
+  {
+    const { w } = await withoutMetadata(cc({ scopes: ['read', 'write'] }));
+    const sent = await w.provider.credential(w.context);
+    w.state.network = 0;
+    await assert.rejects(w.provider.challenge({ ...w.context, credential: sent, response: new Response(null, { status: 403,
+      headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="write"' } }) }),
+    error => error.code === 'access_denied' && error.requiredScopes.join() === 'write');
+    w.client.requiredScopes = ['admin'];
+    await assert.rejects(w.provider.credential(w.context), error => error.code === 'access_denied');
+    assert.equal(w.state.network, 0);
+  }
+  // A challenge that renews fetches the issuer's metadata once and persists it.
+  {
+    const { w, binding } = await withoutMetadata(cc());
+    const sent = await w.provider.credential(w.context);
+    w.state.network = 0;
+    await w.provider.challenge({ ...w.context, credential: sent, response: new Response(null, { status: 403,
+      headers: { 'www-authenticate': 'Bearer error="insufficient_scope", scope="write"' } }) });
+    // One issuer-metadata request, then the token request.
+    assert.equal(w.state.network, 2);
+    assert.ok(binding().metadata, 'the fetched metadata is persisted');
+  }
+  // A delivery lookup that renews persists the fetched metadata.
+  {
+    const { w, binding } = await withoutMetadata(cc());
+    for (const [key, value] of w.store.values) if (value.kind === 'grant') w.store.values.set(key, { ...value, expiresAt: Date.now() - 1 });
+    w.state.network = 0;
+    assert.equal((await w.provider.credential(w.context)).token, 'access-2');
+    assert.equal(w.state.network, 2);
+    assert.ok(binding().metadata, 'the fetched metadata is persisted');
+  }
+});
+
+test('the stale-metadata refetch keeps a host destination refusal\'s code', async () => {
+  const w = managedWorld(cc());
+  await w.oauth.prepare(w.context, budget());
+  for (const [key, value] of w.store.values) if (value.kind === 'grant') w.store.values.set(key, { ...value, expiresAt: Date.now() - 1 });
+  // The token endpoint is unreachable (provably unprocessed), so the issuer's metadata is refetched; the host refuses it.
+  let refuse = false;
+  const managed = managedOAuth({ namespace: 'routing', store: w.store, selectClient: () => structuredClone(w.client),
+    checkDestination: (url, purpose) => { if (refuse && purpose === 'metadata') throw new AuthError('untrusted_destination', ['host-scope']); },
+    async policyFetch(url, init) {
+      if (url === `${issuer}/token`) { refuse = true; throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }); }
+      return Response.json({ issuer, token_endpoint: `${issuer}/token`, grant_types_supported: ['client_credentials'],
+        token_endpoint_auth_methods_supported: ['client_secret_basic'] });
+    } });
+  await assert.rejects(managed.provider({ budget }).credential(w.context),
+    error => error.code === 'untrusted_destination' && error.requiredScopes === undefined);
+});

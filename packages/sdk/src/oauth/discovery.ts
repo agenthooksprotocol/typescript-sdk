@@ -20,7 +20,11 @@ export function https(value: string): URL {
   return url;
 }
 
-const transport = new WeakSet<AuthError>(), refusals = new WeakSet<AuthError>();
+const transport = new WeakSet<AuthError>(), refusals = new WeakSet<AuthError>(), destinations = new WeakSet<AuthError>();
+/** True for a host destination-policy refusal (`checkDestination`): it keeps the host's code. */
+export function isDestinationRefusal(error: unknown): boolean {
+  return error instanceof AuthError && destinations.has(error);
+}
 /** True when the host's selectClient rejected the binding: the only lookup policy refusal. */
 export function isPolicyRefusal(error: unknown): boolean {
   return error instanceof AuthError && refusals.has(error);
@@ -58,7 +62,9 @@ export async function checkedFetch(
     await options.checkDestination(destination, purpose, operation);
   } catch (error) {
     active(operation);
-    throw classifyAuthError(error, "untrusted_destination");
+    const refusal = classifyAuthError(error, "untrusted_destination");
+    destinations.add(refusal);
+    throw refusal;
   }
   active(operation);
   if (destination.href !== original) throw new AuthError("untrusted_destination");
