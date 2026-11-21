@@ -24,7 +24,7 @@ observeDecisions((_input, decision) => { lastRequired = [...decision.required]; 
 // The field vocabulary of spec/draft/sdk-auth-lifecycle.md (Executable coverage).
 const VECTOR_FIELDS = ['id', 'requires', 'input', 'expect'];
 const SCOPE_INPUT = ['flow', 'path', 'binding', 'requested', 'host_required', 'explicit', 'ceiling', 'preset_scopes', 'grant', 'sent',
-  'challenge', 'prior_401_hint', 'host_error'];
+  'challenge', 'prior_401_hint', 'host_error', 'target_error'];
 const SCOPE_EXPECT = ['code', 'scopes', 'required', 'action', 'acquisition_scopes', 'retired', 'authorization_server_requests',
   'network_calls', 'network_calls_max'];
 const COMPLETION_INPUT = ['pending', 'handle', 'client_source', 'source_permitted', 'callback', 'host_error', 'claim', 'exchange',
@@ -93,7 +93,8 @@ function world({ flow, requested, ceiling, required = [], source = 'preregistere
     checkDestination: (url, purpose) => {
       const failure = state.hostError;
       if (failure?.callback === 'destination' && ((failure.target === 'registration_endpoint' && purpose === 'registration') ||
-          (failure.target === 'issuer_metadata' && purpose === 'metadata' && url.origin === issuer))) hostError('destination');
+          (failure.target === 'issuer_metadata' && purpose === 'metadata' && url.origin === issuer) ||
+          (failure.target === 'token_endpoint' && purpose === 'token'))) hostError('destination');
     },
     async policyFetch(url, init) {
       state.network++;
@@ -188,9 +189,14 @@ async function decideVector(input) {
   else if (input.path === 'challenge' || (input.path === 'fresh' && input.binding === 'unbound')) {
     // An unbound `fresh` vector is an anonymous request receiving the vector's 401, handled by `challenge`.
     const response = new Response(null, { status: input.challenge.status, headers: { 'www-authenticate': input.challenge.www_authenticate } });
-    outcome = await settle(w.provider.challenge({ ...context, response, credential: sent }));
+    // A target check that fails before any decide step: an unsupported binding on the challenged request.
+    const target = input.target_error?.check === 'unsupported_binding' ? { authentication: { type: 'unsupported' } } : {};
+    if (input.target_error) assert.equal(input.target_error.check, 'unsupported_binding', 'known target check');
+    outcome = await settle(w.provider.challenge({ ...context, ...target, response, credential: sent }));
   } else outcome = await settle(w.provider.credential(context));
   const result = { network_calls: w.state.network, authorization_server_requests: w.state.authorizationServer, required: lastRequired };
+  // The target check yields the code the vector names for it.
+  if (input.target_error) assert.equal(outcome.error?.code, input.target_error.code, 'target_error code');
   if (input.challenge?.status === 401) {
     const sentGeneration = input.sent === null || input.sent === undefined ? undefined : generation(input.sent);
     result.retired = w.store.writes.slice(writesBefore).some(write => write.key === key && sentGeneration !== undefined &&
