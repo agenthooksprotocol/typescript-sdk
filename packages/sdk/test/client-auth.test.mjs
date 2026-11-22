@@ -162,9 +162,10 @@ test("default transport permits explicitly trusted loopback and never follows to
       "local",
     );
     redirects = true;
+    // A redirected token response is a token-endpoint failure: provider_failed (renewal errors).
     await assert.rejects(
       provider.authenticate({ url: `${origin}/api/uploads`, authentication }),
-      /token request rejected/,
+      (error) => error.code === "provider_failed" && error.requiredScopes === undefined,
     );
     assert.equal(tokens, 2);
     assert.equal(leaked, false);
@@ -338,7 +339,8 @@ test("automatic OAuth discovery survives spread contexts and remains scoped to t
   now += 3_600_000;
   assert.equal((await provider.authenticate({ ...context })).token, "token-2");
   assert.equal(requests.length, discoveredRequests + 1);
-  assert.equal(tokens[1].get("grant_type"), "refresh_token");
+  // Client credentials always reissue, even when the server sent a refresh token.
+  assert.equal(tokens[1].get("grant_type"), "client_credentials");
   // Another Hooks instance may reuse the provider, but it supplies a fresh Map.
   const independent = { url, cache: new Map() };
   assert.equal(await provider.authenticate({ ...independent }), undefined);
@@ -370,9 +372,9 @@ test("discovery honors quoted challenge metadata after realm and enforces scope 
     provider.authenticate({
       url,
       authentication: binding,
-      challenge: 'Bearer scope="admin"',
+      challenge: 'Bearer error="insufficient_scope", scope="admin"',
     }),
-    { code: "access_denied", recovery: "none" },
+    { code: "access_denied", recovery: "none", requiredScopes: ["admin"] },
   );
 });
 
@@ -472,8 +474,8 @@ test("tokens refresh in their own endpoint cache and provider instances never sh
   assert.equal(first.tokens.length, 1);
   now += 3_600_000;
   assert.equal((await first.provider.authenticate(context)).token, "token-2");
-  assert.equal(first.tokens[1].get("grant_type"), "refresh_token");
-  assert.equal(first.tokens[1].get("refresh_token"), "refresh");
+  // Client credentials always reissue, even when the server sent a refresh token.
+  assert.equal(first.tokens[1].get("grant_type"), "client_credentials");
   await first.provider.authenticate({ ...context, url: `${resource}/uploads` });
   assert.equal(first.tokens[2].get("grant_type"), "client_credentials");
   const second = fixture();
@@ -515,7 +517,7 @@ test("credential acquisition failures redact remote error bodies and reject priv
     ),
     (error) =>
       !error.message.includes("secret token detail") &&
-      /token request rejected/.test(error.message),
+      error.code === "provider_failed",
   );
   await assert.rejects(
     provider.authenticate({
@@ -546,7 +548,9 @@ for (const vector of scopeVectors) {
       setToken: (_key, value) => { stored.push(value); },
       deleteToken() {},
     });
-    const authentication = { ...binding, scopes: vector.requested.filter((scope) => vector.allowed.includes(scope)), allowedScopes: vector.allowed };
+    // A refresh is a PKCE grant's (client credentials always reissue).
+    const authentication = { ...binding, ...(vector.exchange === "refresh" ? { flow: "authorization_code_pkce" } : {}),
+      scopes: vector.requested.filter((scope) => vector.allowed.includes(scope)), allowedScopes: vector.allowed };
     const result = provider.authenticate({ url, authentication });
     if (vector.usable) {
       const credential = await result;
@@ -580,7 +584,7 @@ test("built-in refresh with an omitted scope inherits the previous grant, not th
       setToken: (_key, value) => { stored.push(value); },
       deleteToken() {},
     });
-    const credential = await provider.authenticate({ url, authentication: { ...binding, scopes: ["hooks"], allowedScopes: ["hooks"] } });
+    const credential = await provider.authenticate({ url, authentication: { ...binding, flow: "authorization_code_pkce", scopes: ["hooks"], allowedScopes: ["hooks"] } });
     assert.deepEqual(credential.scopes, ["hooks", "admin"], String(scope));
     assert.equal(stored[0].refreshToken, "r");
   }

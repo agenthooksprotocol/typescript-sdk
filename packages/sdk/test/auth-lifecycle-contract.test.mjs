@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
+import { skipFor } from './fixtures/sdk-features.mjs';
 
 const root = new URL('../../../', import.meta.url);
 const vendored = readFileSync(new URL('../testdata/sdk-auth-lifecycle.json', import.meta.url));
@@ -27,6 +28,7 @@ for (const name of testFiles) {
   for (const [, id] of source.matchAll(/\btest\(\s*['"`]\[([a-z0-9-]+)\]/g)) tagged.set(id, [...(tagged.get(id) ?? []), name]);
 }
 test('every fixture lifecycle id maps to an existing native test', () => {
-  const missing = vectors.lifecycle.map(entry => entry.id).filter(id => !tagged.has(id));
+  // An entry requiring a feature this SDK lacks applies to other SDKs only.
+  const missing = vectors.lifecycle.filter(entry => !skipFor(entry)).map(entry => entry.id).filter(id => !tagged.has(id));
   assert.deepEqual(missing, []);
 });

@@ -38,8 +38,10 @@ async function protect<T>(operation: Operation, work: () => Promise<T>, grant: "
         invalidClients.add(rejected);
         throw rejected;
       }
-      if (error.error === "unauthorized_client") throw new AuthError("credential_unavailable");
-      if (error.error === "access_denied") throw new AuthError("access_denied");
+      // Renewal errors (refresh and client credentials): unauthorized_client is
+      // credential_unavailable. In a code exchange (complete step 6) it, access_denied,
+      // invalid_scope and every other token-endpoint error are provider_failed. No scopes.
+      if (error.error === "unauthorized_client" && grant !== "code") throw new AuthError("credential_unavailable");
       if (error.error === "invalid_grant") {
         throw new AuthError(grant === "refresh" ? "refresh_rejected" : grant === "code" ? "interaction_required" : "credential_unavailable");
       }
@@ -253,12 +255,24 @@ export function callbackParameters(target: ResolvedTarget, login: LoginState, ca
   }
   if (!login.state || !login.verifier || actual.searchParams.getAll("state").length !== 1 ||
       actual.searchParams.get("state") !== login.state || actual.searchParams.getAll("iss").length > 1) throw new AuthError("access_denied");
+  // No duplicated parameter (beyond the redirect's own query) and exactly one of code or error.
+  const own = new Set(expected.searchParams.keys()), seen = new Set<string>();
+  for (const key of actual.searchParams.keys()) {
+    if (own.has(key)) continue;
+    if (seen.has(key)) throw new AuthError("access_denied");
+    seen.add(key);
+  }
+  if (seen.has("code") === seen.has("error")) throw new AuthError("access_denied");
+  let parameters: URLSearchParams;
   try {
-    return oauth.validateAuthResponse(target.metadata, client(target), actual, login.state);
+    parameters = oauth.validateAuthResponse(target.metadata, client(target), actual, login.state);
   } catch (error) {
     if (error instanceof oauth.AuthorizationResponseError) throw error;
     throw new AuthError("access_denied");
   }
+  // A success response carries a non-empty code, checked before the login is claimed.
+  if (!actual.searchParams.get("code")) throw new AuthError("access_denied");
+  return parameters;
 }
 
 /** Return whether a correctly bound callback denies authorization. */

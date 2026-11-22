@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { inspect } from 'node:util';
 import { managedOAuth } from '../dist/src/oauth/index.js';
 import { auth } from '../dist/src/client/auth.js';
+import { skipFor } from './fixtures/sdk-features.mjs';
 
 // Static, test-only certificate (testdata is not published).
 const tls = { key: await readFile(new URL('../testdata/tls/key.pem', import.meta.url)), cert: await readFile(new URL('../testdata/tls/cert.pem', import.meta.url)) };
@@ -186,7 +187,7 @@ for (const kind of ['resource', 'issuer']) {
   });
 }
 test('local scope policy rejects challenge escalation', async t => {
-  const f = await fixture(t); await assert.rejects(f.prepare({ challenge: 'Bearer scope="deliver admin"' }), classified(['access_denied']));
+  const f = await fixture(t); await assert.rejects(f.prepare({ challenge: 'Bearer error="insufficient_scope", scope="deliver admin"' }), classified(['access_denied']));
   assert.equal(f.checked.some(item => item.purpose === 'authorization'), false); assert.equal(f.tokens.length, 0);
 });
 for (const purpose of ['metadata', 'authorization', 'token']) {
@@ -478,7 +479,7 @@ for (const vector of lifecycleVectors.keys) {
   });
 }
 for (const vector of lifecycleVectors.token_responses) {
-  test(`shared token response through native HTTPS: ${vector.id}`, async t => {
+  test(`shared token response through native HTTPS: ${vector.id}`, { skip: skipFor(vector) }, async t => {
     const f = await fixture(t, { tokenResponse: vector.response });
     Object.assign(f.client, { scopes: vector.requested, allowedScopes: vector.allowed, requiredScopes: vector.required });
     let complete;
@@ -509,7 +510,12 @@ for (const vector of lifecycleVectors.token_responses) {
       complete = f.managed.complete(f.callback(pending), budget());
     }
     if (vector.usable) assert.equal((await complete).credential.token, vector.response.access_token);
-    else await assert.rejects(complete, { code: vector.error ?? 'interaction_required' });
+    else await assert.rejects(complete, error => {
+      assert.equal(error.code, vector.error ?? 'interaction_required');
+      // An access_denied carries R, sorted in ascending byte order.
+      if (vector.error_scopes) assert.deepEqual([...(error.requiredScopes ?? [])], vector.error_scopes);
+      return true;
+    });
     const stored = [...f.store.values.values()][0];
     if (!vector.accepted && vector.exchange !== 'refresh') assert.equal(stored, undefined, 'an invalid initial exchange persists nothing');
     if (vector.refresh_preserved) assert.equal(stored.refreshToken, vector.response.refresh_token);
@@ -604,7 +610,7 @@ test('[scope-challenge-without-required-scope] scope challenge without required 
 });
 
 test('[client-credentials-transient-reissue] client credentials transient reissue retries without login or discarding current credentials', async t => {
-  const f = await fixture(t); Object.assign(f.client, { flow: 'client_credentials', clientSecret: 'client-secret' });
+  const f = await fixture(t, { omitRefreshToken: true }); Object.assign(f.client, { flow: 'client_credentials', clientSecret: 'client-secret' });
   const first = await f.prepare(); assert.equal(first.type, 'ready');
   f.store.expire(); f.state.tokenStatus = 503; f.state.tokenError = { error: 'temporarily_unavailable' };
   const previous = [...f.store.values.values()][0];
@@ -672,7 +678,8 @@ test('[delivery-never-creates-pending-login] anonymous 401 learns the binding; d
   assert.equal(await provider.credential(f.context), undefined);
   assert.equal(f.requests.length, 0);
   const response = new Response(null, { status: 401, headers: { 'www-authenticate': 'Bearer' } });
-  await provider.challenge({ ...f.context, response, credential: undefined });
+  // Challenge handling learns the binding, then decides: PKCE without a grant needs a login.
+  await assert.rejects(provider.challenge({ ...f.context, response, credential: undefined }), { code: 'interaction_required' });
   assert.equal(f.store.bindings.size, 1);
   await assert.rejects(provider.credential({ ...f.context, challenged: true, challenge: 'Bearer' }), { code: 'interaction_required' });
   await assert.rejects(provider.credential(f.context), { code: 'interaction_required' }, 'a known binding needing login never sends anonymously');
@@ -703,7 +710,8 @@ test('[step-up-requirement-operation-scoped] client-credentials step-up applies 
   f.state.scope = 'deliver audit';
   await provider.challenge({ ...f.context, credential: first.credential, response: new Response(null, { status: 403, headers: { 'www-authenticate': header } }) });
   // Challenge handling acquires with the operation's requirement; the replay finds that grant.
-  const replay = await provider.credential({ ...f.context, challenged: true, challenge: header });
+  // As Hooks replays: the challenge, its status and the rejected credential.
+  const replay = await provider.credential({ ...f.context, challenged: true, challenge: header, challengeStatus: 403, rejectedCredential: first.credential });
   assert.equal(f.tokens.length, 2);
   assert(f.tokens[1].body.get('scope').split(' ').includes('audit'));
   assert.equal(replay.token, 'access-2');
@@ -820,7 +828,7 @@ test('completion cancellation during current-client selection does not claim or 
   assert.equal((await managed.complete(callback, budget())).credential.token, 'access-1');
 });
 
-test('valid consent denial is claimed once without resolving unavailable runtime client credentials', async t => {
+test('valid consent denial runs host policy before it is claimed once', async t => {
   const f = await fixture(t); let unavailable = false, selections = 0;
   const managed = managedOAuth({ ...f.options, selectClient(...args) {
     selections++; if (unavailable) throw { code: 'credential_unavailable' };
@@ -829,8 +837,11 @@ test('valid consent denial is claimed once without resolving unavailable runtime
   const pending = await managed.prepare({ ...f.context, challenged: true }, budget());
   const denied = new URL(f.callback(pending)); denied.searchParams.delete('code'); denied.searchParams.set('error', 'access_denied');
   unavailable = true;
-  await assert.rejects(managed.complete(denied.href, budget()), { code: 'access_denied' });
-  assert.equal(selections, 1); assert.equal(f.tokens.length, 0);
+  // Host policy fails before the claim: its code, the login still pending.
+  await assert.rejects(managed.complete(denied.href, budget()), { code: 'credential_unavailable', loginEnded: false });
+  unavailable = false;
+  await assert.rejects(managed.complete(denied.href, budget()), { code: 'access_denied', loginEnded: true });
+  assert.equal(selections, 3); assert.equal(f.tokens.length, 0);
   await assert.rejects(managed.complete(denied.href, budget()), { code: 'interaction_required' });
 });
 

@@ -30,8 +30,9 @@ export function bearerParameters(header: string | undefined): Map<string, string
       text = beginning[2] ?? "";
     }
     if (!bearer || text === "") continue;
-    // RFC 7235 token68 is not an auth-param list, including padded payloads.
-    if (/^[A-Za-z0-9._~+\/-]+=*$/.test(text)) continue;
+    // RFC 6750 Bearer challenges carry auth-params only: a token68 (or a bare name such
+    // as `scope`) there is a bad auth-param. Other schemes' token68 is skipped above.
+    if (/^[A-Za-z0-9._~+\/-]+=*$/.test(text)) throw new AuthError("discovery_failed");
     const match = parameter.exec(text);
     if (!match) throw new AuthError("discovery_failed");
     const name = match[1]!.toLowerCase();

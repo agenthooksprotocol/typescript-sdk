@@ -1,7 +1,7 @@
 import { AuthError, normalizeAuthTarget, classifyAuthError } from "../client/auth.js";
 import type { AuthChallengeContext, AuthErrorCode, DeliveryAuthContext, DeliveryAuthProvider, DeliveryCredential, PreparedEndpoint } from "../client/auth.js";
-import { bearerParameters } from "../client/challenge.js";
-import { isPolicyRefusal, resolveTarget } from "./discovery.js";
+import { active, https, isDestinationRefusal, isPolicyRefusal, resolveTarget, type ScopeGate } from "./discovery.js";
+import { classify, coverage, decide, parseChallenge, type Challenge, type DecisionConfig, type DecisionGrant, type DecisionOperation } from "../client/decision.js";
 import {
   acquireClientCredentials, exchangeCode, isInvalidClient, isTransportFailure, pkce, refreshCredential, startLogin, validateCallback,
 } from "./protocol.js";
@@ -44,7 +44,6 @@ export interface PrepareOptions {
 
 const MAX_LOGIN_LIFETIME = 600_000;
 const EXPIRY_SKEW = 30_000;
-const SCOPE = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
 type Mode = "host" | "delivery" | "lookup";
 interface Attempt { readonly key: string; readonly generation: string; readonly identity: string }
 /** A target whose client source is resolved, with its grant-key client identity. */
@@ -81,14 +80,7 @@ function pendingKey(namespace: string, state: string): string {
 function pendingIndexKey(grant: string): string {
   return frame("ahp.oauth.pending-index:", [grant]);
 }
-function scopes(values: readonly string[]): string[] {
-  if (!Array.isArray(values) || values.some(value => typeof value !== "string" || !SCOPE.test(value))) {
-    throw new AuthError("invalid_configuration");
-  }
-  return [...new Set(values)].sort();
-}
 const ceilingOf = (client: ClientConfig) => client.allowedScopes ?? client.scopes;
-const within = (values: readonly string[], set: readonly string[]) => values.every(value => set.includes(value));
 function snapshotContext(context: DeliveryAuthContext): DeliveryAuthContext {
   normalizeAuthTarget(context);
   const { authentication, ...rest } = context;
@@ -126,8 +118,27 @@ async function run<T>(budget: Operation, extra: AbortSignal | undefined, work: (
   try {
     return await race(signal, Promise.resolve().then(() => work(Object.freeze({ signal, deadline }))));
   } catch (error) {
-    throw classifyAuthError(error, "provider_failed", signal);
+    // Section 4: only decide's and complete's own outcomes keep scopes.
+    throw classify(classifyAuthError(error, "provider_failed", signal));
   }
+}
+
+/**
+ * A `complete()` failure carrying `loginEnded`. An AuthError is copied (code, recovery
+ * and scopes unchanged). A native cancellation or deadline error keeps its identity;
+ * a reason that cannot carry the flag (a primitive or a frozen object) is wrapped in an
+ * `AbortError` DOMException whose `cause` is the original reason.
+ */
+function loginEndedError(error: unknown, ended: boolean): unknown {
+  let target = error instanceof AuthError ? new AuthError(error.code, error.requiredScopes) : error;
+  if (typeof target !== "object" || target === null || !Object.isExtensible(target)) {
+    const wrapped = new DOMException("OAuth operation cancelled", "AbortError");
+    Object.defineProperty(wrapped, "cause", { value: error, enumerable: false });
+    target = wrapped;
+  }
+  // Configurable and writable: the caller's own reason may be annotated again later.
+  Object.defineProperty(target, "loginEnded", { value: ended, enumerable: true, configurable: true, writable: true });
+  return target;
 }
 
 /** No browser, listener, global fetch, background refresh or default storage. */
@@ -163,6 +174,8 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
    */
   const commit = (): Operation => Object.freeze({ signal: AbortSignal.timeout(Math.min(commitTimeout, 2_147_483_647)), deadline: Date.now() + commitTimeout });
   const attempts = new WeakMap<object, Attempt>();
+  /** `decide` failures from the local gate (steps 1-4): never repaired by rediscovery. */
+  const gated = new WeakSet<AuthError>();
   /** Process-owned pending logins by state, oldest first. */
   const local = new Map<string, StoredPendingLogin>();
 
@@ -199,22 +212,85 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
   function identity(context: DeliveryAuthContext): string {
     return bindingKey("", context);
   }
-  function usable(grant: StoredGrant | undefined, target: ResolvedTarget, required: readonly string[]): grant is StoredGrant & { token: string } {
-    return grant?.token !== undefined && (grant.expiresAt === undefined || grant.expiresAt > Date.now() + EXPIRY_SKEW) &&
-      within(required, effective(grant, target));
-  }
-  function effective(grant: StoredGrant, target: ResolvedTarget): string[] {
-    const ceiling = ceilingOf(target.client);
-    return grant.scopes.filter(scope => ceiling.includes(scope));
-  }
-  function ready(grant: StoredGrant, key: string, binding: string, target: ResolvedTarget, required: readonly string[]): Ready {
-    if (!within(required, effective(grant, target))) throw new AuthError("access_denied", required);
+  function ready(grant: StoredGrant, key: string, binding: string): Ready {
     if (!grant.token || !/^[A-Za-z0-9\-._~+/]+=*$/.test(grant.token)) throw new AuthError("credential_unavailable");
     const attempt = Object.freeze({});
     attempts.set(attempt, { key, generation: grant.generation, identity: binding });
     const credential = { type: "bearer" as const, attempt };
     Object.defineProperty(credential, "token", { value: grant.token, enumerable: false });
     return Object.freeze({ type: "ready", credential: Object.freeze(credential as DeliveryCredential) });
+  }
+  /** S, C, H, E and the preset's scopes, as `decide` reads them. */
+  function configOf(client: ClientConfig, explicit: readonly string[], preset: readonly string[] | undefined): DecisionConfig {
+    return { flow: client.flow, requested: client.scopes, ceiling: ceilingOf(client), hostRequired: client.requiredScopes ?? [], explicit,
+      ...(preset === undefined ? {} : { presetScopes: preset }) };
+  }
+  function presetOf(context: DeliveryAuthContext): readonly string[] | undefined {
+    const binding = context.authentication;
+    return binding?.type === "oauth" && binding.scopes !== undefined ? binding.scopes : undefined;
+  }
+  /** The stored grant as `decide` sees it; `forced` (a forced re-registration) is never used or refreshed. */
+  function grantOf(grant: StoredGrant | undefined, target: Selected, forced = false): DecisionGrant | undefined {
+    if (!grant) return undefined;
+    const tokenValid = !forced && grant.token !== undefined && (grant.expiresAt === undefined || grant.expiresAt > Date.now() + EXPIRY_SKEW);
+    // A DCR grant refreshes only with the client issued to the login that produced it.
+    const refresh = !forced && grant.refreshToken !== undefined && (target.selection.source !== "dcr" || grant.clientId !== undefined);
+    return { generation: grant.generation, granted: grant.scopes, tokenValid, refresh };
+  }
+  /** The challenged status a context carries (401 for `challenged` without a header). */
+  function statusOf(context: DeliveryAuthContext | undefined): number | undefined {
+    if (!context) return undefined;
+    try { return parseChallenge(context.challengeStatus, context.challenge, context.challenged === true).status; } catch { return undefined; }
+  }
+  function challengeOf(context: DeliveryAuthContext): Challenge {
+    return parseChallenge(context.challengeStatus, context.challenge, context.challenged === true);
+  }
+  /** The attempt behind a credential this provider issued for this binding. */
+  function attemptOf(credential: DeliveryCredential | undefined, context: DeliveryAuthContext): Attempt | undefined {
+    const owner = credential ? attempts.get(credential.attempt as object) : undefined;
+    if (credential && (!owner || owner.identity !== identity(context))) throw new AuthError("invalid_configuration");
+    return owner;
+  }
+  /**
+   * Step 0 before any target or configuration check: a 401 retires the token of the
+   * attempt `credential` names, whenever its grant can be identified (an attempt this
+   * provider issued for the same binding, or one whose target no longer normalizes).
+   */
+  async function retireFirst(status: number | undefined, credential: DeliveryCredential | undefined, context: unknown): Promise<void> {
+    if (status !== 401 || !credential || typeof credential !== "object") return;
+    let owner: Attempt | undefined;
+    try { owner = attempts.get(credential.attempt as object); } catch { return; }
+    if (!owner) return;
+    let same = true;
+    try { same = owner.identity === identity(context as DeliveryAuthContext); } catch { /* An invalid target: the attempt still names its grant. */ }
+    if (same) await retire(owner, commit());
+  }
+  /** True when the caller's budget is already exhausted or aborted: only that may fail before step 0. */
+  function exhausted(budget: Operation | undefined, signal?: AbortSignal): boolean {
+    let aborted = false, expired = false;
+    try { aborted = budget?.signal?.aborted === true || signal?.aborted === true; expired = Number.isFinite(budget?.deadline) && budget!.deadline <= Date.now(); }
+    catch { /* A malformed budget is not exhausted. */ }
+    return aborted || expired;
+  }
+  /** Step 0 at a public boundary, before any argument or target check. */
+  async function retireAtBoundary(status: number | undefined, credential: DeliveryCredential | undefined, context: unknown,
+    budget: Operation | undefined, signal?: AbortSignal): Promise<void> {
+    if (status !== 401 || exhausted(budget, signal)) return;
+    try { await retireFirst(status, credential, context); }
+    catch (error) { throw classify(classifyAuthError(error, "provider_failed", signal)); }
+  }
+  /**
+   * Step 0: drop the rejected access token (keeping refresh material) unless a newer
+   * generation exists, under the commit budget, so it is never resent.
+   */
+  async function retire(owner: Attempt, operation: Operation): Promise<void> {
+    const settle = commit();
+    await race(operation.signal, store.coordinate(owner.key, settle.signal, async () => {
+      const current = await read(owner.key, "grant", settle);
+      if (current?.generation !== owner.generation || current.token === undefined) return;
+      const { token: _token, expiresAt: _expiresAt, kind: _kind, generation: _generation, ...rest } = current;
+      await saveGrant(owner.key, current.generation, rest, settle);
+    }));
   }
 
   // ---- Dynamic registration -------------------------------------------------
@@ -382,15 +458,15 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
   }
   /** Discover over the network outside store locks, then select the client. */
   async function discoverBinding(context: DeliveryAuthContext, cached: StoredBinding | undefined, operation: Operation,
-    staleFallback = true, redirect?: string, explicit: readonly string[] = []): Promise<Selected> {
+    staleFallback = true, redirect?: string, gate?: ScopeGate): Promise<Selected> {
     let target: ResolvedTarget;
     try {
-      target = await resolveTarget(context, options, operation, undefined, explicit);
+      target = await resolveTarget(context, options, operation, undefined, gate);
     } catch (error) {
       operation.signal.throwIfAborted();
       // A metadata outage must not block refresh/acquisition with a known binding.
-      if (!staleFallback || !cached || !(error instanceof AuthError) || error.code !== "discovery_failed") throw error;
-      const stale = await resolveTarget(context, options, operation, cached, explicit);
+      if (!staleFallback || !cached || !(error instanceof AuthError) || error.code !== "discovery_failed" || gated.has(error)) throw error;
+      const stale = await resolveTarget(context, options, operation, cached, gate);
       return withClient(stale, recordedFor(cached, stale), operation, redirect);
     }
     const selected = await withClient(target, recordedFor(cached, target), operation, redirect);
@@ -400,145 +476,232 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
 
   // ---- Acquisition ------------------------------------------------------------
 
-  /** The single acquisition path for host prepare, delivery credentials and the up-front lookup. */
+  /**
+   * The single path for host prepare, delivery credentials, the up-front lookup and
+   * challenge handling: resolve the client, then act on `decide`'s outcome (section 2).
+   * `sent` is the attempt whose token the challenged response rejected.
+   */
   async function acquire(context: DeliveryAuthContext, operation: Operation, mode: Mode, explicit: readonly string[] = [],
-    redirect?: string, forceRegistration = false): Promise<PrepareResult | typeof LOOKUP_MISS> {
+    redirect?: string, forceRegistration = false, sent?: Attempt, op: DecisionOperation = mode === "host" ? "prepare" : "credential",
+  ): Promise<PrepareResult | typeof LOOKUP_MISS> {
+    const challenge = challengeOf(context);
+    // Step 0: a 401 retires the rejected token before every target, configuration and
+    // decide check, whatever the outcome.
+    if (challenge.status === 401) {
+      if (sent) await retire(sent, operation);
+      else await retireFirst(401, context.rejectedCredential, context);
+    }
     if (context.authentication !== undefined && context.authentication.type !== "oauth") throw new AuthError("unsupported_binding");
+    if (!Array.isArray(explicit)) throw new AuthError("invalid_configuration");
     const binding = identity(context);
-    const explicitScopes = scopes(explicit);
-    const cached = await read(bindingKey(namespace, context), "binding", operation);
-    if (!cached && mode === "lookup") return LOOKUP_MISS;
-    const challenged = context.challenged === true || context.challenge !== undefined;
-    // Paths that may exchange can repair a binding whose cached resolution fails
-    // (stored issuer gone or no longer trusted) through full discovery.
-    const repairable = mode === "host" || (mode === "delivery" && challenged);
-    let target: Selected;
-    if (cached) {
-      let resolved: ResolvedTarget | undefined;
+    const explicitScopes = Object.freeze([...explicit]);
+    const preset = presetOf(context);
+    sent ??= attemptOf(context.rejectedCredential, context);
+    // Steps 1-4 decide locally once the client is selected, before any authorization-server I/O.
+    const gate: ScopeGate = async (client, presetScopes) => {
+      const config = configOf(client, explicitScopes, presetScopes);
+      const decision = decide({ op, config, challenge, sent: sent?.generation });
+      if (decision.outcome.type === "fail" && decision.outcome.step <= 4) {
+        gated.add(decision.outcome.error);
+        throw decision.outcome.error;
+      }
+      // An outcome that needs no authorization-server request is returned without one.
+      // Without stored issuer metadata, the grant key is still known from the binding's
+      // recorded client selection (or a pre-registered client): use, a step 1-5 refusal and
+      // a login only a host prepare can create are decided before fetching it.
+      if (known.metadata || known.decided) return;
+      const recorded = known.binding?.issuer === client.issuer ? known.binding.client : undefined;
+      const selection: ClientSelection | undefined = recorded ??
+        (client.clientId !== undefined ? { source: "preregistered", clientId: client.clientId } : undefined);
+      if (!selection) return;
+      const key = grantKey(namespace, context, client, clientIdentity(selection));
+      if (known.binding?.grantKey !== undefined && known.binding.grantKey !== key) return;
+      known.decided = true;
+      const stored = await read(key, "grant", operation);
+      // A forced re-registration (a client-credentials DCR client only) never serves the
+      // replaced client's token; any other client keeps its usable token.
+      const forced = mode === "host" && forceRegistration && client.flow === "client_credentials" && selection.source === "dcr";
+      const full = decide({ op, config, challenge, sent: sent?.key === key ? sent.generation : undefined,
+        grant: grantOf(stored, { selection } as Selected, forced) });
+      const { outcome } = full;
+      if (outcome.type === "use") {
+        // A new target (an unbound one, or a preset, sharing a host-assigned grant) learns its
+        // binding without the issuer's metadata.
+        if (!known.binding) {
+          await write(bindingKey(namespace, context), undefined, { kind: "binding", generation: crypto.randomUUID(), issuer: client.issuer,
+            resource: client.resource, discoveredAt: Date.now(), grantKey: key, client: selection }, operation);
+        }
+        if (mode === "host") await sweepPersisted(key, operation);
+        known.early = ready(stored!, key, binding);
+        const signal = new AuthError("provider_failed");
+        gated.add(signal);
+        throw signal;
+      }
+      if (outcome.type === "fail" && (outcome.step <= 5 || (outcome.step === 9 && client.flow === "authorization_code_pkce"))) {
+        // An unbound target still learns its binding, without the issuer's metadata.
+        if (outcome.step === 9 && !known.binding && context.authentication === undefined) {
+          await write(bindingKey(namespace, context), undefined, { kind: "binding", generation: crypto.randomUUID(), issuer: client.issuer,
+            resource: client.resource, discoveredAt: Date.now(), grantKey: key, client: selection }, operation);
+        }
+        gated.add(outcome.error);
+        throw outcome.error;
+      }
+    };
+    /** What resolution starts from: the stored binding, and whether it holds the issuer's metadata. */
+    const known: { binding?: StoredBinding | undefined; metadata: boolean; decided?: boolean; early?: Ready; fresh?: boolean } = { metadata: false };
+    try {
+      return await resolveAndAct();
+    } catch (error) {
+      // The gate decided `use` before the issuer's metadata was needed.
+      if (known.early) return known.early;
+      throw error;
+    }
+
+    async function resolveAndAct(): Promise<PrepareResult | typeof LOOKUP_MISS> {
+      const cached = await read(bindingKey(namespace, context), "binding", operation);
+      if (!cached && mode === "lookup") return LOOKUP_MISS;
+      known.binding = cached; known.metadata = cached?.metadata !== undefined;
+      const challenged = context.challenged === true || context.challenge !== undefined;
+      // Paths that may exchange can repair a binding whose cached resolution fails
+      // (stored issuer gone or no longer trusted) through full discovery.
+      const repairable = mode === "host" || (mode === "delivery" && challenged);
+      let target: Selected;
+      if (cached) {
+        let resolved: ResolvedTarget | undefined;
+        try {
+          resolved = await resolveTarget(context, options, operation, cached, gate);
+        } catch (error) {
+          operation.signal.throwIfAborted();
+          // Only a host selectClient rejection is a policy refusal; other errors propagate.
+          if (mode === "lookup" && isPolicyRefusal(error)) return LOOKUP_MISS;
+          // A local decision cannot be repaired by rediscovery, so it fails without network I/O.
+          if (!repairable || !(error instanceof AuthError) || gated.has(error)) throw error;
+        }
+        target = resolved ? await withClient(resolved, recordedFor(cached, resolved), operation, redirect)
+          : await discoverBinding(context, cached, operation, false, redirect, gate);
+        // Issuer metadata just fetched for a binding that lacked it: persist it, and do not
+        // fetch it again for this operation's renewal.
+        if (resolved && !known.metadata) { await saveBinding(context, cached, target, operation); known.fresh = true; }
+      } else {
+        target = await discoverBinding(context, undefined, operation, true, redirect, gate);
+      }
+      const key = grantKey(namespace, context, target.client, target.identity);
+      if (mode === "host") await sweepPersisted(key, operation);
+      // A known binding whose host policy now names another grant is not a store miss;
+      // a changed client selection is not such a change.
+      const reselected = cached?.client !== undefined &&
+        (cached.client.source !== "preregistered" || target.selection.source !== "preregistered");
+      if (mode === "lookup" && cached?.grantKey !== undefined && cached.grantKey !==
+          grantKey(namespace, context, target.client, reselected ? clientIdentity(cached.client!) : target.identity)) {
+        throw new AuthError("discovery_failed");
+      }
+      if (cached && JSON.stringify(cached.client) !== JSON.stringify(target.selection)) await saveBinding(context, cached, target, operation);
+      // Host prepare may force a new client-credentials registration, and a token for it.
+      const force = mode === "host" && forceRegistration && target.registration !== undefined;
+      const sentGeneration = sent?.key === key ? sent.generation : undefined;
+      const decideFor = (target: Selected, grant: StoredGrant | undefined) => decide({ op, challenge, sent: sentGeneration,
+        config: configOf(target.client, explicitScopes, preset), grant: grantOf(grant, target, force) });
+      // Cached tokens are served without metadata I/O, locks or writes.
+      const observed = await read(key, "grant", operation);
+      const first = decideFor(target, observed);
+      if (first.outcome.type === "fail") throw first.outcome.error;
+      if (first.outcome.type === "use") return ready(observed!, key, binding);
+      // Full discovery only on a cache miss, host prepare or challenge handling; a
+      // known binding otherwise renews from persisted metadata (or fails, never anonymous).
+      // Only a renewal (refresh or acquisition) rediscovers, honouring a resource_metadata hint.
+      if (cached && repairable && !known.fresh) target = await discoverBinding(context, cached, operation, true, redirect, gate);
+      target = force && target.registration
+        ? withRegistration(target, await registration(target, target.registration.key, mode, operation, true))
+        : await usableClient(target, mode, operation);
+      const renew = (target: Selected) => {
+        const key = grantKey(namespace, context, target.client, target.identity);
+        return race(operation.signal, store.coordinate(key, operation.signal, async (): Promise<PrepareResult> => {
+          // Under the grant lock the stored generation may have moved on: decide again.
+          const current = await read(key, "grant", operation);
+          const decision = decideFor(target, current);
+          const { outcome, required } = decision;
+          const ceiling = ceilingOf(target.client);
+          switch (outcome.type) {
+            case "fail": throw outcome.error;
+            case "use": return ready(current!, key, binding);
+            case "refresh": {
+              const refreshing = target.selection.source !== "dcr" ? target : { ...target, client: { ...target.client, clientId: current!.clientId! } };
+              const saved = await refresh(key, current!, current!.scopes, refreshing, operation);
+              const denied = coverage(required, saved.scopes, ceiling);
+              if (denied) throw denied;
+              return ready(saved, key, binding);
+            }
+            case "acquire": {
+              const token = await acquireClientCredentials(requesting(target, current, outcome.request), options, operation);
+              const saved = await saveGrant(key, current?.generation, token, commit());
+              if (target.registration?.record) await clearFailure(target.registration.key, target.registration.record.generation);
+              const denied = coverage(required, saved.scopes, ceiling);
+              if (denied) throw denied;
+              return ready(saved, key, binding);
+            }
+            case "login": return login(context, requesting(target, current, outcome.request), key, required, operation);
+          }
+        }));
+      };
+      // invalid_client: a CIMD client is misconfigured; a registered client-credentials
+      // client is deleted and replaced at most once per operation.
+      let replaced = false;
+      const attempt = async (target: Selected): Promise<PrepareResult> => {
+        try {
+          return await renew(target);
+        } catch (error) {
+          if (!isInvalidClient(error)) throw error;
+          if (target.selection.source === "cimd") throw new AuthError("invalid_configuration");
+          const registered = target.registration;
+          if (!registered?.record) throw error;
+          await dropGeneration(registered.key, registered.record.generation);
+          if (replaced) {
+            // Registrations are accepted but the clients rejected: back off like a failed registration.
+            const rejected = new AuthError("credential_unavailable");
+            await race(operation.signal, store.coordinate(registered.key, operation.signal, async () =>
+              failed(registered.key, await read(failureKey(registered.key), "registration_failure", operation), rejected)));
+            throw rejected;
+          }
+          replaced = true;
+          return attempt(withRegistration(target, await registration(target, registered.key, mode, operation)));
+        }
+      };
       try {
-        resolved = await resolveTarget(context, options, operation, cached, explicitScopes);
+        return await attempt(target);
       } catch (error) {
         operation.signal.throwIfAborted();
-        // Only a host selectClient rejection is a policy refusal; other errors propagate.
-        if (mode === "lookup" && isPolicyRefusal(error)) return LOOKUP_MISS;
-        // A ceiling refusal names its scopes and is local policy: rediscovery cannot repair it.
-        if (!repairable || !(error instanceof AuthError) || error.requiredScopes !== undefined) throw error;
+        if (!cached || !isTransportFailure(error)) throw error;
       }
-      target = resolved ? await withClient(resolved, recordedFor(cached, resolved), operation, redirect)
-        : await discoverBinding(context, cached, operation, false, redirect, explicitScopes);
-    } else {
-      target = await discoverBinding(context, undefined, operation, true, redirect, explicitScopes);
-    }
-    const withExplicit = <T extends ResolvedTarget>(resolved: T): T => {
-      const all = scopes([...(resolved.client.requiredScopes ?? []), ...explicitScopes]);
-      if (!within(all, ceilingOf(resolved.client))) throw new AuthError("access_denied", all);
-      return { ...resolved, client: { ...resolved.client, requiredScopes: all } };
-    };
-    target = withExplicit(target);
-    const key = grantKey(namespace, context, target.client, target.identity);
-    if (mode === "host") await sweepPersisted(key, operation);
-    // A known binding whose host policy now names another grant is not a store miss;
-    // a changed client selection is not such a change.
-    const reselected = cached?.client !== undefined &&
-      (cached.client.source !== "preregistered" || target.selection.source !== "preregistered");
-    if (mode === "lookup" && cached?.grantKey !== undefined && cached.grantKey !==
-        grantKey(namespace, context, target.client, reselected ? clientIdentity(cached.client!) : target.identity)) {
-      throw new AuthError("discovery_failed");
-    }
-    if (cached && JSON.stringify(cached.client) !== JSON.stringify(target.selection)) await saveBinding(context, cached, target, operation);
-    // Cached tokens are served without metadata I/O, locks or writes.
-    // Host prepare may force a new client-credentials registration, and a token for it.
-    const force = mode === "host" && forceRegistration && target.registration !== undefined;
-    const observed = force ? undefined : await read(key, "grant", operation);
-    if (usable(observed, target, target.client.requiredScopes ?? [])) return ready(observed, key, binding, target, []);
-    // Full discovery only on a cache miss, host prepare or challenge handling; a
-    // known binding otherwise renews from persisted metadata (or fails, never anonymous).
-    if (cached && repairable) target = withExplicit(await discoverBinding(context, cached, operation, true, redirect, explicitScopes));
-    target = force && target.registration
-      ? withRegistration(target, await registration(target, target.registration.key, mode, operation, true))
-      : await usableClient(target, mode, operation);
-    const required = target.client.requiredScopes ?? [];
-    const renew = (target: Selected) => {
-      const key = grantKey(namespace, context, target.client, target.identity);
-      return race(operation.signal, store.coordinate(key, operation.signal, async (): Promise<PrepareResult> => {
-        const current = await read(key, "grant", operation);
-        if (!force && usable(current, target, required)) return ready(current, key, binding, target, []);
-        const prior = current ? effective(current, target) : [];
-        if (target.client.flow === "client_credentials") {
-          const token = await acquireClientCredentials(acquisition(target, current), options, operation);
-          const saved = await saveGrant(key, current?.generation, token, commit());
-          if (target.registration?.record) await clearFailure(target.registration.key, target.registration.record.generation);
-          return ready(saved, key, binding, target, required);
-        }
-        // A DCR grant refreshes with the client issued to the login that produced it.
-        const refreshing = target.selection.source !== "dcr" ? target
-          : current?.clientId === undefined ? undefined : { ...target, client: { ...target.client, clientId: current.clientId } };
-        // A refresh can never broaden a grant, so it only helps when the requirement is already covered.
-        if (current?.refreshToken && refreshing && within(required, prior)) {
-          return ready(await refresh(key, current, current.scopes, refreshing, operation), key, binding, target, required);
-        }
-        if (mode !== "host") throw new AuthError("interaction_required", required);
-        return login(context, acquisition(target, current), key, operation);
-      }));
-    };
-    // invalid_client: a CIMD client is misconfigured; a registered client-credentials
-    // client is deleted and replaced at most once per operation.
-    let replaced = false;
-    const attempt = async (target: Selected): Promise<PrepareResult> => {
+      // The token endpoint provably did not process the request (DNS, connect, TLS
+      // handshake, 404/410): persisted metadata may be stale. Refetch the stored
+      // issuer's metadata once, outside the lock, never protected-resource metadata.
+      let refreshed: Selected;
       try {
-        return await renew(target);
+        const resolved = await resolveTarget(context, options, operation, { issuer: cached.issuer, resource: cached.resource }, gate);
+        refreshed = await withClient(resolved, recordedFor(cached, resolved), operation, redirect);
       } catch (error) {
-        if (!isInvalidClient(error)) throw error;
-        if (target.selection.source === "cimd") throw new AuthError("invalid_configuration");
-        const registered = target.registration;
-        if (!registered?.record) throw error;
-        await dropGeneration(registered.key, registered.record.generation);
-        if (replaced) {
-          // Registrations are accepted but the clients rejected: back off like a failed registration.
-          const rejected = new AuthError("credential_unavailable");
-          await race(operation.signal, store.coordinate(registered.key, operation.signal, async () =>
-            failed(registered.key, await read(failureKey(registered.key), "registration_failure", operation), rejected)));
-          throw rejected;
-        }
-        replaced = true;
-        return attempt(withRegistration(target, await registration(target, registered.key, mode, operation)));
+        operation.signal.throwIfAborted();
+        // A local decision and a host destination refusal keep their codes; only a failed
+        // fetch or invalid metadata is discovery_failed.
+        if (error instanceof AuthError && (gated.has(error) || isDestinationRefusal(error))) throw error;
+        throw new AuthError("discovery_failed");
       }
-    };
-    try {
-      return await attempt(target);
-    } catch (error) {
-      operation.signal.throwIfAborted();
-      if (!cached || !isTransportFailure(error)) throw error;
+      if (refreshed.client.issuer !== cached.issuer || grantKey(namespace, context, refreshed.client, refreshed.identity) !== key) {
+        throw new AuthError("discovery_failed");
+      }
+      await write(bindingKey(namespace, context), cached.generation, { ...cached, generation: crypto.randomUUID(),
+        metadata: refreshed.metadata, discoveredAt: Date.now() }, operation);
+      return attempt(await usableClient(refreshed, mode, operation));
     }
-    // The token endpoint provably did not process the request (DNS, connect, TLS
-    // handshake, 404/410): persisted metadata may be stale. Refetch the stored
-    // issuer's metadata once, outside the lock, never protected-resource metadata.
-    let refreshed: Selected;
-    try {
-      const resolved = await resolveTarget(context, options, operation, { issuer: cached.issuer, resource: cached.resource });
-      refreshed = withExplicit(await withClient(resolved, recordedFor(cached, resolved), operation, redirect));
-    } catch (error) {
-      operation.signal.throwIfAborted();
-      throw new AuthError("discovery_failed");
-    }
-    if (refreshed.client.issuer !== cached.issuer || grantKey(namespace, context, refreshed.client, refreshed.identity) !== key) {
-      throw new AuthError("discovery_failed");
-    }
-    await write(bindingKey(namespace, context), cached.generation, { ...cached, generation: crypto.randomUUID(),
-      metadata: refreshed.metadata, discoveredAt: Date.now() }, operation);
-    return attempt(await usableClient(refreshed, mode, operation));
   }
 
   /**
-   * A new acquisition for an existing grant key requests previously granted ∪
-   * ((requested ∪ required) ∩ ceiling) and records response ∩ (previously granted
-   * ∪ acquisition ceiling), so a step-up never loses earlier scopes.
+   * An acquisition requests `decide`'s set (previous ∪ ((S ∪ R [∪ P′]) ∩ C)) and records
+   * response ∩ (previous ∪ acquisition ceiling), so a step-up never loses earlier scopes.
    */
-  function acquisition<T extends ResolvedTarget>(target: T, current: StoredGrant | undefined): T {
+  function requesting<T extends ResolvedTarget>(target: T, current: StoredGrant | undefined, request: readonly string[]): T {
     const ceiling = ceilingOf(target.client), previous = current?.scopes ?? [];
-    const wanted = [...target.client.scopes, ...(target.client.requiredScopes ?? [])].filter(scope => ceiling.includes(scope));
-    return { ...target, client: { ...target.client,
-      scopes: [...new Set([...previous, ...wanted])], allowedScopes: [...new Set([...previous, ...ceiling])] } };
+    return { ...target, client: { ...target.client, scopes: [...request], allowedScopes: [...new Set([...previous, ...ceiling])] } };
   }
 
   async function refresh(key: string, current: StoredGrant, prior: readonly string[], target: ResolvedTarget, operation: Operation): Promise<StoredGrant> {
@@ -557,7 +720,8 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         if (latest?.refreshToken === presented && latest.clientId === client) await write(key, latest.generation, undefined, settle);
       }
       operation.signal.throwIfAborted();
-      if (unknownClient) throw new AuthError("interaction_required", target.client.requiredScopes);
+      // Like every token-endpoint failure, it carries no scopes.
+      if (unknownClient) throw new AuthError("interaction_required");
       throw error;
     }
     if (!result.value) {
@@ -652,7 +816,8 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
   }
 
   /** Create a pending login for its own redirect and, with DCR, its own client. Host prepare only. */
-  async function login(context: DeliveryAuthContext, target: Selected, key: string, operation: Operation): Promise<PendingLogin> {
+  async function login(context: DeliveryAuthContext, target: Selected, key: string, required: readonly string[],
+    operation: Operation): Promise<PendingLogin> {
     let client = target.client;
     if (target.selection.source === "cimd") cimdRedirect(client);
     if (target.selection.source === "dcr") {
@@ -665,7 +830,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     const record: StoredPendingLogin = {
       kind: "pending_login", generation: crypto.randomUUID(), state: started.state, grantKey: key,
       expiresAt: Date.now() + loginLifetime, authorizationUrl: started.authorizationUrl, verifier: started.verifier,
-      client: stored, metadata: target.metadata, context: durableContext(context), source: target.selection.source,
+      client: stored, requiredScopes: [...required], metadata: target.metadata, context: durableContext(context), source: target.selection.source,
     };
     await keep(record, operation);
     return handle(record);
@@ -676,6 +841,7 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
    * host policy still selects that source for the same grant key.
    */
   async function completionTarget(record: StoredPendingLogin, context: DeliveryAuthContext, operation: Operation): Promise<ResolvedTarget> {
+    // complete() step 3, host policy only: client reselection; the login's stored R is checked after the claim.
     const reselected = await resolveTarget(context, options, operation,
       { issuer: record.client.issuer, resource: record.client.resource, metadata: record.metadata });
     const host = reselected.client;
@@ -694,6 +860,20 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     return { ...reselected, client: { ...client, redirectUri: record.client.redirectUri! } };
   }
 
+  /** complete() step 3, host policy: the token endpoint's destination check, before the claim. */
+  async function tokenDestination(target: ResolvedTarget, operation: Operation): Promise<void> {
+    const endpoint = https(String(target.metadata.token_endpoint));
+    const approved = endpoint.href;
+    try {
+      await options.checkDestination(endpoint, "token", operation);
+    } catch (error) {
+      active(operation);
+      throw classifyAuthError(error, "untrusted_destination");
+    }
+    active(operation);
+    if (endpoint.href !== approved) throw new AuthError("untrusted_destination");
+  }
+
   // Successful host prepares (and completed logins) let Hooks re-attempt a backend
   // whose configuration discovery was skipped as unavailable.
   const preparedListeners = new Set<(endpoint: PreparedEndpoint) => void>();
@@ -705,7 +885,13 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
   }
 
   async function prepare(input: DeliveryAuthContext, budget: Operation, prepareOptions: PrepareOptions = {}): Promise<PrepareResult> {
-    const context = snapshotContext(input);
+    // Snapshot synchronously, then step 0, then any argument or target failure.
+    let context: DeliveryAuthContext, failure: unknown;
+    try { context = snapshotContext(input); } catch (error) { failure = error; }
+    if (statusOf(input) === 401 && input?.rejectedCredential) await retireAtBoundary(401, input.rejectedCredential, input, budget, input.signal);
+    if (failure !== undefined) throw failure;
+    context = context!;
+    if (prepareOptions.requiredScopes !== undefined && !Array.isArray(prepareOptions.requiredScopes)) throw new AuthError("invalid_configuration");
     const explicit = [...(prepareOptions.requiredScopes ?? [])];
     const redirect = prepareOptions.redirectUri;
     const force = prepareOptions.forceRegistration;
@@ -718,62 +904,89 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
     return result;
   }
 
-  /** Complete the pending login named by the callback's `state`. */
+  /** Complete the pending login named by the callback's `state` (section 3). */
   async function complete(callback: string, budget: Operation): Promise<Ready> {
     let completed: DeliveryAuthContext | undefined;
-    const result: Ready = await run(budget, undefined, async (operation) => {
-      if (typeof callback !== "string") throw new AuthError("invalid_configuration");
-      let state: string | null;
-      try { state = new URL(callback).searchParams.get("state"); } catch { throw new AuthError("access_denied"); }
-      const record = state ? await find(state, operation) : undefined;
-      // Completed, cancelled, evicted, expired or owned by another process.
-      if (!record) throw new AuthError("interaction_required");
-      if (record.expiresAt <= Date.now()) {
-        await claim(record, operation);
-        throw new AuthError("interaction_required");
+    // Whether the named login no longer exists: "pending" until it is found ended or
+    // claimed, "claiming" while the claim's outcome is uncertain.
+    const progress: { phase: "pending" | "ended" | "claiming"; claimed?: StoredPendingLogin } = { phase: "pending" };
+    let result: Ready;
+    try {
+      result = await run(budget, undefined, async (operation) => {
+        if (typeof callback !== "string") throw new AuthError("invalid_configuration");
+        // An unparseable callback is an invalid callback: it names no login and ends none.
+        let state: string | null;
+        try { state = new URL(callback).searchParams.get("state"); } catch { throw new AuthError("access_denied"); }
+        // 1. Look the login up before any host callback runs.
+        const record = state ? await find(state, operation) : undefined;
+        if (!record || record.expiresAt <= Date.now()) {
+          progress.phase = "ended";
+          if (record) await claim(record, operation);
+          throw new AuthError("interaction_required");
+        }
+        const stored: ResolvedTarget = { client: record.client as ClientConfig, metadata: record.metadata };
+        const login = { authorizationUrl: record.authorizationUrl, state: record.state, verifier: record.verifier };
+        // 2. Validate the callback; failures leave the login pending.
+        let denied: boolean;
+        try { denied = validateCallback(stored, login, callback); }
+        catch { throw new AuthError("access_denied"); }
+        // 3. Host policy (client selection, a client source no longer permitted) runs for
+        // every valid callback, a consent denial included, before the claim.
+        const context = snapshotContext(record.context as DeliveryAuthContext);
+        const current = await completionTarget(record, context, operation);
+        // ... and the token endpoint's destination policy, for every valid callback (a
+        // denial included): a refusal keeps the host's code and the login pending.
+        await tokenDestination(current, operation);
+        // 4. Claim once; from here the login has ended.
+        progress.phase = "claiming"; progress.claimed = record;
+        const won = await claim(record, operation);
+        progress.phase = "ended";
+        if (!won) throw new AuthError("interaction_required");
+        // 5. Consent denied.
+        if (denied) {
+          if (record.source === "cimd" && new URL(callback).searchParams.get("error") === "invalid_client") throw new AuthError("invalid_configuration");
+          throw new AuthError("access_denied");
+        }
+        // 6. Exchange the code.
+        const prior = (await read(record.grantKey, "grant", operation))?.scopes ?? [];
+        const exchange: ResolvedTarget = { ...current, client: { ...current.client,
+          scopes: record.client.scopes, allowedScopes: [...new Set([...prior, ...ceilingOf(record.client as ClientConfig)])] } };
+        let result: TokenResult;
+        try {
+          result = await exchangeCode(exchange, login, callback, options, operation);
+        } catch (error) {
+          if (isInvalidClient(error) && record.source === "cimd") throw new AuthError("invalid_configuration");
+          // A rejected DCR client ends only this login (the stored grant may hold an older
+          // valid client); the next prepare registers again.
+          if (isInvalidClient(error) && record.source === "dcr") throw new AuthError("interaction_required");
+          throw error;
+        }
+        if (!result.value) throw new AuthError("provider_failed");
+        // 7. Persist; the newest completed login wins. Then the stored R must be covered.
+        const token = { ...result.value, ...(record.source === "dcr" ? { clientId: record.client.clientId! } : {}) };
+        const settle = commit();
+        const grant = await race(operation.signal, store.coordinate(record.grantKey, settle.signal, async () => {
+          const latest = await read(record.grantKey, "grant", settle);
+          return saveGrant(record.grantKey, latest?.generation, token, settle);
+        }));
+        // A record from an older release has no stored R: its prepare-time H, else the current H.
+        const required = record.requiredScopes ?? record.client.requiredScopes ?? current.client.requiredScopes ?? [];
+        const denial = coverage(required, grant.scopes, ceilingOf(current.client));
+        if (denial) throw denial;
+        const done: Ready = ready(grant, record.grantKey, identity(context));
+        completed = context;
+        return done;
+      });
+    } catch (error) {
+      let ended = progress.phase === "ended";
+      const claimed = progress.claimed;
+      if (progress.phase === "claiming" && claimed) {
+        // The claim's outcome is uncertain (store error, deadline): re-read on a fresh budget.
+        const recheck: Operation = Object.freeze({ signal: AbortSignal.timeout(Math.min(commitTimeout, 5_000)), deadline: Date.now() + Math.min(commitTimeout, 5_000) });
+        try { ended = (await find(claimed.state, recheck))?.generation !== claimed.generation; } catch { ended = false; }
       }
-      const stored: ResolvedTarget = { client: record.client as ClientConfig, metadata: record.metadata };
-      const login = { authorizationUrl: record.authorizationUrl, state: record.state, verifier: record.verifier };
-      // Validate redirect, state and issuer before anything can consume the login.
-      let denied: boolean;
-      try { denied = validateCallback(stored, login, callback); }
-      catch { throw new AuthError("access_denied"); }
-      // Consent fixes identity, not runtime client authentication: reselect current
-      // host secrets outside coordination, before claiming the callback.
-      const context = snapshotContext(record.context as DeliveryAuthContext);
-      const current = denied ? stored : await completionTarget(record, context, operation);
-      // Claim once: a validated callback (including denial) ends the login.
-      if (!await claim(record, operation)) throw new AuthError("interaction_required");
-      if (denied) {
-        // An authorization endpoint invalid_client for a CIMD client is misconfiguration.
-        if (record.source === "cimd" && new URL(callback).searchParams.get("error") === "invalid_client") throw new AuthError("invalid_configuration");
-        throw new AuthError("access_denied");
-      }
-      const prior = (await read(record.grantKey, "grant", operation))?.scopes ?? [];
-      const exchange: ResolvedTarget = { ...current, client: { ...current.client,
-        scopes: record.client.scopes, allowedScopes: [...new Set([...prior, ...ceilingOf(record.client as ClientConfig)])] } };
-      let result: TokenResult;
-      try {
-        result = await exchangeCode(exchange, login, callback, options, operation);
-      } catch (error) {
-        if (isInvalidClient(error) && record.source === "cimd") throw new AuthError("invalid_configuration");
-        // A rejected DCR client ends only this login: the stored grant may hold an older valid client.
-        if (isInvalidClient(error) && record.source === "dcr") throw new AuthError("interaction_required", record.client.requiredScopes);
-        throw error;
-      }
-      // An invalid initial exchange persists nothing.
-      if (!result.value) throw new AuthError("provider_failed");
-      // The issued client is committed with its tokens; the newest completed login wins.
-      const token = { ...result.value, ...(record.source === "dcr" ? { clientId: record.client.clientId! } : {}) };
-      const settle = commit();
-      const grant = await race(operation.signal, store.coordinate(record.grantKey, settle.signal, async () => {
-        const latest = await read(record.grantKey, "grant", settle);
-        return saveGrant(record.grantKey, latest?.generation, token, settle);
-      }));
-      const done: Ready = ready(grant, record.grantKey, identity(context), current, record.client.requiredScopes ?? []);
-      completed = context;
-      return done;
-    });
+      throw loginEndedError(error, ended);
+    }
     if (completed) prepared(completed);
     return result;
   }
@@ -788,45 +1001,21 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
 
   async function challenge(input: AuthChallengeContext, budget: Operation): Promise<void> {
     const { response, credential } = input;
+    // Only a 401 or 403 is a challenge.
+    if (response.status !== 401 && response.status !== 403) return;
     const header = response.headers.get("www-authenticate") ?? undefined;
-    const context = snapshotContext({ ...input, ...(header === undefined ? {} : { challenge: header }), challenged: true });
+    const { rejectedCredential: _rejected, ...rest } = input;
+    let context: DeliveryAuthContext, failure: unknown;
+    try {
+      context = snapshotContext({ ...rest, ...(header === undefined ? {} : { challenge: header }), challengeStatus: response.status, challenged: true });
+    } catch (error) { failure = error; }
+    if (response.status === 401 && credential) await retireAtBoundary(401, credential, input, budget, input.signal);
+    if (failure !== undefined) throw failure;
+    context = context!;
     return run(budget, context.signal, async (operation) => {
-      const parameters = bearerParameters(header);
-      const insufficient = response.status === 403 && parameters.get("error") === "insufficient_scope";
-      if (response.status === 403 && !insufficient) throw new AuthError("access_denied");
-      if (response.status !== 401 && !insufficient) return;
-      const owner = credential ? attempts.get(credential.attempt as object) : undefined;
-      if (credential && (!owner || owner.identity !== identity(context))) throw new AuthError("invalid_configuration");
-      if (!insufficient && owner) {
-        // Drop the rejected access token first (keeping refresh material) unless a newer
-        // generation exists, under the commit budget: a later discovery failure or caller
-        // abort must not leave the revoked token stored and resent.
-        const settle = commit();
-        await race(operation.signal, store.coordinate(owner.key, settle.signal, async () => {
-          const current = await read(owner.key, "grant", settle);
-          if (current?.generation !== owner.generation || current.token === undefined) return;
-          const { token: _token, expiresAt: _expiresAt, kind: _kind, generation: _generation, ...rest } = current;
-          await saveGrant(owner.key, current.generation, rest, settle);
-        }));
-      }
-      const cached = await read(bindingKey(namespace, context), "binding", operation);
-      // Challenge handling runs full discovery, honouring a resource_metadata hint.
-      const target = await discoverBinding(context, cached, operation);
-      if (insufficient) {
-        // Operation-scoped: validated against the ceiling, never persisted. The replay
-        // carries the same challenge, so its acquisition sees the same requirement.
-        const advertised = parameters.get("scope");
-        const required = advertised === undefined ? scopes(target.hostRequiredScopes ?? []) : scopes(advertised.split(" "));
-        if (required.length === 0) throw new AuthError("access_denied");
-        if (!within(required, ceilingOf(target.client))) throw new AuthError("access_denied", required);
-        if (target.client.flow === "authorization_code_pkce") throw new AuthError("interaction_required", required);
-      }
       // Prepare the next attempt (the replay, or the next notification/upload that is
-      // never replayed): discovery and client-credentials acquisition, never a login.
-      // A rejected token is stale even with unknown or future expiry: renew it now
-      // (refresh or client credentials) so it is never resent.
-      const grant = owner ? await read(owner.key, "grant", operation) : undefined;
-      if (target.client.flow === "client_credentials" || grant?.refreshToken) await acquire(context, operation, "delivery");
+      // never replayed): discovery, refresh and client-credentials acquisition, never a login.
+      await acquire(context, operation, "delivery", [], undefined, false, attemptOf(credential, context), "challenge");
     });
   }
 
@@ -838,7 +1027,13 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
         return () => { preparedListeners.delete(subscription); };
       },
       async credential(input) {
-        const context = snapshotContext(input);
+        input?.signal?.throwIfAborted();
+        // Snapshot synchronously; step 0 then precedes the host budget and every target check.
+        let context: DeliveryAuthContext, failure: unknown;
+        try { context = snapshotContext(input); } catch (error) { failure = error; }
+        if (statusOf(input) === 401 && input?.rejectedCredential) await retireAtBoundary(401, input.rejectedCredential, input, undefined, input.signal);
+        if (failure !== undefined) throw failure;
+        context = context!;
         const lookup = context.authentication === undefined && !context.challenged && context.challenge === undefined;
         context.signal?.throwIfAborted();
         let budget: Operation;
@@ -847,9 +1042,9 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
           // Without a budget an unbound endpoint with no stored binding still sends anonymously.
           let known: unknown;
           try { known = await store.load(bindingKey(namespace, context), context.signal ?? new AbortController().signal); }
-          catch (failure) { throw classifyAuthError(failure, "provider_failed", context.signal); }
+          catch (failure) { throw classify(classifyAuthError(failure, "provider_failed", context.signal)); }
           if (lookup && known === undefined) return undefined;
-          throw classifyAuthError(error);
+          throw classify(classifyAuthError(error));
         }
         const result = await run(budget, context.signal, operation => acquire(context, operation, lookup ? "lookup" : "delivery"));
         // The up-front lookup is anonymous only on a store miss or a host policy refusal.
@@ -859,10 +1054,12 @@ export function managedOAuth(configuration: ManagedOAuthOptions) {
       },
       async challenge(input) {
         input.signal?.throwIfAborted();
+        // Step 0 precedes the host budget and every target check.
+        if (input.response?.status === 401 && input.credential) await retireAtBoundary(401, input.credential, input, undefined, input.signal);
         let budget: Operation;
         try { budget = host.budget(input); } catch (error) {
           input.signal?.throwIfAborted();
-          throw classifyAuthError(error);
+          throw classify(classifyAuthError(error));
         }
         return challenge(input, budget);
       },

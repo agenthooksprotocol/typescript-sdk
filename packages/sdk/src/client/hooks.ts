@@ -707,8 +707,12 @@ export class Hooks {
         }
       }
       if (explicitAuthorization || !authRejected || !replaySafe || attempt === 1) return response;
+      // The replay carries the challenge, its status and the credential it rejected, so
+      // the provider decides it as the same operation (scope contract v2, section 5).
       context.challenged = true;
       context.challenge = response.headers.get("www-authenticate") ?? undefined;
+      context.challengeStatus = response.status;
+      if (credential) context.rejectedCredential = credential; else delete context.rejectedCredential;
       void response.body?.cancel().catch(() => {});
     }
     throw new Error("Authentication failed");

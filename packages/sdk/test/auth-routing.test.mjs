@@ -432,7 +432,7 @@ test("delivery-diagnostic-auth: a delivery diagnostic carries the typed auth fai
       const result = await hooks.dispatch("tool.before", input());
       assert.equal(requests.length, 0);
       const [diagnostic] = result.diagnostics.filter((d) => d.phase !== "observation");
-      assert.deepEqual(diagnostic.auth, { code: "interaction_required", recovery: "login", requiredScopes: ["events", "audit"] });
+      assert.deepEqual(diagnostic.auth, { code: "interaction_required", recovery: "login", requiredScopes: ["audit", "events"] });
       assert.equal(diagnostic.backendId, "routing.backend");
       assert.ok(Object.isFrozen(diagnostic.auth));
     } finally { await hooks.close(); }
