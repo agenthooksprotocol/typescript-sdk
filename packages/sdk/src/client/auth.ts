@@ -532,6 +532,129 @@ function cacheKey(context: AuthContext, client: OAuthClient): string {
     [...(client.scopes ?? [])].sort(),
   ]);
 }
+/**
+ * The default discovery's first half: the selected (or preset) client and its local
+ * checks, including decide steps 1-4, with at most a protected-resource metadata
+ * fetch and no authorization-server request.
+ */
+async function legacyClient(context: AuthContext, options: AuthOptions): Promise<OAuthClient> {
+    const binding = context.authentication as
+      | Record<string, unknown>
+      | undefined;
+    const endpoint = secureUrl(context.url, options);
+    let client: OAuthClient;
+    let resource: string;
+    if (binding?.type === "oauth") {
+      const flow = binding.flow;
+      if (flow !== "authorization_code_pkce" && flow !== "client_credentials")
+        error("unsupported OAuth flow");
+      client = {
+        issuer: string(binding.issuer, "issuer"),
+        resource: string(binding.resource, "resource"),
+        clientId: string(binding.clientId, "clientId"),
+        flow,
+        ...(binding.scopes !== undefined
+          ? { scopes: strings(binding.scopes) }
+          : {}),
+        ...(binding.clientSecretRef !== undefined
+          ? {
+              clientSecretRef: string(
+                binding.clientSecretRef,
+                "clientSecretRef",
+              ),
+            }
+          : {}),
+      };
+      resource = client.resource;
+    } else {
+      const advertised = challengeParameter(
+        context.challenge,
+        "resource_metadata",
+      );
+      const metadata = await metadataAt(
+        advertised
+          ? [advertised]
+          : [
+              `${endpoint.origin}/.well-known/oauth-protected-resource${endpoint.pathname === "/" ? "" : endpoint.pathname}`,
+              `${endpoint.origin}/.well-known/oauth-protected-resource`,
+            ],
+        context,
+        options,
+      );
+      resource = string(metadata.resource, "resource");
+      validateResource(resource, context.url, options);
+      const issuers = strings(metadata.authorization_servers);
+      if (issuers.length === 0) error("authorization server missing");
+      for (const issuer of issuers) secureUrl(issuer, options);
+      if (!options.selectClient) error("OAuth client selection required");
+      client = await withinBudget(
+        Promise.resolve(options.selectClient(issuers, resource, context)),
+        context.signal,
+      );
+      if (!issuers.includes(client.issuer) || client.resource !== resource)
+        error("untrusted issuer or resource");
+    }
+    validateResource(resource, context.url, options);
+    const issuer = secureUrl(client.issuer, options);
+    if (issuer.search) error("invalid issuer");
+    // Pre-registered clients only: without the managed store, coordination and secret
+    // hook, this provider never uses CIMD or registers, so no client is unavailable.
+    if (!client.clientId) throw new AuthError("credential_unavailable");
+    if (!["authorization_code_pkce", "client_credentials"].includes(client.flow))
+      error("invalid client configuration");
+    // decide steps 1-4 before any issuer metadata I/O. The returned (and cached) client
+    // keeps only host policy: a step-up requirement is operation-scoped.
+    legacyGate(client, context);
+    return client;
+}
+/** The default discovery's second half: the selected issuer's authorization-server metadata. */
+async function legacyIssuerMetadata(client: OAuthClient, context: AuthContext, options: AuthOptions): Promise<{ client: OAuthClient; metadata: OAuthMetadata }> {
+    const issuer = secureUrl(client.issuer, options);
+    const path =
+      issuer.pathname === "/" ? "" : issuer.pathname.replace(/\/$/, "");
+    const discovered = await metadataAt(
+      [
+        `${issuer.origin}/.well-known/oauth-authorization-server${path}`,
+        `${issuer.origin}/.well-known/openid-configuration${path}`,
+        `${issuer.origin}${path}/.well-known/openid-configuration`,
+      ],
+      context,
+      options,
+    );
+    if (discovered.issuer !== client.issuer) error("issuer mismatch");
+    const metadata: OAuthMetadata = {
+      issuer: client.issuer,
+      token_endpoint: string(discovered.token_endpoint, "token endpoint"),
+      ...(discovered.authorization_endpoint !== undefined
+        ? {
+            authorization_endpoint: string(
+              discovered.authorization_endpoint,
+              "authorization endpoint",
+            ),
+          }
+        : {}),
+      ...(discovered.grant_types_supported !== undefined
+        ? { grant_types_supported: strings(discovered.grant_types_supported) }
+        : {}),
+      ...(discovered.code_challenge_methods_supported !== undefined
+        ? {
+            code_challenge_methods_supported: strings(
+              discovered.code_challenge_methods_supported,
+            ),
+          }
+        : {}),
+      ...(discovered.token_endpoint_auth_methods_supported !== undefined
+        ? {
+            token_endpoint_auth_methods_supported: strings(
+              discovered.token_endpoint_auth_methods_supported,
+            ),
+          }
+        : {}),
+    };
+    await destination(metadata.token_endpoint, "token", context, options);
+    return { client, metadata };
+}
+
 /** S, C, H and the preset's scopes of a legacy client, as `decide` reads them. */
 function legacyConfig(client: OAuthClient, context: AuthContext): DecisionConfig {
   const binding = context.authentication as { type?: unknown; scopes?: unknown } | undefined;
@@ -673,116 +796,7 @@ const defaults: AuthProvider = {
     return undefined;
   },
   async discover(context, options = {}) {
-    const binding = context.authentication as
-      | Record<string, unknown>
-      | undefined;
-    const endpoint = secureUrl(context.url, options);
-    let client: OAuthClient;
-    let resource: string;
-    if (binding?.type === "oauth") {
-      const flow = binding.flow;
-      if (flow !== "authorization_code_pkce" && flow !== "client_credentials")
-        error("unsupported OAuth flow");
-      client = {
-        issuer: string(binding.issuer, "issuer"),
-        resource: string(binding.resource, "resource"),
-        clientId: string(binding.clientId, "clientId"),
-        flow,
-        ...(binding.scopes !== undefined
-          ? { scopes: strings(binding.scopes) }
-          : {}),
-        ...(binding.clientSecretRef !== undefined
-          ? {
-              clientSecretRef: string(
-                binding.clientSecretRef,
-                "clientSecretRef",
-              ),
-            }
-          : {}),
-      };
-      resource = client.resource;
-    } else {
-      const advertised = challengeParameter(
-        context.challenge,
-        "resource_metadata",
-      );
-      const metadata = await metadataAt(
-        advertised
-          ? [advertised]
-          : [
-              `${endpoint.origin}/.well-known/oauth-protected-resource${endpoint.pathname === "/" ? "" : endpoint.pathname}`,
-              `${endpoint.origin}/.well-known/oauth-protected-resource`,
-            ],
-        context,
-        options,
-      );
-      resource = string(metadata.resource, "resource");
-      validateResource(resource, context.url, options);
-      const issuers = strings(metadata.authorization_servers);
-      if (issuers.length === 0) error("authorization server missing");
-      for (const issuer of issuers) secureUrl(issuer, options);
-      if (!options.selectClient) error("OAuth client selection required");
-      client = await withinBudget(
-        Promise.resolve(options.selectClient(issuers, resource, context)),
-        context.signal,
-      );
-      if (!issuers.includes(client.issuer) || client.resource !== resource)
-        error("untrusted issuer or resource");
-    }
-    validateResource(resource, context.url, options);
-    const issuer = secureUrl(client.issuer, options);
-    if (issuer.search) error("invalid issuer");
-    // Pre-registered clients only: without the managed store, coordination and secret
-    // hook, this provider never uses CIMD or registers, so no client is unavailable.
-    if (!client.clientId) throw new AuthError("credential_unavailable");
-    if (!["authorization_code_pkce", "client_credentials"].includes(client.flow))
-      error("invalid client configuration");
-    // decide steps 1-4 before any issuer metadata I/O. The returned (and cached) client
-    // keeps only host policy: a step-up requirement is operation-scoped.
-    legacyGate(client, context);
-    const path =
-      issuer.pathname === "/" ? "" : issuer.pathname.replace(/\/$/, "");
-    const discovered = await metadataAt(
-      [
-        `${issuer.origin}/.well-known/oauth-authorization-server${path}`,
-        `${issuer.origin}/.well-known/openid-configuration${path}`,
-        `${issuer.origin}${path}/.well-known/openid-configuration`,
-      ],
-      context,
-      options,
-    );
-    if (discovered.issuer !== client.issuer) error("issuer mismatch");
-    const metadata: OAuthMetadata = {
-      issuer: client.issuer,
-      token_endpoint: string(discovered.token_endpoint, "token endpoint"),
-      ...(discovered.authorization_endpoint !== undefined
-        ? {
-            authorization_endpoint: string(
-              discovered.authorization_endpoint,
-              "authorization endpoint",
-            ),
-          }
-        : {}),
-      ...(discovered.grant_types_supported !== undefined
-        ? { grant_types_supported: strings(discovered.grant_types_supported) }
-        : {}),
-      ...(discovered.code_challenge_methods_supported !== undefined
-        ? {
-            code_challenge_methods_supported: strings(
-              discovered.code_challenge_methods_supported,
-            ),
-          }
-        : {}),
-      ...(discovered.token_endpoint_auth_methods_supported !== undefined
-        ? {
-            token_endpoint_auth_methods_supported: strings(
-              discovered.token_endpoint_auth_methods_supported,
-            ),
-          }
-        : {}),
-    };
-    await destination(metadata.token_endpoint, "token", context, options);
-    return { client, metadata };
+    return legacyIssuerMetadata(await legacyClient(context, options), context, options);
   },
   async requestToken(context, request, options = {}) {
     const { client, metadata } = request;
@@ -965,9 +979,13 @@ const defaults: AuthProvider = {
     // With a known client, decide steps 1-4 locally before any rediscovery; only a 401
     // rediscovers (honouring a resource_metadata hint).
     if (known) legacyGate(known.client, context);
-    const discovered =
-      known && challenge.status !== 401 ? known : await this.discover(context, options);
-    const { client, metadata } = discovered;
+    // An outcome that needs no authorization-server request is decided before one: the
+    // default discovery selects the client first and fetches the issuer's metadata only
+    // for a renewal or an inline login. An overridden discover runs whole.
+    const reuse = known && challenge.status !== 401 ? known : undefined;
+    const split = !reuse && this.discover === defaults.discover;
+    let discovered = reuse ?? (split ? undefined : await this.discover(context, options));
+    const client = discovered?.client ?? await legacyClient(context, options);
     if (known && cacheKey(context, known.client) !== cacheKey(context, client))
       error("OAuth identity changed");
     const key = cacheKey(context, client);
@@ -985,6 +1003,8 @@ const defaults: AuthProvider = {
     const { outcome, required } = decision;
     if (outcome.type === "fail") throw outcome.error;
     if (outcome.type === "use") return validateCredential(cached!, options);
+    discovered ??= await legacyIssuerMetadata(client, context, options);
+    const { metadata } = discovered;
     // decide's request set (previous ∪ ((S ∪ R [∪ P′]) ∩ C)); recorded against previous ∪ C.
     const request: TokenRequest = {
       client: { ...client, requiredScopes: [...required],

@@ -597,3 +597,58 @@ test('a forced registration keeps a usable token for any client but a client-cre
     assert.equal(w.state.network, 0, `${client.flow}: no request`);
   }
 });
+
+test('legacy auth(): outcomes needing no authorization-server request are decided before one', async () => {
+  const legacyIssuer = 'https://identity.example.com', legacyResource = 'https://hooks.example.com/api', url = `${legacyResource}/events`;
+  const make = (flow, extra = {}) => {
+    const requests = [];
+    const provider = auth({ validateDestination() {}, resolveHostname: async () => ['93.184.216.34'],
+      async fetch(input, init) {
+        const target = String(input);
+        requests.push(target);
+        if (target.includes('oauth-protected-resource')) return Response.json({ resource: legacyResource, authorization_servers: [legacyIssuer] });
+        if (target.includes('well-known')) return Response.json({ issuer: legacyIssuer, token_endpoint: `${legacyIssuer}/token`,
+          authorization_endpoint: `${legacyIssuer}/authorize`, code_challenge_methods_supported: ['S256'],
+          grant_types_supported: ['client_credentials', 'authorization_code', 'refresh_token'] });
+        return Response.json({ access_token: `legacy-${requests.length}`, token_type: 'Bearer', expires_in: 3600,
+          scope: new URLSearchParams(String(init.body)).get('scope') ?? 'read' });
+      }, ...extra });
+    const preset = { type: 'oauth', issuer: legacyIssuer, resource: legacyResource, clientId: 'client', flow, scopes: ['read'] };
+    const issuerRequests = () => requests.filter(target => target.startsWith(legacyIssuer)).length;
+    return { provider, requests, preset, issuerRequests };
+  };
+  // A preset PKCE binding, no grant, no authorize hook: interaction_required, no request at all.
+  {
+    const f = make('authorization_code_pkce');
+    await assert.rejects(f.provider.authenticate({ url, authentication: f.preset }), { code: 'interaction_required' });
+    assert.deepEqual(f.requests, []);
+  }
+  // An unbound PKCE target, no authorize hook: only the protected-resource metadata, then interaction_required.
+  {
+    const f = make('authorization_code_pkce', { selectClient: () => ({ issuer: legacyIssuer, resource: legacyResource, clientId: 'client',
+      flow: 'authorization_code_pkce', scopes: ['read'] }) });
+    await assert.rejects(f.provider.authenticate({ url, challenged: true }), { code: 'interaction_required' });
+    assert.equal(f.issuerRequests(), 0);
+  }
+  // use from the cache on a preset binding, and a step 5 refusal: no authorization-server request.
+  {
+    const f = make('client_credentials');
+    const cache = new Map(), context = { url, authentication: f.preset, cache };
+    const first = await f.provider.authenticate(context);
+    const before = f.issuerRequests();
+    // A second provider sharing the cache: nothing is discovered yet, the token is served.
+    const second = auth({ validateDestination() {}, resolveHostname: async () => ['93.184.216.34'],
+      async fetch(input) { throw new Error(`unexpected request ${input}`); } });
+    assert.equal((await second.authenticate({ url, authentication: f.preset, cache })).token, first.token);
+    await assert.rejects(second.authenticate({ url, authentication: f.preset, cache, challengeStatus: 403,
+      challenge: 'Bearer error="insufficient_scope", scope="read"', rejectedCredential: { type: 'bearer', token: first.token } }),
+    error => error.code === 'access_denied' && error.requiredScopes.join() === 'read');
+    assert.equal(f.issuerRequests(), before);
+  }
+  // A renewal still fetches the issuer's metadata.
+  {
+    const f = make('client_credentials');
+    await f.provider.authenticate({ url, authentication: f.preset });
+    assert.equal(f.issuerRequests(), 2, 'issuer metadata, then the token request');
+  }
+});

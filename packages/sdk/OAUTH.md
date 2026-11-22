@@ -275,12 +275,16 @@ replaces the record (deleting its old secret) and acquires a token with the new 
 The built-in `auth()` provider uses pre-registered clients only: it has no
 coordinated store, secret hook or `prepare`, so a missing `clientId` fails
 `credential_unavailable`. It calls the same `decide` (H is
-`OAuthClient.requiredScopes`): with a known client, steps 1-4 run before any
-network I/O, only a 401 rediscovers, a challenge's requirement applies to that
-operation only (the discovery cache keeps host policy), and its `challenge`
-decides the challenge too, so an unreplayed request still fails. With an
-`authorize` hook, PKCE signs in inline (decide's `prepare`); without one it fails
-`interaction_required`. Host errors it surfaces carry no scopes.
+`OAuthClient.requiredScopes`) and returns an outcome that needs no
+authorization-server request without one: `use`, a step 1-5 refusal, and PKCE
+`interaction_required` (no `authorize` hook, nothing to refresh) are decided once
+the client is known (a preset, a cached discovery, or a protected-resource
+metadata fetch and `selectClient`), before the issuer's metadata is fetched. Only a
+renewal, or an `authorize` hook signing in inline (decide's `prepare`), fetches it.
+A cached client is rediscovered only on a 401; a challenge's requirement applies to
+that operation only (the discovery cache keeps host policy), and its `challenge`
+decides the challenge too, so an unreplayed request still fails. A host `discover`
+override runs whole, before the decision. Host errors it surfaces carry no scopes.
 
 ## Rotation, rejection and failure
 
