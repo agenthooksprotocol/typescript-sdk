@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.17.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.16.0...agenthooksprotocol-v0.17.0) (2026-11-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **oauth:** SDK scope handling follows the spec decide/complete/classify procedure. Only host-required, explicit and 403-challenged scopes are required; a 401 scope is a hint only; scoped errors carry the full required set, sorted, and host errors carry none; outcomes that need no authorization-server request make none; client credentials always reissue; renewal and complete() error codes follow the spec mapping; complete() validates the callback and runs host policy before claiming the login; forced re-registration applies only to a client-credentials DCR client. ResolvedTarget.hostRequiredScopes is removed; the default auth() provider follows the same procedure.
+
+### Bug Fixes
+
+* **oauth:** route every entry point through one scope decision ([#60](https://github.com/agenthooksprotocol/typescript-sdk/issues/60)) ([0e13d1a](https://github.com/agenthooksprotocol/typescript-sdk/commit/0e13d1a1e1477c40c1543c5ba2faa22e5cc6556c))
+
 ## [0.16.0](https://github.com/agenthooksprotocol/typescript-sdk/compare/agenthooksprotocol-v0.15.0...agenthooksprotocol-v0.16.0) (2026-11-19)
 
 
